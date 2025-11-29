@@ -144,9 +144,12 @@ func (s *SQLiteStorage) SaveState(id string, places []workflow.Place, context ma
 // LoadState loads the workflow's places and all configured custom fields into the context map.
 func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]interface{}, error) {
 	columns := []string{s.stateColumn}
-	for _, colDef := range s.customFields {
+	customFieldKeys := make([]string, 0, len(s.customFields))
+
+	for key, colDef := range s.customFields {
 		colName := strings.Fields(colDef)[0]
 		columns = append(columns, colName)
+		customFieldKeys = append(customFieldKeys, key)
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?",
@@ -185,10 +188,6 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 	}
 
 	context := make(map[string]interface{})
-	customFieldKeys := make([]string, 0, len(s.customFields))
-	for k := range s.customFields {
-		customFieldKeys = append(customFieldKeys, k)
-	}
 
 	for i, key := range customFieldKeys {
 		val := *(scanArgs[i+1].(*interface{}))
