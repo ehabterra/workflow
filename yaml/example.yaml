@@ -1,0 +1,99 @@
+# Example YAML workflow configuration
+workflow:
+  name: blog_publishing
+  initial_place: draft
+  
+  # Workflow-level metadata (injected into context)
+  metadata:
+    title: "Blog Publishing Workflow"
+    description: "Manages blog post lifecycle from draft to published"
+    version: "1.0"
+  
+  # Places (optional - can be inferred from transitions)
+  places:
+    - name: draft
+      metadata:
+        max_words: 500
+        color: "#yellow"
+    - name: reviewed
+      metadata:
+        requires_approval: true
+    - name: rejected
+      metadata:
+        can_edit: true
+    - name: published
+      metadata:
+        is_final: true
+  
+  # Transitions
+  transitions:
+    - name: to_review
+      from: [draft]
+      to: [reviewed]
+      guard: "workflow.Context('word_count') <= 500 and hasRole('author')"
+      metadata:
+        priority: 0.5
+        icon: "check-circle"
+      notes: "Submitted for review"
+      actor: "author"
+      custom_fields:
+        submission_method: "web"
+    
+    - name: publish
+      from: [reviewed]
+      to: [published]
+      guard: "hasRole('editor') or hasRole('admin')"
+      metadata:
+        hour_limit: 20
+        explanation: "You can not publish after 8 PM."
+      notes: "Published by editor"
+      actor: "editor"
+      custom_fields:
+        publish_time: "now()"  # Resolved to current timestamp (RFC3339 format)
+        ip_address: "{{request.ip}}"  # Resolved from context: ctx.Value("request").(map[string]interface{})["ip"]
+    
+    - name: reject
+      from: [reviewed]
+      to: [rejected]
+      guard: "hasRole('editor') or hasRole('admin')"
+      notes: "Rejected by reviewer"
+      actor: "reviewer"
+      custom_fields:
+        rejection_reason: "{{reason}}"  # Resolved from context: ctx.Value("reason")
+
+# Storage configuration (optional)
+# The structure is generic - each storage type defines its own fields
+storage:
+  type: sqlite
+  # SQLite-specific configuration
+  table: workflow_states
+  id_column: id
+  state_column: state
+  custom_fields:
+    title: "title TEXT"
+    author: "author TEXT"
+    word_count: "word_count INTEGER"
+    document_id: "document_id TEXT"
+  database: ":memory:"  # or file path like "workflow.db"
+
+# Example: MongoDB configuration (would be handled by MongoDB builder - not implemented yet)
+# storage:
+#   type: mongodb
+#   collection: workflow_states
+#   database: workflow_db
+#   custom_fields:
+#     - title
+#     - author
+#     - word_count
+#   connection:
+#     uri: "mongodb://localhost:27017"
+
+# Example: Redis configuration (would be handled by Redis builder - not implemented yet)
+# storage:
+#   type: redis
+#   key_prefix: "workflow:"
+#   database: "0"
+#   connection:
+#     address: "localhost:6379"
+#     password: ""
+

@@ -1,14 +1,15 @@
 # Website Workflow Example
 
-This example demonstrates a website content approval workflow using the workflow package. It includes a web interface for managing website content through various states: draft, review, approved, and published.
+This example demonstrates a website content approval workflow using the workflow package with **YAML configuration**. It includes a web interface for managing website content through various states: draft, review, approved, and published.
 
 ## Features
 
+- **YAML-based workflow configuration** - Define workflows declaratively
 - Web interface for workflow management
-- SQLite storage for workflow persistence
+- SQLite storage for workflow persistence (configured via YAML)
 - Workflow manager for lifecycle management
 - Mermaid diagram visualization
-- Transition history tracking
+- Transition history tracking with automatic notes/actor handling
 - Form validation and error handling
 - Clean and responsive UI with Tailwind CSS
 
@@ -23,10 +24,62 @@ The workflow consists of the following states:
 
 ## Transitions
 
-- `to_review`: Draft → Review
-- `to_approved`: Review → Approved
-- `to_published`: Approved → Published
-- `to_draft`: Review → Draft (rejection)
+- `submit_for_review`: Draft → Review
+- `request_changes`: Review → Draft (rejection)
+- `approve`: Review → Approved
+- `publish`: Approved → Published
+
+## YAML Configuration
+
+The workflow is defined in `workflow.yaml`, which includes:
+
+- **Workflow definition**: Places, transitions, and metadata
+- **Storage configuration**: SQLite database settings
+- **History defaults**: Default notes and actor for each transition
+
+### Example Configuration
+
+```yaml
+workflow:
+  name: website_content_approval
+  initial_place: draft
+  places:
+    - name: draft
+    - name: review
+    - name: approved
+    - name: published
+  transitions:
+    - name: submit_for_review
+      from: [draft]
+      to: [review]
+      notes: "Submitted for review"
+      actor: "author"
+    - name: publish
+      from: [approved]
+      to: [published]
+      notes: "Published to website"
+      actor: "editor"
+      custom_fields:
+        published_at: "now()"  # Resolved to current timestamp
+
+storage:
+  type: sqlite
+  table: workflows
+  database: "./website_workflow.db"
+  custom_fields:
+    title: "title TEXT"
+    content: "content TEXT"
+  # History store configuration (optional)
+  history:
+    table: transition_history
+    # custom_fields:
+    #   ip_address: "ip_address TEXT"
+```
+
+**Note**: The `notes` and `actor` fields in YAML are optional defaults. They can be overridden at runtime via form input or context values. This provides flexibility:
+
+- Use YAML defaults for documentation and consistency
+- Override at runtime for user-specific values
 
 ## Prerequisites
 
@@ -36,27 +89,31 @@ The workflow consists of the following states:
 ## Installation
 
 1. Clone the repository:
-```bash
-git clone https://github.com/ehabterra/workflow.git
-cd workflow/examples/website_workflow
-```
+
+    ```bash
+    git clone https://github.com/ehabterra/workflow.git
+    cd workflow/examples/website_workflow
+    ```
 
 2. Install dependencies:
-```bash
-go mod download
-```
+
+    ```bash
+    go mod download
+    ```
 
 ## Running the Example
 
 1. Start the server:
-```bash
-go run main.go
-```
+
+    ```bash
+    go run main.go
+    ```
 
 2. Open your browser and navigate to:
-```
-http://localhost:8080
-```
+
+    ```url
+    http://localhost:8080
+    ```
 
 ## Usage
 
@@ -77,64 +134,100 @@ http://localhost:8080
 
 ## Implementation Details
 
-### Workflow Manager
+### YAML Loader
 
-The example uses the workflow manager to handle workflow lifecycle:
+The example loads the workflow configuration from YAML:
 
 ```go
-// Initialize the workflow manager with SQLite storage
-registry := workflow.NewRegistry()
-storage := workflow.NewSQLiteStorage("website_workflow.db")
-manager := workflow.NewManager(registry, storage)
-
-// Create a new workflow instance
-wf, err := manager.CreateWorkflow("website_approval_1", definition, "draft")
+// Load YAML configuration
+config, err := yaml.LoadConfig("workflow.yaml")
 if err != nil {
-    // Handle error
+    log.Fatalf("Failed to load YAML config: %v", err)
 }
 
-// Get a workflow instance
-wf, err = manager.GetWorkflow("website_approval_1", definition)
+// Setup storage and history from YAML config (fully automated)
+// This handles: storage builder registration, storage initialization, and history store setup
+storageResult, err := yaml.SetupStorageFromConfig(config.Storage)
 if err != nil {
-    // Handle error
+    log.Fatalf("Failed to setup storage from config: %v", err)
 }
 
-// Save workflow state
-err = manager.SaveWorkflow("website_approval_1", wf)
+workflowStore := storageResult.Storage
+db := storageResult.DB
+historyStore := storageResult.HistoryStore  // nil if not configured in YAML
+
+// Create loader and load workflow definition
+loader := yaml.NewLoader()
+workflowDef, err := loader.LoadDefinition(config)
 if err != nil {
-    // Handle error
+    log.Fatalf("Failed to load workflow definition: %v", err)
 }
 ```
 
-### Storage
+**Key Benefits:**
 
-The example uses SQLite for persistent storage:
+- **Fully Automated**: `SetupStorageFromConfig` handles everything automatically:
+  - Storage builder registration
+  - Database connection management
+  - Storage schema initialization
+  - History store setup (if configured in YAML)
+- **No Hard Dependencies**: The code doesn't explicitly reference SQLite, database paths, or initialization logic
+- **Single Source of Truth**: All configuration (storage, database, history) is in `workflow.yaml`
+- **Zero Boilerplate**: No manual database connection, schema initialization, or history store setup needed
+
+### Applying Transitions with History
+
+The example uses `ApplyTransitionWithHistory` helper which automatically handles history records using YAML defaults or runtime overrides:
 
 ```go
-// Initialize SQLite storage
-storage := workflow.NewSQLiteStorage("website_workflow.db")
-
-// The storage interface provides these methods:
-// - LoadState(id string) ([]Place, error)
-// - SaveState(id string, places []Place) error
-// - DeleteState(id string) error
+// Apply transition with history
+err = yaml.ApplyTransitionWithHistory(
+    wf,
+    targetTransition.To(),
+    historyStore,
+    ctx,
+    notes,  // Override notes (empty = use YAML default)
+    actor,  // Override actor (empty = use YAML default or context)
+    nil,    // Custom fields override
+)
 ```
+
+**Priority order for notes/actor:**
+
+1. Runtime override (function parameter)
+2. YAML default (from transition metadata)
+3. Context value (for actor only)
+4. Empty string
+
+### Storage and History
+
+Storage and history are fully configured via YAML. The `SetupStorageFromConfig` function automatically:
+
+- Registers the appropriate storage builder
+- Opens the database connection
+- Initializes storage schema
+- Sets up history store (if `history` section is present in YAML)
+
+All database connections, schema initialization, and history setup are handled automatically - no manual code needed!
 
 ### Web Interface
 
 The web interface is built using:
+
 - Standard Go `html/template` for templating
 - Tailwind CSS for styling
 - Mermaid.js for workflow visualization
 
 ## Project Structure
 
-```
+```sh
 website_workflow/
 ├── main.go           # Main application code
+├── workflow.yaml     # YAML workflow configuration
 ├── templates/        # HTML templates
-│   ├── index.html    # Main page template
+│   ├── home.html     # Main page template
 │   ├── workflow.html # Workflow page template
+│   ├── workflow-form.html # Form template
 │   └── diagram.html  # Diagram page template
 ├── website_workflow.db # SQLite database
 └── README.md         # This file
@@ -150,4 +243,4 @@ website_workflow/
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests! 
+Feel free to submit issues and enhancement requests!

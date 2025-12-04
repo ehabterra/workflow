@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Project</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        function validateProjectForm() {
+            const form = document.querySelector('form');
+            const title = form.querySelector('input[name="title"]');
+            const teamSize = form.querySelector('input[name="team_size"]');
+            
+            // Clear previous errors
+            document.querySelectorAll('.error-message').forEach(el => el.remove());
+            document.querySelectorAll('.border-red-500').forEach(el => el.classList.remove('border-red-500'));
+            
+            let isValid = true;
+            
+            // Validate title
+            if (!title.value || title.value.trim().length < 3) {
+                showError(title, 'Title must be at least 3 characters');
+                isValid = false;
+            }
+            
+            // Validate team size
+            const teamSizeVal = parseInt(teamSize.value);
+            if (isNaN(teamSizeVal) || teamSizeVal < 1 || teamSizeVal > 10) {
+                showError(teamSize, 'Team size must be between 1 and 10');
+                isValid = false;
+            }
+            
+            // Validate budget if provided
+            const budget = form.querySelector('input[name="budget"]');
+            if (budget.value) {
+                const budgetVal = parseFloat(budget.value);
+                if (isNaN(budgetVal) || budgetVal < 0) {
+                    showError(budget, 'Budget must be a positive number');
+                    isValid = false;
+                }
+            }
+            
+            return isValid;
+        }
+        
+        function showError(input, message) {
+            input.classList.add('border-red-500');
+            const errorDiv = document.createElement('p');
+            errorDiv.className = 'error-message text-xs text-red-600 mt-1';
+            errorDiv.textContent = message;
+            input.parentElement.appendChild(errorDiv);
+        }
+    </script>
+</head>
+<body class="bg-gray-100">
+    <div class="container" style="max-width: 42rem;">
+        <div class="bg-white rounded-lg shadow-md">
+            <h1>Create New Project</h1>
+            
+            <form action="/project/create" method="post" class="space-y-6" onsubmit="return validateProjectForm()">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Title <span style="color: #dc2626;">*</span></label>
+                    <input type="text" name="title" required minlength="3" maxlength="200"
+                           class="w-full"
+                           placeholder="Enter project title">
+                    <p class="text-xs text-gray-500 mt-1">Required, 3-200 characters</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea name="description" rows="3" maxlength="1000"
+                              class="w-full"
+                              placeholder="Enter project description"></textarea>
+                    <p class="text-xs text-gray-500 mt-1">Optional, max 1000 characters</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Project Type</label>
+                        <select name="project_type" class="w-full">
+                            <option value="web">Web Application</option>
+                            <option value="mobile">Mobile App</option>
+                            <option value="api">API Service</option>
+                            <option value="desktop">Desktop App</option>
+                            <option value="cmd">Command Line Tool</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                        <select name="priority" class="w-full">
+                            <option value="low">Low</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Budget</label>
+                        <input type="number" name="budget" step="0.01" min="0"
+                               class="w-full"
+                               placeholder="0.00">
+                        <p class="text-xs text-gray-500 mt-1">Optional, must be ≥ 0</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Team Size <span style="color: #dc2626;">*</span></label>
+                        <input type="number" name="team_size" min="1" max="10" value="5" required
+                               class="w-full">
+                        <p class="text-xs text-gray-500 mt-1">Required, 1-10 (needed for guard expressions)</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Methodology</label>
+                    <select name="methodology" class="w-full">
+                        <option value="agile">Agile</option>
+                        <option value="scrum">Scrum</option>
+                        <option value="kanban">Kanban</option>
+                        <option value="waterfall">Waterfall</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Team Lead</label>
+                    <input type="text" name="team_lead" maxlength="100"
+                           class="w-full"
+                           placeholder="Enter team lead name">
+                    <p class="text-xs text-gray-500 mt-1">Optional, max 100 characters</p>
+                </div>
+
+                <div class="flex items-center">
+                    <input type="checkbox" name="requires_legal" id="requires_legal">
+                    <label for="requires_legal" class="block text-sm text-gray-700">
+                        Requires Legal Review
+                    </label>
+                </div>
+
+                <div class="flex space-x-4" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #e5e7eb;">
+                    <button type="submit" class="flex-1">
+                        Create Project
+                    </button>
+                    <a href="/" class="flex-1 bg-gray-300 text-center">
+                        Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
+

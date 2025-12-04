@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Workflow - Projects</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-4xl font-bold text-gray-800">Advanced Workflow Example</h1>
+                <p class="text-gray-600 mt-2">Demonstrating multi-states, guards, metadata, custom fields, and more</p>
+            </div>
+            <div class="space-x-2">
+                <a href="/role/select" class="bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600">
+                    <i class="fas fa-user-tag"></i> {{if .CurrentRole}}{{.CurrentRole}}{{else}}Select Role{{end}}
+                </a>
+                <a href="/project/new" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    <i class="fas fa-plus"></i> New Project
+                </a>
+                <a href="/diagram" class="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600">
+                    <i class="fas fa-project-diagram"></i> Diagram
+                </a>
+                <a href="/metadata" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                    <i class="fas fa-info-circle"></i> Metadata
+                </a>
+            </div>
+        </div>
+        
+        {{if .CurrentRole}}
+        <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-indigo-900 mb-1">
+                        <i class="fas fa-user-shield"></i> Logged in as: {{.CurrentRole}}
+                    </h3>
+                    {{if .RoleConfig}}
+                    <p class="text-sm text-indigo-700 mb-2">{{.RoleConfig.Description}}</p>
+                    <div class="text-xs text-indigo-600">
+                        <span class="mr-4"><strong>Can see:</strong> {{range $index, $place := .RoleConfig.Places}}{{if $index}}, {{end}}{{$place}}{{end}}</span>
+                        <span><strong>Can perform:</strong> {{len .RoleConfig.Transitions}} transitions</span>
+                    </div>
+                    {{end}}
+                </div>
+                <a href="/role/select" class="text-indigo-600 hover:text-indigo-800 text-sm">
+                    <i class="fas fa-edit"></i> Change Role
+                </a>
+            </div>
+        </div>
+        {{else}}
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+            <p class="text-yellow-800">
+                <i class="fas fa-exclamation-triangle"></i> 
+                No role selected. <a href="/role/select" class="underline font-semibold">Select a role</a> to see filtered projects and available actions.
+            </p>
+        </div>
+        {{end}}
+
+        <div class="bg-white rounded-lg shadow-md" style="overflow-x: auto;">
+            <table class="min-w-full divide-y divide-gray-200" style="width: 100%; table-layout: auto;">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">State</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Priority</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Team Size</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {{range .Projects}}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500">{{.ID}}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">{{.Title}}</div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center space-x-1">
+                                <span class="text-sm text-gray-900">{{.State}}</span>
+                                {{if gt .StateCount 1}}
+                                <span class="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                                    {{.StateCount}} states
+                                </span>
+                                {{end}}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {{if .Priority}}
+                            <span class="px-2 py-1 text-xs font-semibold rounded-full 
+                                {{if eq .Priority "high"}}bg-red-100 text-red-800{{else if eq .Priority "medium"}}bg-yellow-100 text-yellow-800{{else}}bg-green-100 text-green-800{{end}}">
+                                {{.Priority}}
+                            </span>
+                            {{else}}
+                            <span class="text-gray-400">-</span>
+                            {{end}}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{if gt .TeamSize 0}}{{.TeamSize}}{{else}}-{{end}}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{.CreatedAt.Format "2006-01-02 15:04"}}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <a href="/project/{{.ID}}" class="text-blue-600 hover:text-blue-900">View</a>
+                        </td>
+                    </tr>
+                    {{else}}
+                    <tr>
+                        <td colspan="7" class="px-6 py-4 text-center text-gray-500">
+                            No projects yet. <a href="/project/new" class="text-blue-500 hover:text-blue-700">Create one</a>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-6">
+            <h2 class="text-xl font-semibold text-blue-900 mb-4">Features Demonstrated</h2>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                <div class="flex items-center">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                    <span>Multi-state workflows</span>
+                </div>
+                <div class="flex items-center">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                    <span>Custom fields (storage & history)</span>
+                </div>
+                <div class="flex items-center">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                    <span>Metadata at all levels</span>
+                </div>
+                <div class="flex items-center">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                    <span>Guard expressions</span>
+                </div>
+                <div class="flex items-center">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                    <span>Template values</span>
+                </div>
+                <div class="flex items-center">
+                    <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                    <span>Parallel transitions</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

@@ -5,7 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Workflow Diagram</title>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            securityLevel: 'loose',
+            theme: 'default',
+            deterministicIds: true,
+            flowchart: {
+                htmlLabels: true,
+                padding: 20,
+                rankSpacing: 70,
+                nodeSpacing: 50,
+                curve: 'basis'
+            }
+        });
+    </script>
     <style>        
         /* Transition label styling */
         .mermaid .edgeLabel .transition-label {
@@ -170,7 +185,7 @@
         
         #diagram-tooltip .tooltip-content-copy {
             position: absolute;
-            right: 8px;
+            right: 1px;
             top: 50%;
             transform: translateY(-50%);
             background: rgba(255, 255, 255, 0.1);
@@ -207,42 +222,7 @@
             overflow: visible;
         }
     </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Workflow Diagram</h1>
-            <a href="/" class="back-link">← Back to List</a>
-        </div>
-
-        <div class="card">
-            <div class="mermaid">
-                {{. | safeHTML}}
-            </div>
-        </div>
-    </div>
-
     <script>
-        mermaid.initialize({
-            startOnLoad: true,
-            theme: 'default',
-            securityLevel: 'loose',
-            deterministicIds: true,
-            state: {
-                htmlLabels: true,  // Enable HTML labels for better formatting
-                padding: 20,        // Add padding between states
-                rankSpacing: 50,    // Spacing between ranks/levels
-                nodeSpacing: 50,    // Spacing between nodes
-                curve: 'basis'      // Use basis curve for smoother transitions
-            },
-            flowchart: {
-                useMaxWidth: true,
-                htmlLabels: true,
-                curve: 'basis',
-                padding: 20
-            }
-        });
-        
         // Wait for Mermaid to render
         document.addEventListener('DOMContentLoaded', function() {
             // Create a single tooltip element
@@ -274,7 +254,7 @@
                 header.className = 'tooltip-header';
                 header.innerHTML = `
                     <span class="tooltip-title">${escapeHtml(transitionName)}</span>
-                    <button class="tooltip-copy-btn" data-copy="${escapeHtml(transitionName)}">📋 Copy Name</button>
+                    <button class="tooltip-copy-btn" data-copy="${escapeHtml(transitionName)}">📋</button>
                 `;
                 
                 const body = document.createElement('div');
@@ -433,5 +413,35 @@
             }, 500);
         });
     </script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Workflow Diagram</h1>
+            <a href="/" class="back-link">← Back to Home</a>
+        </div>
+
+        <div class="card">
+            <div class="info-text">
+                This diagram shows the complete workflow structure with all places and transitions.
+                Multi-state transitions (forks/joins) are shown with special notation.
+            </div>
+            <div class="mermaid">
+{{. | safeHTML}}
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h2>Diagram Features</h2>
+            <ul>
+                <li>All places (states) in the workflow</li>
+                <li>All transitions between places</li>
+                <li>Fork notation (→ multiple states) for parallel processing</li>
+                <li>Join notation (multiple states →) for synchronization</li>
+                <li>Current state highlighting (if applicable)</li>
+            </ul>
+        </div>
+    </div>
 </body>
-</html> 
+</html>
+

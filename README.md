@@ -1,34 +1,53 @@
 # Go Workflow
 
-> **Disclaimer:**  
-> This workflow engine is currently under active development and is **not yet considered production-ready**. We welcome community feedback, contributions, and real-world testing to help mature the project and ensure its stability for production environments.  
->  
-> If you are interested in contributing, providing feedback, or trying out the engine, please get involved!
+> **⚠️ A Note from the Developers:**  
+> This workflow engine is currently in active development. We're building it to be reliable and easy to use, but it's **not quite ready for mission-critical production yet**. We're a growing open-source project, and we truly welcome any feedback, contributions, or real-world testing you can offer to help us make it great.  
+>
+> If you like the idea of building smart, durable workflows in Go, please join us!
 
-A flexible and extensible workflow engine for Go applications. This package provides a robust implementation of a Petri net-based workflow system that supports complex state transitions, event handling, and constraints. Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflow.html).
+## What is Go Workflow?
 
-## Features
+Go Workflow is a flexible engine for orchestrating steps, tasks, and data within your Go applications.
 
-- Petri net-based workflow engine
-- Support for multiple states and transitions
-- Event system for workflow lifecycle hooks
-- Constraint system for transition validation
-- Thread-safe workflow registry
-- Comprehensive test coverage
-- Mermaid diagram generation for visualization
-- **Flexible, context-aware storage interface for workflow persistence**
-- **Options pattern for custom fields and schema generation**
-- **Reusable, pluggable history/audit layer with pagination and filtering**
-- Workflow manager for lifecycle management
-- Support for parallel transitions and branching
+Our engine is rooted in **Petri Net theory**, which is just a fancy way of saying we use a rock-solid mathematical foundation to manage flow. This gives you a huge advantage: when you model a complex process with many parallel paths, you get built-in assurance that your workflow won't end up in a confusing or **deadlocked state**.
 
-## Storage Layer (New)
+We're focused on **portability** and **visualization**, allowing you to change your complex processes easily without touching or recompiling your application code.
 
-The storage layer is now fully context-aware and supports custom fields via the options pattern. Only fields declared as custom fields are persisted.
+Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflow.html).
+
+## Key Features
+
+### 💻 Keep Your Code Clean & Flexible (Portability)
+
+* **YAML Processes:** Define your entire process structure and logic in simple YAML configuration files. This means your business teams can look at the flow, and your engineering team can deploy updates instantly.
+* **Dynamic Decision Logic:** Use an expressive guard language (powered by [expr-lang/expr](https://github.com/expr-lang/expr)) to handle decisions like "If the amount is over $1000, send to manager approval". This logic lives in your config file, keeping it flexible and separate from your Go application code.
+* **Context-Aware Storage:** We built a flexible layer to reliably save the flow's current state and all its necessary data (like an `order_id` or `user_role`) to a database, ensuring long-running processes are safe from crashes.
+
+### ✅ Built for Reliability (Petri Net Power)
+
+* **Mathematically Sound:** Our Petri Net core helps ensure that even processes with lots of parallel paths and complex merging logic are **deadlock-free** and always reach a correct conclusion.
+* **Thread-Safe Registry:** The workflow registry uses proper locking to safely handle concurrent access from multiple goroutines.
+* **Audit Trail Ready:** Our pluggable history layer automatically logs every transition, allowing you to track exactly who did what and when.
+
+### 📊 Easy to Understand (Visualization)
+
+* **Mermaid Diagram Generation:** Quickly generate visual flowcharts from your definition. You can paste these diagrams into your documentation (like this README!) for instant visualization.
+* **Workflow Manager:** A clean, straightforward interface for loading, starting, and saving all your running workflow instances.
+
+### Technical Highlights
+
+* Support for multiple states and parallel transitions
+* Event system for workflow lifecycle hooks
+* Constraint system for custom validation logic
+* Comprehensive test coverage
+
+## Storage Layer
+
+We designed the storage interface to be flexible. You tell us where to put the data and what extra information you need to store.
 
 ### Storage Interface
 
-The package provides a flexible, context-aware storage interface for persisting workflow states and custom fields:
+The package provides a flexible, context-aware storage interface for persisting workflow states and custom fields. Only fields declared as custom fields are persisted:
 
 ```go
 type Storage interface {
@@ -65,9 +84,9 @@ places, ctx, err := storage.LoadState("my-workflow")
 fmt.Println(places, ctx["title"], ctx["owner"])
 ```
 
-## History Layer (New)
+## History Layer
 
-The history layer is reusable, pluggable, and supports custom fields, pagination, and filtering.
+The history layer is a pluggable audit trail, letting you track and query every single state change that happens in your processes. It supports custom fields, pagination, and filtering.
 
 ### History Interface
 
@@ -116,40 +135,177 @@ for _, rec := range records {
 ## Feature Checklist
 
 ### Current Features ✅
-- [x] Basic workflow definition and execution
-- [x] Multiple states and transitions
-- [x] Event system for workflow hooks
-- [x] Constraint system for transitions
-- [x] Thread-safe workflow registry
-- [x] Mermaid diagram visualization
-- [x] Workflow manager for lifecycle management
-- [x] Storage interface for persistence
-- [x] SQLite storage implementation
-- [x] Support for parallel transitions and branching
-- [x] Workflow history and audit trail (in examples)
-- [x] Web UI for workflow management (in examples)
+
+* [x] Basic workflow definition and execution
+* [x] Multiple states and transitions
+* [x] Event system for workflow hooks
+* [x] Constraint system for transitions
+* [x] Thread-safe workflow registry
+* [x] Mermaid diagram visualization
+* [x] Workflow manager for lifecycle management
+* [x] Storage interface for persistence
+* [x] SQLite storage implementation
+* [x] Support for parallel transitions and branching
+* [x] Workflow history and audit trail (in examples)
+* [x] Web UI for workflow management (in examples)
+* [x] YAML configuration support
 
 > **Note:** The provided example includes a Web UI for workflow management, but does **not** expose a REST API. If you need a REST API, contributions or feature requests are welcome!
 
-### Planned Features 🚀
+### Building Smarter Workflows: The Roadmap 🚀
 
-#### High Priority
-- [ ] YAML/JSON configuration support
-- [ ] Standalone web interface for workflow management
-- [ ] Enhanced REST API endpoints
-- [ ] Workflow validation system
-- [ ] Dynamic workflow definition loading
+We're starting with the basics of Petri Nets and adding layers of powerful features inspired by industry tools, focusing on solving common developer problems.
 
-#### Medium Priority
-- [ ] Custom scripting for transition conditions
-- [ ] Workflow versioning
-- [ ] Workflow templates
-- [ ] Role-based access control
-- [ ] Workflow timeout and scheduling
+#### High Priority: Making it Durable and Multi-Tasking
 
-#### Low Priority
-- [ ] Workflow statistics and analytics
-- [ ] Export/Import workflow definitions
+| Feature Description | The Problem We're Solving | Petri Net Concept |
+| :--- | :--- | :--- |
+| **Smart Tokens (Colored Petri Nets - CPN)** | How do you process a batch of 100 orders within one workflow instance? | **Tokens carry data.** We'll let tokens carry attributes (like an order ID), allowing one process to manage multiple concurrent items. |
+| **Nested Workflows (HCPN)** | My process has 100 steps—it's too big to manage. | **Modularity.** You can define a complex sub-flow (like "Payment Verification") once and drop it into any main process as a single, clean step. |
+| **Crash-Safe Storage (ACID)** | What if the server dies during a critical step? | **Data Integrity.** We're adding transactional guarantees to ensure state changes are atomic (all or nothing) and durable. |
+| **Undo Button (Compensation/Rollback)** | I need a way to reliably "undo" a previous action if a later step fails (e.g., refunding a charge). | **Error Recovery.** We'll track the history of completed tasks precisely, enabling safe, structured rollbacks. |
+| **Advanced Synchronization** | When two parallel paths finish, how do I make the third step wait only for the *first* path, but cancel the second one? | **Complex Merging.** We're implementing advanced logic (like nested AND/OR/XOR conditions and discriminators) for robust handling of parallel flows. |
+
+#### Medium Priority: Handling Time and External Events
+
+| Feature Description | The Problem We're Solving | Petri Net Concept |
+| :--- | :--- | :--- |
+| **Timeouts and Scheduled Steps (TPN/DPN)** | I need a task to wait exactly 30 minutes before starting, or to timeout after 24 hours. | **Time Awareness.** Adding support for time constraints and scheduling to transitions. |
+| **Workflow Checker (Validation System)** | How do I know my new YAML definition won't cause a bug? | **Pre-Execution Guarantees.** We'll use Petri Net math to check the flow for common issues like deadlocks *before* you deploy it. |
+| **Talk to Other Workflows (Message Correlation)** | I need Workflow A to wait for a signal from a completely separate Workflow B. | **Inter-Process Communication.** Building a reliable way for instances to communicate and find each other using shared data keys. |
+
+#### Additional Planned Features
+
+* [ ] Build standalone web interface for workflow management
+* [ ] Enhance REST API endpoints
+* [ ] Add process variable scope management - local vs global variable scoping hierarchy
+* [ ] Add workflow versioning support
+* [ ] Create workflow templates system
+* [ ] Implement role-based access control
+* [ ] Add weighted transitions - token counting requirements for transition firing
+* [ ] Workflow statistics and analytics
+* [ ] Export/Import workflow definitions - complete YAML round-trip (export Go definitions back to YAML) and/or PNML (Petri Net Markup Language) support for interoperability with other Petri net tools
+
+-----
+
+## Understanding the Technical Foundation
+
+This workflow engine is built on Petri net foundations and incorporates concepts inspired by BPMN to make it suitable for business process automation. The goal is not full BPMN compliance, but rather to enhance Petri nets with practical, business-reliable features.
+
+Below are some of the advanced concepts we're working on. Don't worry if these seem complex—the basic workflow functionality is straightforward and well-documented above.
+
+### Colored Petri Nets (CPN)
+
+**What is a Token?** In Petri nets, a token is a marker that sits in a place (state). A place can have 0, 1, or multiple tokens. Currently, the engine uses a boolean model: a place either exists in the marking or doesn't (no token counting).
+
+**What is CPN?** Colored Petri Nets allow tokens to carry data attributes (called "color"). This enables:
+
+* **Per-token data**: Each token in a place can have different attributes (e.g., order ID, customer name, amount)
+* **Multiple tokens per place**: One workflow instance can have multiple tokens in the same place, each with different data
+* **Data-driven decisions**: Transitions can evaluate token attributes to route tokens differently
+* **Resource tracking**: Tokens can carry resource assignments (e.g., which employee is handling this task)
+
+**Current Implementation:**
+
+* ✅ **Multiple workflow instances**: You CAN have `workflow-1`, `workflow-2`, `workflow-3`, each in "pending" with different contexts
+* ❌ **Multiple tokens per place**: You CANNOT have multiple tokens in the SAME place within ONE workflow instance
+* **Current model**: `Marking` stores a set of places `[qa_testing, security_review]` - no token counting, no per-token data
+
+**CPN Example (within ONE workflow instance):**
+
+```text
+Workflow: "order-batch-1"
+Place: "pending_review"
+  ├─ Token 1: {order_id: "001", amount: 100, customer: "Alice"}
+  ├─ Token 2: {order_id: "002", amount: 500, customer: "Bob"}  
+  └─ Token 3: {order_id: "003", amount: 50, customer: "Charlie"}
+
+Transition "route_by_amount" evaluates each token:
+  - Token 1 (amount: 100) → "auto_approve"
+  - Token 2 (amount: 500) → "manager_approval"  
+  - Token 3 (amount: 50) → "auto_approve"
+```
+
+**Advantages of Multiple Tokens per Workflow:**
+
+1. **Batch Processing & Atomic Operations**: Process multiple items as a single unit. Example: "All 10 orders in this batch must be approved before shipping" - if one fails, the entire batch can be rolled back.
+
+2. **Shared Workflow Context**: All tokens share workflow-level data (e.g., batch ID, shipping date, warehouse location). Changes to workflow context affect all tokens simultaneously.
+
+3. **Coordination & Synchronization**: Tokens can wait for each other. Example: "Wait until all 3 documents are reviewed before proceeding" - enables complex synchronization patterns.
+
+4. **Resource Efficiency**: One workflow instance instead of N instances reduces overhead, storage, and management complexity. Single workflow ID to track instead of managing hundreds.
+
+5. **Workflow-Level Constraints**: Enforce rules across all tokens. Example: "Total batch value must not exceed $10,000" - can evaluate sum of all token amounts before allowing transition.
+
+6. **Simplified State Management**: One workflow state instead of tracking N separate states. Easier to query "show me all batches in review" vs "show me all individual orders in review".
+
+7. **Parallel Processing with Shared State**: Tokens can process in parallel while sharing workflow-level resources (e.g., shared approval queue, shared budget pool).
+
+**Example Use Cases:**
+
+* **Document Batch Processing**: Process 100 invoices together, all must be validated before payment batch is created
+* **Order Fulfillment**: Ship multiple items together - all must be ready before shipping
+* **Approval Workflows**: Multiple documents need approval, but workflow-level rules apply (e.g., "if any document is rejected, reject entire batch")
+* **Assembly Lines**: Multiple parts (tokens) flow through assembly, but assembly-level constraints apply (e.g., "all parts must be quality-checked before assembly")
+
+**Relation to Weighted Transitions:** Weighted transitions require multiple tokens to fire (e.g., "need 3 tokens in approval place"). CPN adds data to those tokens, so you can track WHICH 3 approvals you have (e.g., manager, director, finance).
+
+### Hierarchical Colored Petri Nets (HCPN)
+
+**What is HCPN?** Hierarchical Colored Petri Nets allow workflows to contain other workflows as sub-processes, creating different levels of abstraction and refinement. This enables:
+
+* **Sub-processes**: A place or transition can expand into a complete nested workflow
+* **Modular design**: Break complex workflows into reusable, manageable components
+* **Abstraction levels**: View workflow at high level (summary) or drill down into details (sub-process)
+* **Reusable fragments**: Define common process patterns once and reuse across multiple workflows
+
+**BPMN-Inspired Concept**: This concept is inspired by BPMN sub-processes, embedded sub-processes, and reusable process fragments. Essential for managing large enterprise workflows where complexity requires decomposition.
+
+**Example Use Case:**
+
+```text
+Main Workflow: "Order Processing"
+  ├─ Place: "payment_processing" 
+  │   └─ Expands to Sub-Workflow: "Payment Workflow"
+  │       ├─ Validate card
+  │       ├─ Charge payment
+  │       └─ Send receipt
+  ├─ Place: "inventory_check"
+  │   └─ Expands to Sub-Workflow: "Inventory Workflow"
+  │       ├─ Check stock
+  │       ├─ Reserve items
+  │       └─ Update availability
+  └─ Place: "shipping"
+      └─ Expands to Sub-Workflow: "Shipping Workflow"
+```
+
+**Benefits:**
+
+* **Complexity Management**: Break 100+ step workflows into logical modules
+* **Reusability**: Define "approval workflow" once, use in multiple parent workflows
+* **Maintainability**: Update sub-process in one place, affects all parent workflows
+* **Team Collaboration**: Different teams can work on different sub-processes independently
+* **Testing**: Test sub-processes in isolation before integrating into parent workflow
+
+### Timed Petri Nets (TPN/DPN)
+
+**Time Petri Nets (TPN)**: Use time intervals for transitions (e.g., "between 10-30 minutes"). Transitions can fire within a time window.
+
+**Duration Petri Nets (DPN)**: Use deterministic time values for transitions (e.g., "exactly 30 minutes"). Transitions require a fixed duration before completion.
+
+**BPMN-Inspired Concept**: Inspired by BPMN Timer Events, which introduce delays or scheduled execution. Implementation uses job queues (RabbitMQ/Asynq/NATS JetStream) for restart-safe scheduling.
+
+### Business Process Reliability Features
+
+The following features are inspired by BPMN and designed to make the engine production-ready for enterprise use:
+
+* **Transactional Persistence**: Ensures state changes are atomic (all or nothing) and durable, so your processes survive crashes and restarts
+* **Message Correlation**: Allows different workflow instances to communicate with each other and wait for external signals
+* **Compensation/Rollback**: Tracks what happened so you can safely undo previous steps if something goes wrong
+* **Variable Scope Management**: Proper data isolation between tasks (local variables) and shared workflow data (global variables)
+
+-----
 
 ## Installation
 
@@ -157,9 +313,237 @@ for _, rec := range records {
 go get github.com/ehabterra/workflow
 ```
 
+## YAML Configuration (New!)
+
+You can define your entire process in a simple YAML file with expression-based guards, metadata, and storage configuration. See the [YAML documentation](yaml/README.md) for complete details.
+
+**Quick Example:**
+
+```yaml
+workflow:
+  name: blog_publishing
+  initial_place: draft
+  transitions:
+    - name: to_review
+      from: [draft]
+      to: [reviewed]
+      guard: "workflow.Context('word_count') <= 500 and hasRole('author')"
+      notes: "Submitted for review"
+      actor: "author"
+```
+
+```go
+import "github.com/ehabterra/workflow/yaml"
+
+config, _ := yaml.LoadConfig("workflow.yaml")
+loader := yaml.NewLoader()
+wf, _ := loader.LoadWorkflow(config, "blog-post-1")
+```
+
+## Expression-Based Guards
+
+The workflow engine supports powerful expression-based guards using the [expr-lang/expr](https://github.com/expr-lang/expr) expression language. This lets you write conditions like "only allow this transition if the user is a manager and the amount is over $1000" directly in your YAML configuration. Expressions are evaluated at runtime to determine if a transition is allowed.
+
+### Basic Usage
+
+Expressions are defined in YAML configuration or programmatically:
+
+```yaml
+transitions:
+  - name: publish
+    from: [reviewed]
+    to: [published]
+    guard: "hasRole('editor') or hasRole('admin')"
+```
+
+```go
+import "github.com/ehabterra/workflow"
+
+// Programmatic usage
+constraint, _ := workflow.NewExpressionConstraint(
+    "workflow.Context('amount') > 1000 and hasRole('manager')",
+)
+transition.AddConstraint(constraint)
+```
+
+### Available Variables
+
+Expressions have access to the following variables:
+
+* **`workflow`** - The workflow instance (access context, places, etc.)
+* **`transition`** - The transition name (string)
+* **`from`** - Source places ([]Place)
+* **`to`** - Target places ([]Place)
+* **All workflow context values** - Accessible directly by key
+
+### Helper Functions
+
+The expression environment includes several built-in helper functions:
+
+#### `hasRole(role string) bool`
+
+Checks if the workflow has a specific role. Roles are stored in workflow context as `roles` (can be string, []string, or []interface{}).
+
+```yaml
+guard: "hasRole('admin')"
+guard: "hasRole('editor') or hasRole('manager')"
+```
+
+```go
+wf.SetContext("roles", []string{"author", "editor"})
+```
+
+#### `hasPermission(permission string) bool`
+
+Checks if the workflow has a specific permission. Permissions are stored in workflow context as `permissions`.
+
+```yaml
+guard: "hasPermission('publish')"
+```
+
+#### `in(value, list) bool`
+
+Checks if a value exists in a list.
+
+```yaml
+guard: "workflow.Context('status') in ['active', 'pending']"
+```
+
+### Expression Examples
+
+**Simple role check:**
+
+```yaml
+guard: "hasRole('admin')"
+```
+
+**Multiple conditions:**
+
+```yaml
+guard: "workflow.Context('amount') > 1000 and hasRole('manager')"
+```
+
+**Complex logic:**
+
+```yaml
+guard: "hasRole('editor') or (hasRole('author') and workflow.Context('word_count') <= 500)"
+```
+
+**Using context values:**
+
+```yaml
+guard: "workflow.Context('status') == 'active' and workflow.Context('priority') > 5"
+```
+
+**Combining conditions:**
+
+```yaml
+guard: "(hasRole('admin') or hasRole('editor')) and workflow.Context('approved') == true"
+```
+
+**List operations:**
+
+```yaml
+guard: "workflow.Context('tags') contains 'urgent'"
+guard: "workflow.Context('category') in ['tech', 'news', 'opinion']"
+```
+
+### Custom Environment Builder
+
+You can provide a custom environment builder to add your own variables and functions:
+
+```go
+import "github.com/ehabterra/workflow/yaml"
+
+loader := yaml.NewLoaderWithEnv(func(event workflow.Event) map[string]interface{} {
+    env := make(map[string]interface{})
+    
+    // Add custom variables
+    env["user"] = getUserFromContext(event)
+    env["request"] = getRequestFromContext(event)
+    env["currentTime"] = time.Now()
+    
+    // Add custom functions
+    env["isBusinessHours"] = func() bool {
+        now := time.Now()
+        return now.Hour() >= 9 && now.Hour() < 17
+    }
+    
+    env["isWeekend"] = func() bool {
+        weekday := time.Now().Weekday()
+        return weekday == time.Saturday || weekday == time.Sunday
+    }
+    
+    env["hasAccess"] = func(resource string) bool {
+        // Your custom access control logic
+        return checkAccess(event, resource)
+    }
+    
+    return env
+})
+
+// Now you can use these in expressions:
+// guard: "isBusinessHours() and hasAccess('publish')"
+// guard: "user.Department == 'Engineering' and not isWeekend()"
+```
+
+### Expression Constraints
+
+Expressions can also be used programmatically as constraints:
+
+```go
+import "github.com/ehabterra/workflow"
+
+// Create expression constraint
+constraint, err := workflow.NewExpressionConstraint(
+    "workflow.Context('balance') >= workflow.Context('amount')",
+)
+if err != nil {
+    // Handle compilation error
+}
+
+// Add to transition
+transition.AddConstraint(constraint)
+
+// Or with custom environment
+constraint, err := workflow.NewExpressionConstraintWithEnv(
+    "customFunction(workflow.Context('data'))",
+    customEnvBuilder,
+)
+```
+
+### Expression Safety
+
+The expr library provides several safety guarantees:
+
+* ✅ **Memory-Safe**: No memory vulnerabilities
+* ✅ **Side-Effect-Free**: Expressions only compute outputs from inputs
+* ✅ **Always Terminating**: Prevents infinite loops
+* ✅ **Type-Safe**: Static type checking at compile time
+
+### Error Handling
+
+If an expression fails to compile or evaluate, the transition will be blocked:
+
+```go
+constraint, err := workflow.NewExpressionConstraint("invalid syntax")
+if err != nil {
+    // Expression compilation failed
+    log.Printf("Expression error: %v", err)
+}
+
+// At runtime, if evaluation fails, the transition is blocked
+err = wf.Apply([]workflow.Place{"published"})
+if err != nil {
+    // Transition blocked - check if it was due to expression
+}
+```
+
+-----
+
 ## Quick Start
 
-Here's a simple example of how to use the workflow package with the new context-aware storage and options pattern:
+Here's a simple example showing how to create a workflow, persist it to storage, and apply transitions. This example demonstrates the context-aware storage and options pattern:
 
 ```go
 package main
@@ -225,11 +609,13 @@ func main() {
 }
 ```
 
+-----
+
 ## Advanced Usage
 
 ### Using the Workflow Manager
 
-The workflow manager provides a high-level interface for managing workflow lifecycles and persistence:
+The workflow manager provides a straightforward interface for creating, loading, and saving workflows. It handles the coordination between the registry (in-memory cache) and storage (database persistence):
 
 ```go
 // Create a registry and storage
@@ -304,12 +690,14 @@ err = registry.RemoveWorkflow("my-workflow")
 ```
 
 **Thread Safety**: The Registry is designed for concurrent access:
-- ✅ **Read operations** (`Workflow`, `ListWorkflows`, `HasWorkflow`) use read locks for optimal performance
-- ✅ **Write operations** (`AddWorkflow`, `RemoveWorkflow`) use write locks for data consistency
-- ✅ **Concurrent reads and writes** are properly synchronized
-- ✅ **Race condition free** - all operations are atomic
+
+* ✅ **Read operations** (`Workflow`, `ListWorkflows`, `HasWorkflow`) use read locks for optimal performance
+* ✅ **Write operations** (`AddWorkflow`, `RemoveWorkflow`) use write locks for data consistency
+* ✅ **Concurrent reads and writes** are properly synchronized
+* ✅ **Race condition free** - all operations are atomic
 
 Example of concurrent usage:
+
 ```go
 registry := workflow.NewRegistry()
 
@@ -343,9 +731,9 @@ go func() {
 
 The workflow engine supports several event types:
 
-- `EventBeforeTransition`: Fired before a transition is applied
-- `EventAfterTransition`: Fired after a transition is applied
-- `EventGuard`: Fired to check if a transition is allowed
+* `EventBeforeTransition`: Fired before a transition is applied
+* `EventAfterTransition`: Fired after a transition is applied
+* `EventGuard`: Fired to check if a transition is allowed
 
 ### Context
 
@@ -367,6 +755,7 @@ fmt.Println(diagram)
 ```
 
 Example output:
+
 ```mermaid
 stateDiagram-v2
     classDef currentPlace font-weight:bold,stroke-width:4px
@@ -393,8 +782,8 @@ go test -bench=. ./...
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+We're building this engine in the open and would love your help! If you're interested in database durability, expressive language parsing, or Petri Net theory, please take a look at our issues or submit a Pull Request. Every contribution, big or small, helps make this project better.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.

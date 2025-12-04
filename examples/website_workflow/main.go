@@ -9,12 +9,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ehabterra/workflow"
 	"github.com/ehabterra/workflow/history"
-	"github.com/ehabterra/workflow/storage"
+	"github.com/ehabterra/workflow/yaml"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -39,93 +40,84 @@ type TransitionHistory struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// Define a custom type for context keys to avoid collisions
-type contextKey string
-
-const notesKey contextKey = "notes"
-
 var (
-	db           *sql.DB
-	workflowDef  *workflow.Definition
-	templates    *template.Template
-	workflowMgr  *workflow.Manager
-	sqlStore     *storage.SQLiteStorage
-	historyStore *history.SQLiteHistory
+	db            *sql.DB
+	workflowDef   *workflow.Definition
+	templates     *template.Template
+	workflowMgr   *workflow.Manager
+	workflowStore workflow.Storage
+	historyStore  history.HistoryStore
+	yamlConfig    *yaml.Config
+	yamlLoader    *yaml.Loader
 )
 
 func init() {
 	var err error
-	db, err = sql.Open("sqlite3", "./website_workflow.db")
+
+	// 1. Load YAML configuration
+	configPath := "workflow.yaml"
+	// Try to find config in the same directory as the executable
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// Try examples/website_workflow/workflow.yaml
+		exePath, _ := os.Executable()
+		exeDir := filepath.Dir(exePath)
+		configPath = filepath.Join(exeDir, "workflow.yaml")
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			log.Fatalf("Failed to find workflow.yaml: %v", err)
+		}
+	}
+
+	yamlConfig, err = yaml.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		log.Fatalf("Failed to load YAML config: %v", err)
 	}
 
-	// 1. Configure the generic SQL storage
-	sqlStore, err = storage.NewSQLiteStorage(db,
-		storage.WithTable("workflows"),
-		storage.WithCustomFields(map[string]string{
-			"title":   "title TEXT",
-			"content": "content TEXT",
-		}),
-	)
+	// 2. Setup storage and history from YAML config (automated)
+	// This handles: storage builder registration, storage initialization, and history store setup
+	var storageResult *yaml.StorageSetupResult
+	if yamlConfig.Storage != nil {
+		storageResult, err = yaml.SetupStorageFromConfig(yamlConfig.Storage)
+		if err != nil {
+			log.Fatalf("Failed to setup storage from config: %v", err)
+		}
+		workflowStore = storageResult.Storage
+		historyStore = storageResult.HistoryStore
+
+		// Extract SQL connection if available (for history store queries)
+		if storageResult.Connection != nil {
+			if sqlConn, ok := storageResult.Connection.(*yaml.SQLConnection); ok {
+				db = sqlConn.DB()
+			}
+		}
+	}
+
+	// 5. Load workflow definition from YAML
+	yamlLoader = yaml.NewLoader()
+	workflowDef, err = yamlLoader.LoadDefinition(yamlConfig)
 	if err != nil {
-		log.Fatalf("Failed to create sql store: %v", err)
+		log.Fatalf("Failed to load workflow definition: %v", err)
 	}
 
-	// 2. Generate and execute the schema
-	schema := sqlStore.GenerateSchema()
-	log.Printf("Generated Schema:\n%s\n", schema)
-	if err := storage.Initialize(db, schema); err != nil {
-		log.Fatalf("Failed to initialize schema: %v", err)
-	}
-
-	// 2b. Initialize history store
-	historyStore = history.NewSQLiteHistory(db,
-		history.WithTable("transition_history"),
-	)
-	if err := historyStore.Initialize(); err != nil {
-		log.Fatalf("Failed to initialize transition_history table: %v", err)
-	}
-
-	// 3. Define the workflow structure
+	// 6. Create the manager with the storage
 	workflowReg := workflow.NewRegistry()
-	workflowDef, err = workflow.NewDefinition(
-		[]workflow.Place{"draft", "review", "approved", "published"},
-		[]workflow.Transition{
-			*workflow.MustNewTransition("submit_for_review", []workflow.Place{"draft"}, []workflow.Place{"review"}),
-			*workflow.MustNewTransition("request_changes", []workflow.Place{"review"}, []workflow.Place{"draft"}),
-			*workflow.MustNewTransition("approve", []workflow.Place{"review"}, []workflow.Place{"approved"}),
-			*workflow.MustNewTransition("publish", []workflow.Place{"approved"}, []workflow.Place{"published"}),
+	workflowMgr = workflow.NewManager(workflowReg, workflowStore)
+
+	// Load templates with custom functions
+	funcMap := template.FuncMap{
+		"safeHTML": func(s string) template.HTML {
+			return template.HTML(s)
 		},
-	)
-	if err != nil {
-		log.Fatalf("Failed to create workflow definition: %v", err)
 	}
-
-	// 4. Create the manager with the generic store
-	workflowMgr = workflow.NewManager(workflowReg, sqlStore)
-
-	// Add a listener for logging/history (optional)
-	workflowMgr.AddEventListener(workflow.EventAfterTransition, func(e workflow.Event) error {
-		notesVal := e.Context().Value(notesKey)
-		notesStr, _ := notesVal.(string)
-		return historyStore.SaveTransition(&history.TransitionRecord{
-			WorkflowID: e.Workflow().Name(),
-			FromState:  fmt.Sprintf("%v", e.From()),
-			ToState:    fmt.Sprintf("%v", e.To()),
-			Transition: e.Transition().Name(),
-			Notes:      notesStr,
-			Actor:      "", // fill in if you have user info
-			CreatedAt:  time.Now(),
-		})
-	})
-
-	// Load templates
-	templates = template.Must(template.ParseGlob("templates/*.html"))
+	templates = template.Must(template.New("").Funcs(funcMap).ParseGlob("templates/*.html"))
 }
 
 func main() {
-	os.MkdirAll("templates", 0755)
+	if err := os.MkdirAll("templates", 0755); err != nil {
+		log.Printf("Warning: failed to create templates directory: %v", err)
+	}
+
+	// Serve static files (CSS, JS, etc.)
+	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	http.HandleFunc("/", handleHome)
 	http.HandleFunc("/workflow/new", handleNewWorkflowForm)
@@ -156,7 +148,11 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("Error closing rows: %v", err)
+		}
+	}()
 
 	var summaries []WorkflowSummary
 	for rows.Next() {
@@ -175,11 +171,17 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		summaries = append(summaries, summary)
 	}
 
-	templates.ExecuteTemplate(w, "home.html", summaries)
+	if err := templates.ExecuteTemplate(w, "home.html", summaries); err != nil {
+		log.Printf("Error executing template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 func handleNewWorkflowForm(w http.ResponseWriter, r *http.Request) {
-	templates.ExecuteTemplate(w, "workflow-form.html", nil)
+	if err := templates.ExecuteTemplate(w, "workflow-form.html", nil); err != nil {
+		log.Printf("Error executing template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 func handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +189,10 @@ func handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to parse form: %v", err), http.StatusBadRequest)
+		return
+	}
 	title := r.FormValue("title")
 	content := r.FormValue("content")
 
@@ -218,8 +223,8 @@ func handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 type WorkflowPageData struct {
 	ID          string
 	Workflow    *workflow.Workflow
-	Title       interface{}
-	Content     interface{}
+	Title       any
+	Content     any
 	Transitions []workflow.Transition
 	History     []history.TransitionRecord
 }
@@ -232,6 +237,11 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		action := r.FormValue("action")
 		notes := r.FormValue("notes")
+		actor := r.FormValue("actor") // Get actor from form (could be from session in real app)
+		if actor == "" {
+			actor = "user" // Default actor if not provided
+		}
+
 		wf, err := workflowMgr.GetWorkflow(id, workflowDef)
 		if err != nil {
 			http.Error(w, "Workflow not found", http.StatusNotFound)
@@ -252,11 +262,32 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		ctx := context.WithValue(context.Background(), notesKey, notes)
-		if err := wf.ApplyWithContext(ctx, targetTransition.To()); err != nil {
+		// Use ApplyTransitionWithHistory helper from yaml package
+		// This will use YAML defaults for notes/actor if not provided, or override with runtime values
+		// Use yaml.WithTemplateValue to store values with string keys for yaml helper compatibility
+		ctx := context.Background()
+		if notes != "" {
+			ctx = yaml.WithTemplateValue(ctx, "notes", notes)
+		}
+		if actor != "" {
+			ctx = yaml.WithTemplateValue(ctx, "actor", actor)
+		}
+
+		// Apply transition using the helper which handles history automatically
+		err = yaml.ApplyTransitionWithHistory(
+			wf,
+			targetTransition.To(),
+			historyStore,
+			ctx,
+			notes, // Override notes (empty string will use YAML default)
+			actor, // Override actor (empty string will use YAML default or context)
+			nil,   // No custom fields override
+		)
+		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to apply transition: %v", err), http.StatusInternalServerError)
 			return
 		}
+
 		if err := workflowMgr.SaveWorkflow(id, wf); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to save workflow: %v", err), http.StatusInternalServerError)
 			return
@@ -285,7 +316,10 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 		History:     history,
 	}
 
-	templates.ExecuteTemplate(w, "workflow.html", data)
+	if err := templates.ExecuteTemplate(w, "workflow.html", data); err != nil {
+		log.Printf("Error executing template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 func handleDiagram(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +330,10 @@ func handleDiagram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	diagram := tempWf.Diagram()
-	templates.ExecuteTemplate(w, "diagram.html", diagram)
+	if err := templates.ExecuteTemplate(w, "diagram.html", diagram); err != nil {
+		log.Printf("Error executing template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 func listWorkflowsHelper() []string {
@@ -304,7 +341,11 @@ func listWorkflowsHelper() []string {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("Error closing rows: %v", err)
+		}
+	}()
 	var ids []string
 	for rows.Next() {
 		var id string

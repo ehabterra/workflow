@@ -47,7 +47,9 @@ func (m *Manager) LoadWorkflow(id string, definition *Definition) (*Workflow, er
 	wf.Marking().SetPlaces(places)
 
 	// Add to registry
-	m.registry.AddWorkflow(wf)
+	if err := m.registry.AddWorkflow(wf); err != nil {
+		return nil, fmt.Errorf("failed to add workflow to registry: %w", err)
+	}
 	return wf, nil
 }
 
@@ -82,14 +84,16 @@ func (m *Manager) CreateWorkflow(id string, definition *Definition, initialPlace
 	}
 
 	// Add to registry
-	m.registry.AddWorkflow(wf)
+	if err := m.registry.AddWorkflow(wf); err != nil {
+		return nil, fmt.Errorf("failed to add workflow to registry: %w", err)
+	}
 	return wf, nil
 }
 
 // DeleteWorkflow removes a workflow instance and its state
 func (m *Manager) DeleteWorkflow(id string) error {
-	// Remove from registry
-	m.registry.RemoveWorkflow(id)
+	// Remove from registry (ignore error if workflow not found)
+	_ = m.registry.RemoveWorkflow(id)
 
 	// Remove from storage
 	return m.storage.DeleteState(id)

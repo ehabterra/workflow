@@ -307,7 +307,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < numOperations; j++ {
 					name := fmt.Sprintf("workflow-%d", j%5)
-					registry.Workflow(name)
+					_, _ = registry.Workflow(name) // Ignore error in concurrent test
 					registry.HasWorkflow(name)
 					registry.ListWorkflows()
 				}
@@ -323,10 +323,14 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 					// Add new workflow
 					name := fmt.Sprintf("concurrent-workflow-%d-%d", writerID, j)
 					wf := createTestWorkflow(t, name)
-					registry.AddWorkflow(wf)
+					if err := registry.AddWorkflow(wf); err != nil {
+						t.Errorf("Failed to add workflow: %v", err)
+					}
 
 					// Remove it
-					registry.RemoveWorkflow(name)
+					if err := registry.RemoveWorkflow(name); err != nil {
+						t.Errorf("Failed to remove workflow: %v", err)
+					}
 				}
 			}(i)
 		}

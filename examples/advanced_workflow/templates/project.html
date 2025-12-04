@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project: {{.Project.Title}}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script>
+        function validateContextForm() {
+            const form = document.querySelector('form[action*="update_context"]');
+            if (!form) return true;
+            
+            const teamSize = form.querySelector('input[name="team_size"]');
+            const testCoverage = form.querySelector('input[name="test_coverage"]');
+            
+            // Clear previous errors
+            document.querySelectorAll('.error-message').forEach(el => el.remove());
+            document.querySelectorAll('.border-red-500').forEach(el => el.classList.remove('border-red-500'));
+            
+            let isValid = true;
+            
+            // Validate team size if provided
+            if (teamSize && teamSize.value) {
+                const val = parseInt(teamSize.value);
+                if (isNaN(val) || val < 1 || val > 10) {
+                    showError(teamSize, 'Team size must be between 1 and 10');
+                    isValid = false;
+                }
+            }
+            
+            // Validate test coverage
+            if (testCoverage) {
+                // Check if we're in qa_testing state (test_coverage is required)
+                const currentPlaceEl = document.querySelector('[data-current-place]');
+                const currentPlace = currentPlaceEl ? currentPlaceEl.getAttribute('data-current-place') : '';
+                const isQATesting = currentPlace === 'qa_testing';
+                
+                if (isQATesting && !testCoverage.value) {
+                    showError(testCoverage, 'Test coverage is required (≥80% to complete QA)');
+                    isValid = false;
+                } else if (testCoverage.value) {
+                const val = parseInt(testCoverage.value);
+                if (isNaN(val) || val < 0 || val > 100) {
+                    showError(testCoverage, 'Test coverage must be between 0 and 100');
+                    isValid = false;
+                    } else if (isQATesting && val < 80) {
+                        showError(testCoverage, 'Test coverage must be at least 80% to complete QA testing');
+                        isValid = false;
+                    }
+                }
+            }
+            
+            return isValid;
+        }
+        
+        function validateTransitionForm(form) {
+            // Clear previous errors
+            form.querySelectorAll('.error-message').forEach(el => el.remove());
+            form.querySelectorAll('.border-red-500').forEach(el => el.classList.remove('border-red-500'));
+            
+            let isValid = true;
+            
+            // Validate actor
+            const actor = form.querySelector('input[name="actor"]');
+            if (actor && actor.value) {
+                const actorPattern = /^[a-z0-9_]+$/;
+                if (!actorPattern.test(actor.value)) {
+                    showError(actor, 'Actor must contain only lowercase letters, numbers, and underscores');
+                    isValid = false;
+                }
+            }
+            
+            // Validate test coverage if present
+            const testCoverage = form.querySelector('input[name="custom_test_coverage"]');
+            if (testCoverage) {
+                // Check if this is for complete_qa transition (required field)
+                const actionInput = form.querySelector('input[name="action"]');
+                const isCompleteQA = actionInput && actionInput.value === 'complete_qa';
+                
+                if (isCompleteQA && !testCoverage.value) {
+                    showError(testCoverage, 'Test coverage is required for completing QA');
+                    isValid = false;
+                } else if (testCoverage.value) {
+                const val = parseInt(testCoverage.value);
+                if (isNaN(val) || val < 0 || val > 100) {
+                    showError(testCoverage, 'Test coverage must be between 0 and 100');
+                    isValid = false;
+                    } else if (isCompleteQA && val < 80) {
+                        showError(testCoverage, 'Test coverage must be at least 80% to complete QA testing');
+                        isValid = false;
+                    }
+                }
+            }
+            
+            // Validate security score if present
+            const securityScore = form.querySelector('input[name="custom_security_score"]');
+            if (securityScore && securityScore.value) {
+                const val = parseInt(securityScore.value);
+                if (isNaN(val) || val < 0 || val > 100) {
+                    showError(securityScore, 'Security score must be between 0 and 100');
+                    isValid = false;
+                }
+            }
+            
+            // Validate URLs if present
+            const urlInputs = form.querySelectorAll('input[type="url"]');
+            urlInputs.forEach(urlInput => {
+                if (urlInput.value && !urlInput.validity.valid) {
+                    showError(urlInput, 'Please enter a valid URL');
+                    isValid = false;
+                }
+            });
+            
+            return isValid;
+        }
+        
+        function showError(input, message) {
+            input.classList.add('border-red-500');
+            const errorDiv = document.createElement('p');
+            errorDiv.className = 'error-message text-xs text-red-600 mt-1';
+            errorDiv.textContent = message;
+            input.parentElement.appendChild(errorDiv);
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">{{.Project.Title}}</h1>
+                <p class="text-gray-600 mt-2">ID: {{.ID}}</p>
+            </div>
+            <a href="/" class="text-blue-500 hover:text-blue-700">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
+        </div>
+
+        <!-- Current States (Multi-state support) -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">
+                <i class="fas fa-map-marker-alt text-blue-500"></i> Current States
+            </h2>
+            <div class="flex flex-wrap gap-2" data-current-place="{{index .Workflow.Marking.Places 0}}">
+                {{range $index, $state := .Workflow.Marking.Places}}
+                <div class="px-4 py-2 rounded-lg border-2 border-blue-500 bg-blue-50">
+                    <span class="font-semibold text-blue-800">{{$state}}</span>
+                    {{if index $.PlaceMetadata (string $state)}}
+                    <div class="text-xs text-gray-600 mt-1">
+                        {{$meta := index $.PlaceMetadata (string $state)}}
+                        {{if index $meta "description"}}
+                        <div>{{index $meta "description"}}</div>
+                        {{end}}
+                        {{if index $meta "team"}}
+                        <div class="text-blue-600">Team: {{index $meta "team"}}</div>
+                        {{end}}
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+            {{if gt (len .Workflow.Marking.Places) 1}}
+            <div class="mt-4 text-sm text-gray-600">
+                <i class="fas fa-info-circle"></i> This workflow is in <strong>{{len .Workflow.Marking.Places}} states</strong> simultaneously (multi-state workflow)
+            </div>
+            {{end}}
+        </div>
+
+        <!-- Project Information -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">
+                <i class="fas fa-info-circle text-green-500"></i> Project Information
+            </h2>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                {{range $key, $value := .Project.Context}}
+                <div>
+                    <div class="text-sm font-medium text-gray-500">{{$key}}</div>
+                    <div class="text-lg text-gray-900">{{$value}}</div>
+                </div>
+                {{end}}
+            </div>
+        </div>
+
+        <!-- Context Update Form (for planning, development, and qa_testing states) -->
+        {{$currentPlace := index .Workflow.Marking.Places 0}}
+        {{$hasPlanning := false}}
+        {{$hasDevelopment := false}}
+        {{$hasQATesting := false}}
+        {{$hasSecurityReview := false}}
+        {{$hasApproved := false}}
+        {{range .Workflow.Marking.Places}}
+            {{if eq . "planning"}}{{$hasPlanning = true}}{{end}}
+            {{if eq . "development"}}{{$hasDevelopment = true}}{{end}}
+            {{if eq . "qa_testing"}}{{$hasQATesting = true}}{{end}}
+            {{if eq . "security_review"}}{{$hasSecurityReview = true}}{{end}}
+            {{if eq . "approved"}}{{$hasApproved = true}}{{end}}
+        {{end}}
+        {{if or $hasPlanning $hasDevelopment $hasQATesting $hasSecurityReview}}
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">
+                <i class="fas fa-edit text-yellow-600"></i> Update Project Context
+            </h2>
+            <form action="/project/{{.ID}}" method="post" class="space-y-4" onsubmit="return validateContextForm()">
+                <input type="hidden" name="update_context" value="true">
+                
+                <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {{if or $hasPlanning $hasDevelopment}}
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Team Size</label>
+                        <input type="number" name="team_size" min="1" max="10" 
+                               placeholder="Current: {{index .Project.Context "team_size"}}"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">1-10 (required for start_development guard)</p>
+                    </div>
+                    {{end}}
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Roles (comma-separated)</label>
+                        <input type="text" name="roles" pattern="[a-z_ ,]+" 
+                               placeholder="e.g., developer, team_lead"
+                               value="{{if index .Project.Context "roles"}}{{range $i, $r := index .Project.Context "roles"}}{{if $i}}, {{end}}{{$r}}{{end}}{{end}}"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">Available: project_manager, developer, team_lead, designer, qa_lead, security_lead, etc.</p>
+                    </div>
+                    
+                    {{if or $hasDevelopment $hasQATesting}}
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Test Coverage (%) <span style="color: #dc2626;">*</span></label>
+                        <input type="number" name="test_coverage" min="0" max="100" 
+                               placeholder="Current: {{index .Project.Context "test_coverage"}}"
+                               value="{{index .Project.Context "test_coverage"}}"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">
+                            {{if $hasQATesting}}
+                            <strong style="color: #dc2626;">Required: ≥80% to complete QA testing</strong>
+                            {{else}}
+                            0-100 (≥80 required for complete_qa guard)
+                            {{end}}
+                        </p>
+                    </div>
+                    {{end}}
+                    
+                </div>
+                
+                <button type="submit" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600">
+                    <i class="fas fa-save"></i> Update Context
+                </button>
+            </form>
+        </div>
+        {{end}}
+
+        <!-- Workflow Metadata -->
+        {{if .WorkflowMetadata}}
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">
+                <i class="fas fa-tags text-purple-500"></i> Workflow Metadata
+            </h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {{range $key, $value := .WorkflowMetadata}}
+                <div>
+                    <div class="text-sm font-medium text-gray-500">{{$key}}</div>
+                    <div class="text-lg text-gray-900">{{$value}}</div>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        <!-- Available Transitions -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold">
+                    <i class="fas fa-exchange-alt text-orange-500"></i> Available Transitions
+                </h2>
+                {{if .CurrentRole}}
+                <span class="text-sm text-gray-600">
+                    <i class="fas fa-filter"></i> Filtered by role: <strong>{{.CurrentRole}}</strong>
+                </span>
+                {{end}}
+            </div>
+            {{if .CurrentRole}}
+            <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-800">
+                <i class="fas fa-info-circle"></i> 
+                Showing only transitions available to <strong>{{.CurrentRole}}</strong>. 
+                {{if .RoleConfig}}You can perform <strong>{{len .RoleConfig.Transitions}}</strong> transition types.{{end}}
+            </div>
+            {{end}}
+            {{if eq (len .Transitions) 0}}
+            <div class="p-4 bg-yellow-50 border border-yellow-200 rounded text-yellow-800">
+                <i class="fas fa-exclamation-triangle"></i> 
+                No transitions available{{if .CurrentRole}} for role <strong>{{.CurrentRole}}</strong>{{end}}.
+                {{if .CurrentRole}}Try selecting a different role or check if the project is in the correct state.{{else}}Select a role to see available transitions.{{end}}
+            </div>
+            {{else}}
+            <div class="space-y-4">
+                {{range .Transitions}}
+                <div class="border rounded-lg p-4 {{if index $.GuardErrors .Name}}bg-red-50 border-red-300{{else}}bg-gray-50{{end}}">
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <h3 class="font-semibold text-lg">{{.Name}}</h3>
+                            <div class="text-sm text-gray-600 mt-1">
+                                From: {{range $i, $from := .From}}{{if $i}}, {{end}}<span class="font-mono">{{$from}}</span>{{end}}
+                                → To: {{range $i, $to := .To}}{{if $i}}, {{end}}<span class="font-mono">{{$to}}</span>{{end}}
+                            </div>
+                        </div>
+                        {{if index $.TransitionMetadata .Name}}
+                        {{$meta := index $.TransitionMetadata .Name}}
+                        {{if index $meta "icon"}}
+                        <i class="fas fa-{{index $meta "icon"}} text-2xl text-gray-400"></i>
+                        {{end}}
+                        {{end}}
+                    </div>
+
+                    <!-- Transition Metadata -->
+                    {{if index $.TransitionMetadata .Name}}
+                    {{$meta := index $.TransitionMetadata .Name}}
+                    <div class="mb-3 p-2 bg-white rounded text-sm">
+                        <div class="font-semibold text-gray-700 mb-1">Metadata:</div>
+                        <div class="grid grid-cols-2 gap-2">
+                            {{range $key, $value := $meta}}
+                            <div>
+                                <span class="text-gray-600">{{$key}}:</span>
+                                <span class="font-medium">{{$value}}</span>
+                            </div>
+                            {{end}}
+                        </div>
+                    </div>
+                    {{end}}
+
+                    <!-- Guard Error -->
+                    {{if index $.GuardErrors .Name}}
+                    <div class="mb-3 p-2 bg-red-100 border border-red-300 rounded text-sm text-red-800">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        <strong>Guard Error:</strong> {{index $.GuardErrors .Name}}
+                    </div>
+                    {{end}}
+
+                    <!-- Transition Form -->
+                    <form action="/project/{{$.ID}}" method="post" class="space-y-2" onsubmit="return validateTransitionForm(this)">
+                        <input type="hidden" name="action" value="{{.Name}}">
+                        
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="notes" placeholder="Notes (optional)" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="actor" placeholder="Actor (e.g., project_manager)" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+
+                        <!-- Custom Fields Input (for template values) -->
+                        {{if eq .Name "submit_budget"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" name="custom_budget_amount" placeholder="Budget Amount" 
+                                   step="0.01" min="0"
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_budget_notes" placeholder="Budget Notes (optional)" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "approve_budget"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_approval_notes" placeholder="Approval Notes (optional)" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "reject_budget"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_rejection_reason" placeholder="Rejection Reason" 
+                                   required
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_required_changes" placeholder="Required Changes" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "start_development"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_methodology" placeholder="Methodology (template: &#123;&#123;methodology&#125;&#125;)" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_team_lead" placeholder="Team Lead (template: &#123;&#123;team_lead&#125;&#125;)"
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "submit_design_review"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_design_version" placeholder="Design Version" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_design_files" placeholder="Design Files URL" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "approve_design"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" name="custom_design_score" placeholder="Design Score (0-100)" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_reviewer_notes" placeholder="Reviewer Notes" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "reject_design"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_rejection_reason" placeholder="Rejection Reason" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_required_changes" placeholder="Required Changes" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "complete_qa"}}
+                        <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                            <p class="text-sm text-blue-800 mb-2">
+                                <i class="fas fa-info-circle"></i> <strong>Required:</strong> Test Coverage must be ≥ 80% to complete QA testing.
+                            </p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Test Coverage % <span style="color: #dc2626;">*</span></label>
+                                <input type="number" name="custom_test_coverage" placeholder="Enter test coverage (0-100)" 
+                                   min="0" max="100" required
+                                       class="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                                       title="Test coverage must be at least 80% to complete QA">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Bugs Found</label>
+                            <input type="number" name="custom_bugs_found" placeholder="Bugs Found" 
+                                   min="0"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Bugs Fixed</label>
+                            <input type="number" name="custom_bugs_fixed" placeholder="Bugs Fixed" 
+                                   min="0"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">QA Report URL</label>
+                            <input type="url" name="custom_qa_report_url" placeholder="QA Report URL" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+                            </div>
+                        </div>
+                        {{else if eq .Name "complete_security_review"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="number" name="custom_security_score" placeholder="Security Score (0-100)" 
+                                   min="0" max="100"
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="number" name="custom_vulnerabilities_found" placeholder="Vulnerabilities Found" 
+                                   min="0"
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="number" name="custom_vulnerabilities_fixed" placeholder="Vulnerabilities Fixed" 
+                                   min="0"
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="url" name="custom_security_report_url" placeholder="Security Report URL" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{else if eq .Name "deploy"}}
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_deployment_version" placeholder="Deployment Version" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_deployment_environment" placeholder="Environment" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_deployment_url" placeholder="Deployment URL" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                            <input type="text" name="custom_rollback_plan" placeholder="Rollback Plan" 
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
+                        {{end}}
+
+                        <button type="submit" 
+                                class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 {{if index $.GuardErrors .Name}}opacity-50 cursor-not-allowed{{end}}"
+                                {{if index $.GuardErrors .Name}}disabled title="Transition blocked by guard expression"{{end}}>
+                            <i class="fas fa-arrow-right"></i> Execute Transition
+                        </button>
+                    </form>
+                </div>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+
+        <!-- Transition History with Custom Fields -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">
+                <i class="fas fa-history text-indigo-500"></i> Transition History
+            </h2>
+            <div class="space-y-3">
+                {{range .History}}
+                <div class="border rounded-lg p-4 bg-gray-50">
+                    <div class="flex justify-between items-start mb-2">
+                        <div>
+                            <div class="font-semibold text-lg">{{.Transition}}</div>
+                            <div class="text-sm text-gray-600">
+                                <span class="font-mono">{{.FromState}}</span> 
+                                <i class="fas fa-arrow-right mx-2"></i> 
+                                <span class="font-mono">{{.ToState}}</span>
+                            </div>
+                            {{if .Notes}}
+                            <div class="text-sm text-gray-700 mt-1">
+                                <i class="fas fa-sticky-note"></i> {{.Notes}}
+                            </div>
+                            {{end}}
+                            {{if .Actor}}
+                            <div class="text-sm text-gray-600 mt-1">
+                                <i class="fas fa-user"></i> Actor: {{.Actor}}
+                            </div>
+                            {{end}}
+                        </div>
+                        <div class="text-xs text-gray-400">
+                            {{.CreatedAt.Format "2006-01-02 15:04:05"}}
+                        </div>
+                    </div>
+                    
+                    <!-- Custom Fields from History -->
+                    {{if .CustomFields}}
+                    <div class="mt-3 pt-3 border-t border-gray-300">
+                        <div class="text-xs font-semibold text-gray-500 mb-2">Custom Fields:</div>
+                        <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                            {{range $key, $value := .CustomFields}}
+                            <div class="bg-white p-2 rounded">
+                                <div class="font-medium text-gray-700">{{$key}}:</div>
+                                <div class="text-gray-600">{{$value}}</div>
+                            </div>
+                            {{end}}
+                        </div>
+                    </div>
+                    {{end}}
+                </div>
+                {{else}}
+                <div class="text-gray-500 text-center py-4">
+                    No history yet
+                </div>
+                {{end}}
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

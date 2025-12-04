@@ -51,7 +51,9 @@ func BenchmarkWorkflow_Apply(b *testing.B) {
 			b.Fatalf("failed to apply transition: %v", err)
 		}
 		// Reset the workflow place for the next iteration
-		wf.SetMarking(workflow.NewMarking([]workflow.Place{"start"}))
+		if err := wf.SetMarking(workflow.NewMarking([]workflow.Place{"start"})); err != nil {
+			b.Fatalf("failed to set marking: %v", err)
+		}
 	}
 }
 
@@ -120,7 +122,9 @@ func BenchmarkWorkflow_Events(b *testing.B) {
 			b.Fatalf("failed to apply transition: %v", err)
 		}
 		// Reset the workflow place for the next iteration
-		wf.SetMarking(workflow.NewMarking([]workflow.Place{"start"}))
+		if err := wf.SetMarking(workflow.NewMarking([]workflow.Place{"start"})); err != nil {
+			b.Fatalf("failed to set marking: %v", err)
+		}
 	}
 }
 
