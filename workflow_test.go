@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ehabterra/workflow"
+	"github.com/ehabterra/workflow/yaml"
 )
 
 func TestNewWorkflow(t *testing.T) {
@@ -624,10 +625,11 @@ func TestWorkflow_Diagram(t *testing.T) {
 			},
 			initialPlace: "start",
 			want: `stateDiagram-v2
+    direction TB
     classDef currentPlace font-weight:bold,stroke-width:4px
     start
     end
-    start --> end : to-end
+    start --> end : <span class="transition-label" data-transition-name="to-end">to-end</span>
 
     %% Current places
     class start currentPlace
@@ -648,12 +650,13 @@ func TestWorkflow_Diagram(t *testing.T) {
 			},
 			initialPlace: "start",
 			want: `stateDiagram-v2
+    direction TB
     classDef currentPlace font-weight:bold,stroke-width:4px
     start
     middle
     end
-    start --> middle : to-middle
-    middle --> end : to-end
+    start --> middle : <span class="transition-label" data-transition-name="to-middle">to-middle</span>
+    middle --> end : <span class="transition-label" data-transition-name="to-end">to-end</span>
 
     %% Current places
     class start currentPlace
@@ -674,18 +677,19 @@ func TestWorkflow_Diagram(t *testing.T) {
 			},
 			initialPlace: "start",
 			want: `stateDiagram-v2
+    direction TB
     classDef currentPlace font-weight:bold,stroke-width:4px
     start
     branch1
     branch2
     end
     state fork_fork <<fork>>
-    start --> fork_fork : fork
+    start --> fork_fork : <span class="transition-label" data-transition-name="fork">fork</span>
     fork_fork --> branch1
     fork_fork --> branch2
     state merge_join <<join>>
-    branch1 --> merge_join : merge
-    branch2 --> merge_join : merge
+    branch1 --> merge_join : <span class="transition-label" data-transition-name="merge">merge</span>
+    branch2 --> merge_join : <span class="transition-label" data-transition-name="merge">merge</span>
     merge_join --> end
 
     %% Current places
@@ -763,5 +767,307 @@ func TestWorkflow_InitialPlace(t *testing.T) {
 				t.Errorf("GetInitialPlace() = %v, want %v", got, tt.wantPlace)
 			}
 		})
+	}
+}
+
+// TestApplyTransitionByName tests the new transition-by-name API
+func TestApplyTransitionByName(t *testing.T) {
+	// Create a simple workflow with multiple transitions to same destination
+	def := &workflow.Definition{
+		Places: []workflow.Place{"draft", "review", "rejected", "approved"},
+		Transitions: []workflow.Transition{
+			*workflow.MustNewTransition("submit", []workflow.Place{"draft"}, []workflow.Place{"review"}),
+			*workflow.MustNewTransition("approve", []workflow.Place{"review"}, []workflow.Place{"approved"}),
+			*workflow.MustNewTransition("reject_quality", []workflow.Place{"review"}, []workflow.Place{"rejected"}),
+			*workflow.MustNewTransition("reject_policy", []workflow.Place{"review"}, []workflow.Place{"rejected"}),
+		},
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "draft")
+	if err != nil {
+		t.Fatalf("Failed to create workflow: %v", err)
+	}
+
+	// Test 1: Apply transition by name
+	if err := wf.ApplyTransition("submit"); err != nil {
+		t.Errorf("ApplyTransition('submit') failed: %v", err)
+	}
+
+	// Verify we're in the correct state
+	places := wf.CurrentPlaces()
+	if len(places) != 1 || places[0] != "review" {
+		t.Errorf("Expected [review], got %v", places)
+	}
+
+	// Test 2: Check if specific transition is allowed
+	if err := wf.CanTransition("approve"); err != nil {
+		t.Errorf("CanTransition('approve') should be allowed: %v", err)
+	}
+
+	if err := wf.CanTransition("reject_quality"); err != nil {
+		t.Errorf("CanTransition('reject_quality') should be allowed: %v", err)
+	}
+
+	if err := wf.CanTransition("reject_policy"); err != nil {
+		t.Errorf("CanTransition('reject_policy') should be allowed: %v", err)
+	}
+
+	// Test 3: Apply specific rejection transition
+	if err := wf.ApplyTransition("reject_quality"); err != nil {
+		t.Errorf("ApplyTransition('reject_quality') failed: %v", err)
+	}
+
+	// Verify we're in rejected state
+	places = wf.CurrentPlaces()
+	if len(places) != 1 || places[0] != "rejected" {
+		t.Errorf("Expected [rejected], got %v", places)
+	}
+
+	// Test 4: Try non-existent transition
+	if err := wf.CanTransition("nonexistent"); err == nil {
+		t.Errorf("CanTransition('nonexistent') should fail")
+	}
+
+	if err := wf.ApplyTransition("nonexistent"); err == nil {
+		t.Errorf("ApplyTransition('nonexistent') should fail")
+	}
+}
+
+// TestApplyTransitionWithContext tests transition-by-name with context
+func TestApplyTransitionWithContext(t *testing.T) {
+	def := &workflow.Definition{
+		Places: []workflow.Place{"start", "end"},
+		Transitions: []workflow.Transition{
+			*workflow.MustNewTransition("go", []workflow.Place{"start"}, []workflow.Place{"end"}),
+		},
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("Failed to create workflow: %v", err)
+	}
+
+	ctx := yaml.WithTemplateValue(context.Background(), "test_key", "test_value")
+
+	if err := wf.CanTransitionWithContext(ctx, "go"); err != nil {
+		t.Errorf("CanTransitionWithContext failed: %v", err)
+	}
+
+	if err := wf.ApplyTransitionWithContext(ctx, "go"); err != nil {
+		t.Errorf("ApplyTransitionWithContext failed: %v", err)
+	}
+
+	places := wf.CurrentPlaces()
+	if len(places) != 1 || places[0] != "end" {
+		t.Errorf("Expected [end], got %v", places)
+	}
+}
+
+// TestApplyTransitionWithGuards tests transition-by-name with guard constraints
+func TestApplyTransitionWithGuards(t *testing.T) {
+	// Create workflow with a guarded transition
+	def := &workflow.Definition{
+		Places: []workflow.Place{"start", "end"},
+	}
+
+	transition := workflow.MustNewTransition("guarded", []workflow.Place{"start"}, []workflow.Place{"end"})
+
+	// Add a guard that blocks the transition
+	transition.AddConstraint(&testConstraint{shouldFail: true})
+	def.Transitions = []workflow.Transition{*transition}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("Failed to create workflow: %v", err)
+	}
+
+	// Test that guard blocks the transition
+	if err := wf.CanTransition("guarded"); err == nil {
+		t.Errorf("CanTransition should be blocked by guard")
+	}
+
+	if err := wf.ApplyTransition("guarded"); err == nil {
+		t.Errorf("ApplyTransition should be blocked by guard")
+	}
+
+	// Verify we're still at start
+	places := wf.CurrentPlaces()
+	if len(places) != 1 || places[0] != "start" {
+		t.Errorf("Expected [start], got %v", places)
+	}
+}
+
+// TestApplyTransitionNotEnabled tests applying a transition that's not enabled
+func TestApplyTransitionNotEnabled(t *testing.T) {
+	def := &workflow.Definition{
+		Places: []workflow.Place{"start", "middle", "end"},
+		Transitions: []workflow.Transition{
+			*workflow.MustNewTransition("step1", []workflow.Place{"start"}, []workflow.Place{"middle"}),
+			*workflow.MustNewTransition("step2", []workflow.Place{"middle"}, []workflow.Place{"end"}),
+		},
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("Failed to create workflow: %v", err)
+	}
+
+	// Try to apply step2 when we're still at start (not enabled)
+	if err := wf.CanTransition("step2"); err != workflow.ErrTransitionNotAllowed {
+		t.Errorf("Expected ErrTransitionNotAllowed, got %v", err)
+	}
+
+	if err := wf.ApplyTransition("step2"); err != workflow.ErrTransitionNotAllowed {
+		t.Errorf("Expected ErrTransitionNotAllowed, got %v", err)
+	}
+
+	// Apply step1, then step2 should work
+	if err := wf.ApplyTransition("step1"); err != nil {
+		t.Errorf("ApplyTransition('step1') failed: %v", err)
+	}
+
+	if err := wf.ApplyTransition("step2"); err != nil {
+		t.Errorf("ApplyTransition('step2') failed: %v", err)
+	}
+
+	places := wf.CurrentPlaces()
+	if len(places) != 1 || places[0] != "end" {
+		t.Errorf("Expected [end], got %v", places)
+	}
+}
+
+// TestMultipleTransitionsSameDestination tests the ambiguous case that motivated this feature
+func TestMultipleTransitionsSameDestination(t *testing.T) {
+	// Create workflow with multiple rejection paths
+	def := &workflow.Definition{
+		Places: []workflow.Place{"draft", "review_a", "review_b", "rejected", "approved"},
+		Transitions: []workflow.Transition{
+			*workflow.MustNewTransition("submit_to_a", []workflow.Place{"draft"}, []workflow.Place{"review_a"}),
+			*workflow.MustNewTransition("submit_to_b", []workflow.Place{"draft"}, []workflow.Place{"review_b"}),
+			*workflow.MustNewTransition("reject_from_a", []workflow.Place{"review_a"}, []workflow.Place{"rejected"}),
+			*workflow.MustNewTransition("reject_from_b", []workflow.Place{"review_b"}, []workflow.Place{"rejected"}),
+			*workflow.MustNewTransition("approve_from_a", []workflow.Place{"review_a"}, []workflow.Place{"approved"}),
+			*workflow.MustNewTransition("approve_from_b", []workflow.Place{"review_b"}, []workflow.Place{"approved"}),
+		},
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "draft")
+	if err != nil {
+		t.Fatalf("Failed to create workflow: %v", err)
+	}
+
+	// Go through path A
+	if err := wf.ApplyTransition("submit_to_a"); err != nil {
+		t.Errorf("Failed: %v", err)
+	}
+
+	// Both rejection transitions go to [rejected], but we want to be explicit
+	// about which one we're using
+	if err := wf.ApplyTransition("reject_from_a"); err != nil {
+		t.Errorf("Failed: %v", err)
+	}
+
+	places := wf.CurrentPlaces()
+	if len(places) != 1 || places[0] != "rejected" {
+		t.Errorf("Expected [rejected], got %v", places)
+	}
+
+	// Create another instance and go through path B
+	wf2, _ := workflow.NewWorkflow("test2", def, "draft")
+	if err := wf2.ApplyTransition("submit_to_b"); err != nil {
+		t.Errorf("Failed: %v", err)
+	}
+
+	// This is a different rejection transition even though it goes to same place
+	if err := wf2.ApplyTransition("reject_from_b"); err != nil {
+		t.Errorf("Failed: %v", err)
+	}
+
+	places = wf2.CurrentPlaces()
+	if len(places) != 1 || places[0] != "rejected" {
+		t.Errorf("Expected [rejected], got %v", places)
+	}
+}
+
+// TestConditionalJoinPattern tests the conditional join pattern
+func TestConditionalJoinPattern(t *testing.T) {
+	// Simulate conditional parallel branches (like QA+Security vs QA+Security+Legal)
+	def := &workflow.Definition{
+		Places: []workflow.Place{"start", "task_a", "task_b", "task_c", "done"},
+		Transitions: []workflow.Transition{
+			// Fork into 2 or 3 parallel tasks based on some condition
+			*workflow.MustNewTransition("fork_standard", []workflow.Place{"start"}, []workflow.Place{"task_a", "task_b"}),
+			*workflow.MustNewTransition("fork_extended", []workflow.Place{"start"}, []workflow.Place{"task_a", "task_b", "task_c"}),
+
+			// Two different joins
+			*workflow.MustNewTransition("join_standard", []workflow.Place{"task_a", "task_b"}, []workflow.Place{"done"}),
+			*workflow.MustNewTransition("join_extended", []workflow.Place{"task_a", "task_b", "task_c"}, []workflow.Place{"done"}),
+		},
+	}
+
+	// Test standard path (2 tasks)
+	wf1, _ := workflow.NewWorkflow("test1", def, "start")
+	if err := wf1.ApplyTransition("fork_standard"); err != nil {
+		t.Errorf("fork_standard failed: %v", err)
+	}
+
+	// Should only be able to use standard join
+	if err := wf1.CanTransition("join_standard"); err != nil {
+		t.Errorf("join_standard should be available: %v", err)
+	}
+	if err := wf1.CanTransition("join_extended"); err == nil {
+		t.Errorf("join_extended should NOT be available (missing task_c)")
+	}
+
+	err := wf1.ApplyTransition("join_standard")
+	if err != nil {
+		t.Errorf("join_standard failed: %v", err)
+	}
+	places := wf1.CurrentPlaces()
+	if len(places) != 1 || places[0] != "done" {
+		t.Errorf("Expected [done], got %v", places)
+	}
+
+	// Test extended path (3 tasks)
+	wf2, _ := workflow.NewWorkflow("test2", def, "start")
+	if err := wf2.ApplyTransition("fork_extended"); err != nil {
+		t.Errorf("fork_extended failed: %v", err)
+	}
+
+	placesAfterFork := wf2.CurrentPlaces()
+	t.Logf("After fork_extended, places: %v", placesAfterFork)
+
+	// Both joins are technically enabled because all 'from' places are present
+	// But we should use the extended join to consume all three tasks
+	if err := wf2.CanTransition("join_extended"); err != nil {
+		t.Errorf("join_extended should be available: %v", err)
+	}
+
+	// Application code should choose the right join based on context
+	// In practice, you'd check workflow.Context("path_type") or similar
+	if err := wf2.ApplyTransition("join_extended"); err != nil {
+		t.Errorf("join_extended failed: %v", err)
+	}
+	places = wf2.CurrentPlaces()
+	t.Logf("After join_extended, places: %v", places)
+	if len(places) != 1 || places[0] != "done" {
+		t.Errorf("Expected [done], got %v", places)
+	}
+
+	// Demonstrate what happens if we use the wrong join (standard) on extended path
+	wf3, _ := workflow.NewWorkflow("test3", def, "start")
+	if err := wf3.ApplyTransition("fork_extended"); err != nil {
+		t.Errorf("fork_extended failed: %v", err)
+	}
+
+	// Using join_standard on extended path will leave task_c behind
+	if err := wf3.ApplyTransition("join_standard"); err != nil {
+		t.Errorf("join_standard failed: %v", err)
+	}
+	places = wf3.CurrentPlaces()
+	// This results in [task_c, done] - a partial join
+	// This shows why application logic must choose the correct join
+	if len(places) != 2 {
+		t.Errorf("Expected [task_c, done] (partial join), got %v", places)
 	}
 }

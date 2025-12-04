@@ -123,7 +123,31 @@ func (s *SQLiteStorage) SaveState(id string, places []workflow.Place, context ma
 		placeholders = append(placeholders, "?")
 
 		if val, ok := context[key]; ok {
-			values = append(values, val)
+			// Handle slices and arrays by marshaling to JSON
+			// This is needed for fields like "roles" which is []string
+			if val != nil {
+				// Check if it's a slice/array type that needs JSON marshaling
+				switch val.(type) {
+				case []string:
+					// Marshal slice to JSON
+					if jsonBytes, err := json.Marshal(val); err == nil {
+						values = append(values, string(jsonBytes))
+					} else {
+						values = append(values, nil)
+					}
+				case []interface{}:
+					// Marshal slice to JSON
+					if jsonBytes, err := json.Marshal(val); err == nil {
+						values = append(values, string(jsonBytes))
+					} else {
+						values = append(values, nil)
+					}
+				default:
+					values = append(values, val)
+				}
+			} else {
+				values = append(values, nil)
+			}
 		} else {
 			values = append(values, nil) // Use NULL if key not in context
 		}
@@ -191,9 +215,39 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 
 	for i, key := range customFieldKeys {
 		val := *(scanArgs[i+1].(*interface{}))
-		// SQLite may return int64 for INTEGER columns, etc.
-		// The application layer will need to handle type assertions.
-		context[key] = val
+
+		// Check if this is a JSON string that should be unmarshaled
+		// This handles fields like "roles" which is stored as JSON
+		if strVal, ok := val.(string); ok && strVal != "" {
+			// Try to unmarshal as JSON array
+			var jsonArray []interface{}
+			if err := json.Unmarshal([]byte(strVal), &jsonArray); err == nil {
+				// Successfully unmarshaled as JSON array
+				// Try to convert to []string if all elements are strings
+				stringArray := make([]string, 0, len(jsonArray))
+				allStrings := true
+				for _, item := range jsonArray {
+					if str, ok := item.(string); ok {
+						stringArray = append(stringArray, str)
+					} else {
+						allStrings = false
+						break
+					}
+				}
+				if allStrings && len(stringArray) > 0 {
+					context[key] = stringArray
+				} else {
+					context[key] = jsonArray
+				}
+			} else {
+				// Not JSON, store as string
+				context[key] = strVal
+			}
+		} else {
+			// SQLite may return int64 for INTEGER columns, etc.
+			// The application layer will need to handle type assertions.
+			context[key] = val
+		}
 	}
 
 	return places, context, nil

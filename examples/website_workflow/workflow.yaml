@@ -1,0 +1,88 @@
+# Website Content Approval Workflow
+# This workflow manages the lifecycle of website content from draft to published
+workflow:
+  name: website_content_approval
+  initial_place: draft
+  
+  # Workflow-level metadata
+  metadata:
+    title: "Website Content Approval Workflow"
+    description: "Manages website content lifecycle from draft to published"
+    version: "1.0"
+  
+  # Places (states) in the workflow
+  places:
+    - name: draft
+      metadata:
+        description: "Content is being written or edited"
+        editable: true
+    - name: review
+      metadata:
+        description: "Content is under review"
+        requires_approval: true
+    - name: approved
+      metadata:
+        description: "Content has been approved"
+        ready_to_publish: true
+    - name: published
+      metadata:
+        description: "Content is live on the website"
+        is_final: true
+  
+  # Transitions between places
+  transitions:
+    - name: submit_for_review
+      from: [draft]
+      to: [review]
+      metadata:
+        icon: "send"
+        label: "Submit for Review"
+      # Notes and actor can be provided at runtime, but defaults are useful for documentation
+      notes: "Submitted for review"
+      actor: "author"
+    
+    - name: request_changes
+      from: [review]
+      to: [draft]
+      metadata:
+        icon: "edit"
+        label: "Request Changes"
+      notes: "Changes requested by reviewer"
+      actor: "reviewer"
+    
+    - name: approve
+      from: [review]
+      to: [approved]
+      metadata:
+        icon: "check"
+        label: "Approve"
+      notes: "Approved by reviewer"
+      actor: "reviewer"
+    
+    - name: publish
+      from: [approved]
+      to: [published]
+      metadata:
+        icon: "publish"
+        label: "Publish"
+      notes: "Published to website"
+      actor: "editor"
+      custom_fields:
+        published_at: "now()"  # Will be resolved to current timestamp
+
+# Storage configuration
+storage:
+  type: sqlite
+  table: workflows
+  id_column: id
+  state_column: state
+  custom_fields:
+    title: "title TEXT"
+    content: "content TEXT"
+  database: "./website_workflow.db"
+  # History store configuration (optional)
+  history:
+    table: transition_history
+    # custom_fields:
+    #   ip_address: "ip_address TEXT"
+

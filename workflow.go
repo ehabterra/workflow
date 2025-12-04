@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -110,6 +111,17 @@ func (w *Workflow) Context(key string) (interface{}, bool) {
 	return value, ok
 }
 
+// AllContext returns a copy of all context values
+func (w *Workflow) AllContext() map[string]interface{} {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	result := make(map[string]interface{})
+	for k, v := range w.context {
+		result[k] = v
+	}
+	return result
+}
+
 // SetManager sets the manager pointer for this workflow
 func (w *Workflow) SetManager(m *Manager) {
 	w.mu.Lock()
@@ -190,6 +202,55 @@ func (w *Workflow) Can(to []Place) error {
 	return w.CanWithContext(context.Background(), to)
 }
 
+// CanTransition checks if a specific transition by name is possible
+func (w *Workflow) CanTransition(transitionName string) error {
+	return w.CanTransitionWithContext(context.Background(), transitionName)
+}
+
+// CanTransitionWithContext checks if a specific transition by name is possible with a context
+func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName string) error {
+	// Find the transition by name
+	w.mu.RLock()
+	definition := w.definition
+	w.mu.RUnlock()
+
+	var targetTransition *Transition
+	for i := range definition.Transitions {
+		if definition.Transitions[i].Name() == transitionName {
+			targetTransition = &definition.Transitions[i]
+			break
+		}
+	}
+
+	if targetTransition == nil {
+		return fmt.Errorf("transition %s not found", transitionName)
+	}
+
+	// Check if transition is enabled (all 'from' places must be present)
+	currentPlaces := w.CurrentPlaces()
+	for _, fromPlace := range targetTransition.From() {
+		if !slices.Contains(currentPlaces, fromPlace) {
+			return ErrTransitionNotAllowed
+		}
+	}
+
+	// Validate guard constraints
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w)
+	if err := targetTransition.validate(event); err != nil {
+		return err
+	}
+
+	// Fire guard event listeners
+	if err := w.fireEvent(event); err != nil {
+		return err
+	}
+	if event.IsBlocking() {
+		return ErrTransitionNotAllowed
+	}
+
+	return nil
+}
+
 // CanWithContext checks if transition to target places is possible with a context
 func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 	w.mu.RLock()
@@ -229,19 +290,24 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 
 				// First, validate transition constraints
 				if err = t.validate(event); err != nil {
-					return err
+					continue
 				}
 
 				// Then, fire guard event listeners
 				if err = w.fireEvent(event); err != nil {
-					return err
+					continue
 				}
 				if event.IsBlocking() {
-					return ErrTransitionNotAllowed
+					err = ErrTransitionNotAllowed
+					continue
 				}
 				return nil
 			}
 		}
+	}
+
+	if err != nil {
+		return err
 	}
 
 	return ErrTransitionNotAllowed
@@ -250,6 +316,93 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 // Apply applies a transition to the workflow
 func (w *Workflow) Apply(targetPlaces []Place) error {
 	return w.ApplyWithContext(context.Background(), targetPlaces)
+}
+
+// ApplyTransition applies a specific transition by name
+func (w *Workflow) ApplyTransition(transitionName string) error {
+	return w.ApplyTransitionWithContext(context.Background(), transitionName)
+}
+
+// ApplyTransitionWithContext applies a specific transition by name with a context
+func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionName string) error {
+	// Find the transition by name
+	w.mu.RLock()
+	definition := w.definition
+	w.mu.RUnlock()
+
+	var targetTransition *Transition
+	for i := range definition.Transitions {
+		if definition.Transitions[i].Name() == transitionName {
+			targetTransition = &definition.Transitions[i]
+			break
+		}
+	}
+
+	if targetTransition == nil {
+		return fmt.Errorf("transition %s not found", transitionName)
+	}
+
+	// Check if transition is enabled (all 'from' places must be present)
+	currentPlaces := w.CurrentPlaces()
+	for _, fromPlace := range targetTransition.From() {
+		if !slices.Contains(currentPlaces, fromPlace) {
+			return ErrTransitionNotAllowed
+		}
+	}
+
+	// Validate guard constraints
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w)
+	if err := targetTransition.validate(event); err != nil {
+		return err
+	}
+
+	// Fire guard event listeners
+	if err := w.fireEvent(event); err != nil {
+		return err
+	}
+	if event.IsBlocking() {
+		return ErrTransitionNotAllowed
+	}
+
+	// Apply the transition directly (don't use Apply which might find wrong transition)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	from := targetTransition.From()
+	to := targetTransition.To()
+
+	// Fire before transition event (unlock before calling listeners)
+	w.mu.Unlock()
+	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, w)
+	if err := w.fireEvent(beforeEvent); err != nil {
+		w.mu.Lock()
+		return err
+	}
+	w.mu.Lock()
+
+	// Remove the 'from' places from marking
+	currentPlaces = w.marking.Places()
+	newPlaces := make([]Place, 0, len(currentPlaces))
+	for _, place := range currentPlaces {
+		if !slices.Contains(from, place) {
+			newPlaces = append(newPlaces, place)
+		}
+	}
+
+	// Add the target places to marking
+	newPlaces = append(newPlaces, to...)
+	w.marking.SetPlaces(newPlaces)
+
+	// Fire after transition event (unlock before calling listeners)
+	w.mu.Unlock()
+	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, w)
+	if err := w.fireEvent(afterEvent); err != nil {
+		w.mu.Lock()
+		return err
+	}
+	w.mu.Lock()
+
+	return nil
 }
 
 // ApplyWithContext applies a transition to the workflow with a context
@@ -279,14 +432,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 		// Check if all 'from' places are in current places
 		allFromPlacesPresent := true
 		for _, fromPlace := range t.From() {
-			found := false
-			for _, place := range currentPlaces {
-				if place == fromPlace {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !slices.Contains(currentPlaces, fromPlace) {
 				allFromPlacesPresent = false
 				break
 			}
@@ -325,14 +471,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	// Remove the 'from' places from marking
 	newPlaces := make([]Place, 0, len(currentPlaces))
 	for _, place := range currentPlaces {
-		found := false
-		for _, fromPlace := range from {
-			if place == fromPlace {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(from, place) {
 			newPlaces = append(newPlaces, place)
 		}
 	}
@@ -365,13 +504,7 @@ func (w *Workflow) EnabledTransitions() ([]Transition, error) {
 		// Check if all 'from' places are in current places
 		allFromPlacesPresent := true
 		for _, fromPlace := range trans.From() {
-			found := false
-			for _, place := range currentPlaces {
-				if place == fromPlace {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(currentPlaces, fromPlace)
 			if !found {
 				allFromPlacesPresent = false
 				break

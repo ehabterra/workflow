@@ -1,0 +1,599 @@
+# Advanced Project Management Workflow - IMPROVED VERSION
+# This workflow demonstrates best practices for:
+# - Transition-by-name instead of ambiguous destination-based routing
+# - Conditional parallel branches with proper join handling
+# - Clear separation of different rejection paths
+# - Avoiding duplicate transitions with same destination
+
+workflow:
+  name: advanced_project_management
+  initial_place: planning
+  
+  # Workflow-level metadata (available in workflow context)
+  metadata:
+    title: "Advanced Project Management Workflow"
+    description: "Comprehensive workflow demonstrating all advanced features"
+    version: "3.0"
+    category: "project_management"
+    max_team_size: 10
+  
+  # Places (states) with metadata
+  places:
+    - name: planning
+      metadata:
+        description: "Project is in planning phase"
+        editable: true
+        color: "#FFA500"
+        icon: "planning"
+        requires_role: "project_manager"
+    
+    - name: budget_review
+      metadata:
+        description: "Budget is under review for approval"
+        color: "#27AE60"
+        icon: "dollar-sign"
+        team: "finance"
+    
+    - name: budget_approved
+      metadata:
+        description: "Budget has been approved"
+        color: "#2ECC71"
+        icon: "check-circle"
+        team: "finance"
+    
+    - name: design_review
+      metadata:
+        description: "Design team is reviewing"
+        color: "#9B59B6"
+        icon: "design"
+        team: "design"
+    
+    - name: development
+      metadata:
+        description: "Development is in progress"
+        editable: true
+        color: "#3498DB"
+        icon: "code"
+        team: "development"
+    
+    - name: qa_testing
+      metadata:
+        description: "QA team is testing"
+        color: "#E74C3C"
+        icon: "testing"
+        team: "qa"
+    
+    - name: security_review
+      metadata:
+        description: "Security team is reviewing"
+        color: "#F39C12"
+        icon: "security"
+        team: "security"
+        critical: true
+    
+    - name: legal_review
+      metadata:
+        description: "Legal team is reviewing"
+        color: "#16A085"
+        icon: "legal"
+        team: "legal"
+    
+    - name: qa_complete
+      metadata:
+        description: "QA testing has been completed"
+        ready_for_approval: false
+        color: "#3498DB"
+        icon: "qa-done"
+    
+    - name: security_complete
+      metadata:
+        description: "Security review has been completed"
+        ready_for_approval: false
+        color: "#F39C12"
+        icon: "security-done"
+    
+    - name: legal_complete
+      metadata:
+        description: "Legal review has been completed"
+        ready_for_approval: false
+        color: "#16A085"
+        icon: "legal-done"
+    
+    - name: approved
+      metadata:
+        description: "All reviews completed and approved"
+        ready_to_deploy: true
+        color: "#27AE60"
+        icon: "approved"
+        is_final: false
+    
+    - name: deployment_ready
+      metadata:
+        description: "Project is ready for deployment"
+        color: "#1ABC9C"
+        icon: "deployment-ready"
+        team: "devops"
+        is_final: false
+    
+    - name: deployed
+      metadata:
+        description: "Project is deployed to production"
+        is_final: true
+        color: "#2ECC71"
+        icon: "deployed"
+    
+    - name: rejected
+      metadata:
+        description: "Project was rejected"
+        can_edit: true
+        color: "#E74C3C"
+        icon: "rejected"
+        requires_resubmission: true
+  
+  # Transitions with guards, metadata, and custom fields
+  transitions:
+    # ==================== BUDGET FLOW ====================
+    - name: submit_budget
+      from: [planning]
+      to: [budget_review]
+      guard: "hasRole('project_manager')"
+      metadata:
+        icon: "dollar-sign"
+        label: "Submit Budget for Approval"
+        priority: "high"
+      notes: "Budget submitted for approval"
+      actor: "project_manager"
+      custom_fields:
+        budget_amount: "{{budget}}"
+        submitted_at: "now()"
+        submitted_by: "{{user}}"
+    
+    - name: approve_budget
+      from: [budget_review]
+      to: [budget_approved]
+      guard: "hasRole('project_manager') or hasRole('admin') or hasRole('finance_manager')"
+      metadata:
+        icon: "check-circle"
+        label: "Approve Budget"
+        priority: "high"
+      notes: "Budget approved"
+      actor: "project_manager"
+      custom_fields:
+        approval_date: "now()"
+        approved_by: "{{user}}"
+        approval_notes: "{{approval_notes}}"
+    
+    - name: reject_budget
+      from: [budget_review]
+      to: [planning]
+      guard: "hasRole('project_manager') or hasRole('admin') or hasRole('finance_manager')"
+      metadata:
+        icon: "times-circle"
+        label: "Reject Budget"
+        requires_reason: true
+      notes: "Budget rejected, returning to planning"
+      actor: "project_manager"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejection_date: "now()"
+        required_changes: "{{required_changes}}"
+    
+    # ==================== DEVELOPMENT FLOW ====================
+    - name: start_development
+      from: [budget_approved]
+      to: [development]
+      guard: "hasRole('project_manager') and workflow.Context('team_size') <= 10"
+      metadata:
+        icon: "rocket"
+        label: "Start Development"
+        priority: "high"
+        estimated_duration: "2 weeks"
+      notes: "Development started by project manager"
+      actor: "project_manager"
+      custom_fields:
+        started_at: "now()"
+        development_methodology: "{{methodology}}"
+        team_lead: "{{team_lead}}"
+    
+    # ==================== DESIGN REVIEW FLOW ====================
+    # Two paths: with or without legal review
+    
+    # Path 1: Submit for design review ONLY (no legal required)
+    - name: submit_design_review
+      from: [development]
+      to: [design_review]
+      guard: "(hasRole('developer') or hasRole('team_lead')) and workflow.Context('requires_legal') != true"
+      metadata:
+        icon: "palette"
+        label: "Submit for Design Review"
+        requires_attachment: true
+      notes: "Submitted for design review"
+      actor: "developer"
+      custom_fields:
+        design_version: "{{design_version}}"
+        design_files: "{{design_files}}"
+        submitted_by: "{{user}}"
+    
+    # Path 2: Submit for design AND legal review (fork into parallel reviews)
+    - name: submit_design_and_legal_review
+      from: [development]
+      to: [design_review, legal_review]
+      guard: "(hasRole('developer') or hasRole('team_lead')) and workflow.Context('requires_legal') == true"
+      metadata:
+        icon: "palette"
+        label: "Submit for Design & Legal Review"
+        requires_attachment: true
+        parallel_fork: true
+      notes: "Submitted for design and legal review"
+      actor: "developer"
+      custom_fields:
+        design_version: "{{design_version}}"
+        design_files: "{{design_files}}"
+        legal_concerns: "{{legal_concerns}}"
+        submitted_by: "{{user}}"
+    
+    # ==================== DESIGN APPROVAL ====================
+    # Design approved - fork into QA and Security
+    - name: approve_design
+      from: [design_review]
+      to: [qa_testing, security_review]
+      guard: "(hasRole('design_lead') or hasRole('designer')) and (inPlace('legal_complete') or workflow.Context('requires_legal') != true)"
+      metadata:
+        icon: "check-circle"
+        label: "Approve Design"
+        triggers_parallel: true
+      notes: "Design approved, starting parallel reviews"
+      actor: "design_lead"
+      custom_fields:
+        approval_date: "now()"
+        design_score: "{{design_score}}"
+        reviewer_notes: "{{reviewer_notes}}"
+    
+    # Design rejected - back to development
+    - name: reject_design
+      from: [design_review]
+      to: [development]
+      guard: "hasRole('design_lead') or hasRole('designer')"
+      metadata:
+        icon: "times-circle"
+        label: "Reject Design"
+        requires_reason: true
+      notes: "Design rejected, returning to development"
+      actor: "design_lead"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejection_date: "now()"
+        required_changes: "{{required_changes}}"
+    
+    # ==================== PARALLEL REVIEW COMPLETIONS ====================
+    - name: complete_qa
+      from: [qa_testing]
+      to: [qa_complete]
+      guard: "(hasRole('qa_lead') or hasRole('tester')) and getContext('test_coverage', 0) >= 80"
+      metadata:
+        icon: "check"
+        label: "Complete QA Testing"
+        min_test_coverage: 80
+      notes: "QA testing completed successfully"
+      actor: "qa_lead"
+      custom_fields:
+        test_coverage: "{{test_coverage}}"
+        bugs_found: "{{bugs_found}}"
+        bugs_fixed: "{{bugs_fixed}}"
+        qa_report_url: "{{qa_report_url}}"
+    
+    - name: complete_security_review
+      from: [security_review]
+      to: [security_complete]
+      guard: "hasRole('security_lead') or hasRole('security_analyst')"
+      metadata:
+        icon: "shield"
+        label: "Complete Security Review"
+        critical: true
+      notes: "Security review completed"
+      actor: "security_lead"
+      custom_fields:
+        security_score: "{{security_score}}"
+        vulnerabilities_found: "{{vulnerabilities_found}}"
+        vulnerabilities_fixed: "{{vulnerabilities_fixed}}"
+        security_report_url: "{{security_report_url}}"
+    
+    - name: complete_legal_review
+      from: [legal_review]
+      to: [legal_complete]
+      guard: "hasRole('legal_advisor') or hasRole('lawyer')"
+      metadata:
+        icon: "file-check"
+        label: "Complete Legal Review"
+      notes: "Legal review completed"
+      actor: "legal_advisor"
+      custom_fields:
+        legal_approval: "{{legal_approval}}"
+        compliance_status: "{{compliance_status}}"
+        legal_notes: "{{legal_notes}}"
+    
+    # ==================== JOIN TRANSITIONS ====================
+    # IMPORTANT: Two different join transitions based on workflow path
+    
+    # Join WITHOUT legal (standard path)
+    - name: approve_standard_reviews
+      from: [qa_complete, security_complete]
+      to: [approved]
+      guard: "(hasRole('project_manager') or hasRole('admin')) and workflow.Context('requires_legal') != true"
+      metadata:
+        icon: "check-circle"
+        label: "Approve (Standard Reviews)"
+        requires_both: true
+        join_type: "standard"
+      notes: "QA and Security reviews completed and approved"
+      actor: "project_manager"
+      custom_fields:
+        approval_date: "now()"
+        approved_by: "{{user}}"
+    
+    # Join WITH legal (extended path)
+    - name: approve_all_reviews_including_legal
+      from: [qa_complete, security_complete, legal_complete]
+      to: [approved]
+      guard: "(hasRole('project_manager') or hasRole('admin')) and workflow.Context('requires_legal') == true"
+      metadata:
+        icon: "check-circle"
+        label: "Approve (All Reviews Including Legal)"
+        requires_all_three: true
+        join_type: "with_legal"
+      notes: "All reviews including legal completed and approved"
+      actor: "project_manager"
+      custom_fields:
+        approval_date: "now()"
+        approved_by: "{{user}}"
+    
+    # ==================== DEPLOYMENT ====================
+    - name: mark_deployment_ready
+      from: [approved]
+      to: [deployment_ready]
+      guard: "hasRole('project_manager') or hasRole('admin')"
+      metadata:
+        icon: "check-circle"
+        label: "Mark Deployment Ready"
+      notes: "Project marked as ready for deployment"
+      actor: "project_manager"
+      custom_fields:
+        marked_ready_at: "now()"
+        marked_by: "{{user}}"
+    
+    - name: deploy
+      from: [deployment_ready]
+      to: [deployed]
+      guard: "hasRole('devops') or hasRole('admin')"
+      metadata:
+        icon: "cloud-upload"
+        label: "Deploy to Production"
+        requires_backup: true
+      notes: "Deployed to production"
+      actor: "devops"
+      custom_fields:
+        deployed_at: "now()"
+        deployment_version: "{{deployment_version}}"
+        deployment_environment: "{{deployment_environment}}"
+        deployment_url: "{{deployment_url}}"
+        rollback_plan: "{{rollback_plan}}"
+    
+    # ==================== REJECTION PATHS ====================
+    # BEST PRACTICE: Use transition names to distinguish different rejection reasons
+    # Users call ApplyTransition("reject_design_issues") instead of Apply([rejected])
+    
+    - name: reject_design_issues
+      from: [design_review]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (Design Issues)"
+        requires_reason: true
+        critical: true
+        rejection_type: "design"
+      notes: "Project rejected due to design issues"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "design"
+    
+    - name: reject_qa_failures
+      from: [qa_testing]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (QA Failures)"
+        requires_reason: true
+        critical: true
+        rejection_type: "qa"
+      notes: "Project rejected due to QA failures"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "qa"
+    
+    - name: reject_security_vulnerabilities
+      from: [security_review]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (Security Vulnerabilities)"
+        requires_reason: true
+        critical: true
+        rejection_type: "security"
+      notes: "Project rejected due to security vulnerabilities"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "security"
+    
+    - name: reject_legal_compliance
+      from: [legal_review]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (Legal/Compliance Issues)"
+        requires_reason: true
+        critical: true
+        rejection_type: "legal"
+      notes: "Project rejected due to legal/compliance issues"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "legal"
+    
+    # Rejections from completed states
+    - name: reject_after_qa_complete
+      from: [qa_complete]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (Post-QA)"
+        requires_reason: true
+        critical: true
+        rejection_type: "post_qa"
+      notes: "Project rejected after QA completion"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "post_qa"
+    
+    - name: reject_after_security_complete
+      from: [security_complete]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (Post-Security)"
+        requires_reason: true
+        critical: true
+        rejection_type: "post_security"
+      notes: "Project rejected after security completion"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "post_security"
+    
+    - name: reject_after_legal_complete
+      from: [legal_complete]
+      to: [rejected]
+      guard: "hasRole('admin') or hasRole('project_manager')"
+      metadata:
+        icon: "ban"
+        label: "Reject (Post-Legal)"
+        requires_reason: true
+        critical: true
+        rejection_type: "post_legal"
+      notes: "Project rejected after legal completion"
+      actor: "admin"
+      custom_fields:
+        rejection_reason: "{{rejection_reason}}"
+        rejected_at: "now()"
+        rejection_category: "post_legal"
+    
+    # ==================== RESTART ====================
+    - name: restart_from_rejected
+      from: [rejected]
+      to: [planning]
+      guard: "hasRole('project_manager')"
+      metadata:
+        icon: "refresh"
+        label: "Restart Project"
+      notes: "Project restarted from rejected state"
+      actor: "project_manager"
+      custom_fields:
+        restarted_at: "now()"
+        restart_reason: "{{restart_reason}}"
+
+# Storage configuration with custom fields
+storage:
+  type: sqlite
+  table: projects
+  id_column: id
+  state_column: state
+  custom_fields:
+    # Project information
+    title: "title TEXT NOT NULL"
+    description: "description TEXT"
+    project_type: "project_type TEXT"
+    priority: "priority TEXT"
+    budget: "budget REAL"
+    team_size: "team_size INTEGER DEFAULT 0"
+    team_lead: "team_lead TEXT"
+    methodology: "methodology TEXT"
+    
+    # Development fields
+    design_version: "design_version TEXT"
+    design_files: "design_files TEXT"
+    test_coverage: "test_coverage INTEGER DEFAULT 0"
+    bugs_found: "bugs_found INTEGER DEFAULT 0"
+    bugs_fixed: "bugs_fixed INTEGER DEFAULT 0"
+    
+    # Deployment fields
+    deployment_version: "deployment_version TEXT"
+    deployment_environment: "deployment_environment TEXT"
+    deployment_url: "deployment_url TEXT"
+    
+    # Flags
+    requires_legal: "requires_legal BOOLEAN DEFAULT 0"
+    # Roles for guard expressions (stored as JSON array)
+    roles: "roles TEXT"
+    created_at: "created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+    updated_at: "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+  
+  database: "./advanced_workflow.db"
+  
+  # History store configuration with custom fields
+  history:
+    table: project_history
+    custom_fields:
+      # User and request tracking
+      user: "user TEXT"
+      ip_address: "ip_address TEXT"
+      user_agent: "user_agent TEXT"
+      
+      # Transition-specific fields (will be populated from transition custom_fields)
+      design_version: "design_version TEXT"
+      design_score: "design_score INTEGER"
+      reviewer_notes: "reviewer_notes TEXT"
+      rejection_reason: "rejection_reason TEXT"
+      required_changes: "required_changes TEXT"
+      test_coverage: "test_coverage INTEGER"
+      bugs_found: "bugs_found INTEGER"
+      bugs_fixed: "bugs_fixed INTEGER"
+      qa_report_url: "qa_report_url TEXT"
+      security_score: "security_score INTEGER"
+      vulnerabilities_found: "vulnerabilities_found INTEGER"
+      vulnerabilities_fixed: "vulnerabilities_fixed INTEGER"
+      security_report_url: "security_report_url TEXT"
+      legal_approval: "legal_approval TEXT"
+      compliance_status: "compliance_status TEXT"
+      legal_notes: "legal_notes TEXT"
+      deployment_version: "deployment_version TEXT"
+      deployment_environment: "deployment_environment TEXT"
+      deployment_url: "deployment_url TEXT"
+      rollback_plan: "rollback_plan TEXT"
+      rejection_category: "rejection_category TEXT"
+      restart_reason: "restart_reason TEXT"
+      
+      # Timestamps
+      started_at: "started_at DATETIME"
+      approval_date: "approval_date DATETIME"
+      rejection_date: "rejection_date DATETIME"
+      deployed_at: "deployed_at DATETIME"
+      rejected_at: "rejected_at DATETIME"
+      restarted_at: "restarted_at DATETIME"
+      submitted_at: "submitted_at DATETIME"
+
+

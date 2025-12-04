@@ -118,7 +118,12 @@ func (h *SQLiteHistory) ListHistory(workflowID string, opts QueryOptions) ([]Tra
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			// Log error but don't fail the operation
+			fmt.Printf("Error closing rows: %v\n", closeErr)
+		}
+	}()
 	var history []TransitionRecord
 	for rows.Next() {
 		var r TransitionRecord

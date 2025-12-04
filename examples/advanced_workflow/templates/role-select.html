@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Role - Advanced Workflow</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body class="bg-gray-100">
+    <div class="container">
+        <div style="max-width: 56rem; margin: 0 auto;">
+            <div class="bg-white rounded-lg shadow-md p-8">
+                <h1 class="text-3xl font-bold text-gray-800 mb-6">Select Your Role</h1>
+                <p class="text-gray-600 mb-8">Choose a role to see projects and actions relevant to your responsibilities.</p>
+                
+                {{if .CurrentRole}}
+                <div class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p class="text-sm text-blue-800">
+                        <i class="fas fa-info-circle"></i> 
+                        Currently logged in as: <strong>{{.CurrentRole}}</strong>
+                    </p>
+                </div>
+                {{end}}
+                
+                <form method="POST" action="/role/set" class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {{range $role, $config := .Roles}}
+                        <label class="flex items-start p-4 border-2 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors
+                            {{if eq $.CurrentRole $role}}border-blue-500 bg-blue-50{{else}}border-gray-200{{end}}">
+                            <input type="radio" name="role" value="{{$role}}" class="mt-1 mr-3"
+                                {{if eq $.CurrentRole $role}}checked{{end}}>
+                            <div class="flex-1">
+                                <div class="font-semibold text-gray-900 mb-1">{{$config.Name}}</div>
+                                <div class="text-sm text-gray-600 mb-2">{{$config.Description}}</div>
+                                <div class="text-xs text-gray-500">
+                                    <div class="mb-1">
+                                        <strong>Can see:</strong> {{range $index, $place := $config.Places}}{{if $index}}, {{end}}{{$place}}{{end}}
+                                    </div>
+                                    <div>
+                                        <strong>Can perform:</strong> {{len $config.Transitions}} transitions
+                                    </div>
+                                </div>
+                            </div>
+                        </label>
+                        {{end}}
+                    </div>
+                    
+                    <div class="flex justify-between items-center pt-4 border-t">
+                        <a href="/" class="text-gray-600 hover:text-gray-800">
+                            <i class="fas fa-arrow-left"></i> Back to Projects
+                        </a>
+                        <button type="submit" class="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600">
+                            <i class="fas fa-check"></i> Select Role
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
