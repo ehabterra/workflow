@@ -1,30 +1,32 @@
-package workflow
+package workflow_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/ehabterra/workflow"
 )
 
 func TestDiagramWithGuards(t *testing.T) {
 	// Create a workflow with guards
-	t1, _ := NewTransition("submit", []Place{"start"}, []Place{"review"})
+	t1, _ := workflow.NewTransition("submit", []workflow.Place{"start"}, []workflow.Place{"review"})
 	t1.SetMetadata("guard", "hasRole('manager')")
 
-	t2, _ := NewTransition("approve", []Place{"review"}, []Place{"approved"})
+	t2, _ := workflow.NewTransition("approve", []workflow.Place{"review"}, []workflow.Place{"approved"})
 	t2.SetMetadata("guard", "hasRole('admin') or hasRole('manager')")
 
-	t3, _ := NewTransition("reject", []Place{"review"}, []Place{"rejected"})
+	t3, _ := workflow.NewTransition("reject", []workflow.Place{"review"}, []workflow.Place{"rejected"})
 	t3.SetMetadata("guard", "hasRole('admin') and workflow.Context('can_reject') == true")
 
-	def, err := NewDefinition(
-		[]Place{"start", "review", "approved", "rejected"},
-		[]Transition{*t1, *t2, *t3},
+	def, err := workflow.NewDefinition(
+		[]workflow.Place{"start", "review", "approved", "rejected"},
+		[]workflow.Transition{*t1, *t2, *t3},
 	)
 	if err != nil {
 		t.Fatalf("failed to create definition: %v", err)
 	}
 
-	wf, err := NewWorkflow("test", def, "start")
+	wf, err := workflow.NewWorkflow("test", def, "start")
 	if err != nil {
 		t.Fatalf("failed to create workflow: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 // Workflow represents a workflow instance
@@ -18,6 +19,10 @@ type Workflow struct {
 
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
+
+	// Handle tracking for reliable listener removal
+	listenerHandles map[uint64]int // handle ID -> index in slice
+	nextHandleID    uint64         // atomic counter for unique handle IDs
 }
 
 // Storage defines the interface for persisting workflow state.
@@ -51,13 +56,14 @@ func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Work
 	marking := NewMarking([]Place{initialPlace})
 
 	return &Workflow{
-		name:         name,
-		definition:   definition,
-		initialPlace: initialPlace,
-		marking:      marking,
-		listeners:    make(map[EventType][]interface{}),
-		context:      make(map[string]interface{}),
-		manager:      nil,
+		name:            name,
+		definition:      definition,
+		initialPlace:    initialPlace,
+		marking:         marking,
+		listeners:       make(map[EventType][]interface{}),
+		context:         make(map[string]interface{}),
+		manager:         nil,
+		listenerHandles: make(map[uint64]int),
 	}, nil
 }
 
@@ -69,31 +75,78 @@ func (w *Workflow) Name() string {
 }
 
 // AddEventListener adds an event listener for a specific event type
-func (w *Workflow) AddEventListener(eventType EventType, listener EventListener) {
+// It returns a handle that can be used to remove the listener later
+func (w *Workflow) AddEventListener(eventType EventType, listener EventListener) *ListenerHandle {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	handleID := atomic.AddUint64(&w.nextHandleID, 1)
+	index := len(w.listeners[eventType])
 	w.listeners[eventType] = append(w.listeners[eventType], listener)
+	w.listenerHandles[handleID] = index
+
+	return &ListenerHandle{
+		id:        handleID,
+		eventType: eventType,
+		owner:     w,
+	}
 }
 
 // AddGuardEventListener adds a guard event listener
-func (w *Workflow) AddGuardEventListener(listener GuardEventListener) {
+// It returns a handle that can be used to remove the listener later
+func (w *Workflow) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	eventType := EventGuard
+	handleID := atomic.AddUint64(&w.nextHandleID, 1)
+	index := len(w.listeners[eventType])
 	w.listeners[eventType] = append(w.listeners[eventType], listener)
+	w.listenerHandles[handleID] = index
+
+	return &ListenerHandle{
+		id:        handleID,
+		eventType: eventType,
+		owner:     w,
+	}
 }
 
-// RemoveEventListener removes an event listener
-func (w *Workflow) RemoveEventListener(eventType EventType, listener interface{}) {
+// RemoveListener removes a listener using its handle
+// This is the recommended way to remove listeners as it's reliable and efficient
+func (w *Workflow) RemoveListener(handle *ListenerHandle) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	listeners := w.listeners[eventType]
-	for i, l := range listeners {
-		if &l == &listener {
-			w.listeners[eventType] = append(listeners[:i], listeners[i+1:]...)
-			break
+
+	if w.listenerHandles == nil || handle == nil {
+		return
+	}
+
+	// Verify the handle belongs to this workflow
+	if handle.owner != w {
+		return
+	}
+
+	index, ok := w.listenerHandles[handle.id]
+	if !ok {
+		return // Handle not found
+	}
+
+	listeners := w.listeners[handle.eventType]
+	if index >= len(listeners) {
+		return // Index out of bounds
+	}
+
+	// Remove from slice
+	w.listeners[handle.eventType] = append(listeners[:index], listeners[index+1:]...)
+
+	// Update indices for handles after the removed one
+	for id, idx := range w.listenerHandles {
+		if idx > index {
+			w.listenerHandles[id] = idx - 1
 		}
 	}
+
+	delete(w.listenerHandles, handle.id)
 }
 
 // SetContext sets a value in the workflow context

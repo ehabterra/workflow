@@ -39,7 +39,7 @@ func main() {
 
 	// Step 2: Run migrations
 	log.Println("Running database migrations...")
-	if err := runMigrations(db); err != nil {
+	if err := RunMigrations(db); err != nil {
 		log.Fatalf("Migration failed: %v", err)
 	}
 	log.Println("Migrations completed successfully!")
@@ -221,8 +221,9 @@ func main() {
 	log.Println(sqlStore.GenerateSchema())
 }
 
-// runMigrations executes database migrations using go-migrate
-func runMigrations(db *sql.DB) error {
+// RunMigrations executes database migrations using go-migrate
+// Exported for testing purposes
+func RunMigrations(db *sql.DB) error {
 	driver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to create migration driver: %w", err)

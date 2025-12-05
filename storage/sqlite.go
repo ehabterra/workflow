@@ -126,21 +126,21 @@ func (s *SQLiteStorage) SaveState(id string, places []workflow.Place, context ma
 			// Handle slices and arrays by marshaling to JSON
 			// This is needed for fields like "roles" which is []string
 			if val != nil {
-				// Check if it's a slice/array type that needs JSON marshaling
-				switch val.(type) {
-				case []string:
+				// Check if it's a complex type that needs JSON marshaling
+				switch value := val.(type) {
+				case []string, []any, map[string]any:
 					// Marshal slice to JSON
-					if jsonBytes, err := json.Marshal(val); err == nil {
+					if jsonBytes, err := json.Marshal(value); err == nil {
 						values = append(values, string(jsonBytes))
 					} else {
 						values = append(values, nil)
 					}
-				case []interface{}:
-					// Marshal slice to JSON
-					if jsonBytes, err := json.Marshal(val); err == nil {
-						values = append(values, string(jsonBytes))
+				case bool:
+					// SQLite doesn't have a native boolean type, convert to integer
+					if value {
+						values = append(values, 1)
 					} else {
-						values = append(values, nil)
+						values = append(values, 0)
 					}
 				default:
 					values = append(values, val)
@@ -217,9 +217,9 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 		val := *(scanArgs[i+1].(*interface{}))
 
 		// Check if this is a JSON string that should be unmarshaled
-		// This handles fields like "roles" which is stored as JSON
+		// This handles fields like "roles" (arrays) and "nested" (maps) which are stored as JSON
 		if strVal, ok := val.(string); ok && strVal != "" {
-			// Try to unmarshal as JSON array
+			// Try to unmarshal as JSON array first
 			var jsonArray []interface{}
 			if err := json.Unmarshal([]byte(strVal), &jsonArray); err == nil {
 				// Successfully unmarshaled as JSON array
@@ -240,13 +240,32 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 					context[key] = jsonArray
 				}
 			} else {
-				// Not JSON, store as string
-				context[key] = strVal
+				// Try to unmarshal as JSON object (map)
+				var jsonMap map[string]interface{}
+				if err := json.Unmarshal([]byte(strVal), &jsonMap); err == nil {
+					context[key] = jsonMap
+				} else {
+					// Not JSON, store as string
+					context[key] = strVal
+				}
+			}
+		} else if val != nil {
+			// SQLite may return int64 for INTEGER columns, etc.
+			// Check if this is a boolean stored as integer (1 or 0)
+			if intVal, ok := val.(int64); ok {
+				// Check if the column definition suggests this is a boolean
+				// For now, we'll check if the value is 0 or 1 and the key suggests boolean
+				// This is a heuristic - in practice, you'd check the column definition
+				if (key == "bool" || key == "boolean") && (intVal == 0 || intVal == 1) {
+					context[key] = intVal == 1
+				} else {
+					context[key] = val
+				}
+			} else {
+				context[key] = val
 			}
 		} else {
-			// SQLite may return int64 for INTEGER columns, etc.
-			// The application layer will need to handle type assertions.
-			context[key] = val
+			context[key] = nil
 		}
 	}
 

@@ -109,9 +109,12 @@ func (h *SQLiteHistory) ListHistory(workflowID string, opts QueryOptions) ([]Tra
 	sqlStr := fmt.Sprintf("SELECT %s FROM %s WHERE %s ORDER BY id DESC", strings.Join(selectCols, ", "), h.table, strings.Join(where, " AND "))
 	if opts.Limit > 0 {
 		sqlStr += fmt.Sprintf(" LIMIT %d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		sqlStr += fmt.Sprintf(" OFFSET %d", opts.Offset)
+		if opts.Offset > 0 {
+			sqlStr += fmt.Sprintf(" OFFSET %d", opts.Offset)
+		}
+	} else if opts.Offset > 0 {
+		// OFFSET requires LIMIT in SQLite, use a large limit if none specified
+		sqlStr += " LIMIT -1 OFFSET " + fmt.Sprintf("%d", opts.Offset)
 	}
 
 	rows, err := h.db.Query(sqlStr, args...)
