@@ -440,5 +440,30 @@ func TestDefinition_RemoveEventListener(t *testing.T) {
 	handle4 := def.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
 	def.RemoveListener(handle4)
 	def.RemoveListener(handle4) // Should be safe to call twice
+}
 
+func TestDefinition_RemoveListener_EdgeCases(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	// Test removing handle from different definition
+	def2, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	handle1 := def.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+	handle2 := def2.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+
+	// Try to remove handle2 (from def2) from def1 - should not remove anything
+	def.RemoveListener(handle2)
+	if len(def.Listeners[workflow.EventBeforeTransition]) != 1 {
+		t.Errorf("RemoveListener() with wrong owner should not remove listener, got %d", len(def.Listeners[workflow.EventBeforeTransition]))
+	}
+
+	// Clean up
+	def.RemoveListener(handle1)
+	def2.RemoveListener(handle2)
 }

@@ -542,6 +542,52 @@ func TestManager_RemoveEventListener(t *testing.T) {
 	}
 }
 
+func TestManager_RemoveListener_EdgeCases(t *testing.T) {
+	registry := workflow.NewRegistry()
+	storage := NewMockStorage()
+	manager := workflow.NewManager(registry, storage)
+	manager2 := workflow.NewManager(registry, storage)
+
+	// Test removing handle from different manager
+	handle1 := manager.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+	handle2 := manager2.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+
+	// Try to remove handle2 (from manager2) from manager1 - should not remove anything
+	manager.RemoveListener(handle2)
+	if len(manager.Listeners[workflow.EventBeforeTransition]) != 1 {
+		t.Errorf("RemoveListener() with wrong owner should not remove listener, got %d", len(manager.Listeners[workflow.EventBeforeTransition]))
+	}
+
+	// Clean up
+	manager.RemoveListener(handle1)
+}
+
+func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
+	registry := workflow.NewRegistry()
+	storage := NewMockStorage()
+	manager := workflow.NewManager(registry, storage)
+
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	// Save state with empty places
+	err = storage.SaveState("empty_places", []workflow.Place{}, nil)
+	if err != nil {
+		t.Fatalf("SaveState() failed: %v", err)
+	}
+
+	// Try to load workflow with empty places - should return error
+	_, err = manager.LoadWorkflow("empty_places", def)
+	if err == nil {
+		t.Error("LoadWorkflow() with empty places should return error")
+	}
+	if err != nil && err.Error() != "workflow state has no places" {
+		t.Errorf("LoadWorkflow() error = %v, want 'workflow state has no places'", err)
+	}
+}
+
 // ErrorStorage is a mock storage that always returns an error
 type ErrorStorage struct{}
 
