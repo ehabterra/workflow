@@ -85,6 +85,14 @@ type GuardEvent struct {
 	isBlocking bool
 }
 
+// ListenerHandle represents a handle to remove a listener
+// This provides a reliable way to remove listeners without needing the exact function value
+type ListenerHandle struct {
+	id        uint64
+	eventType EventType
+	owner     any // Pointer to the owner (Definition, Manager, or Workflow) for type safety
+}
+
 // NewGuardEvent creates a new Guard Event instance
 func NewGuardEvent(ctx context.Context, transition *Transition, from []Place, to []Place, workflow *Workflow) *GuardEvent {
 	return &GuardEvent{

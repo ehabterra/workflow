@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"sync/atomic"
 )
 
 // Manager handles workflow instances and their persistence
@@ -11,6 +12,10 @@ type Manager struct {
 
 	// Dynamic listeners for all managed workflows
 	Listeners map[EventType][]interface{}
+
+	// Handle tracking for reliable listener removal
+	listenerHandles map[uint64]int // handle ID -> index in slice
+	nextHandleID    uint64         // atomic counter for unique handle IDs
 }
 
 // NewManager creates a new workflow manager
@@ -33,6 +38,11 @@ func (m *Manager) LoadWorkflow(id string, definition *Definition) (*Workflow, er
 	places, wfContext, err := m.storage.LoadState(id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load workflow state: %w", err)
+	}
+
+	// Validate that places slice is not empty
+	if len(places) == 0 {
+		return nil, fmt.Errorf("workflow state has no places")
 	}
 
 	// Create new workflow instance
@@ -100,31 +110,80 @@ func (m *Manager) DeleteWorkflow(id string) error {
 }
 
 // AddEventListener adds a dynamic event listener for a specific event type
-func (m *Manager) AddEventListener(eventType EventType, listener EventListener) {
+// It returns a handle that can be used to remove the listener later
+func (m *Manager) AddEventListener(eventType EventType, listener EventListener) *ListenerHandle {
 	if m.Listeners == nil {
 		m.Listeners = make(map[EventType][]interface{})
 	}
+	if m.listenerHandles == nil {
+		m.listenerHandles = make(map[uint64]int)
+	}
+
+	handleID := atomic.AddUint64(&m.nextHandleID, 1)
+	index := len(m.Listeners[eventType])
 	m.Listeners[eventType] = append(m.Listeners[eventType], listener)
+	m.listenerHandles[handleID] = index
+
+	return &ListenerHandle{
+		id:        handleID,
+		eventType: eventType,
+		owner:     m,
+	}
 }
 
 // AddGuardEventListener adds a dynamic guard event listener
-func (m *Manager) AddGuardEventListener(listener GuardEventListener) {
+// It returns a handle that can be used to remove the listener later
+func (m *Manager) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
 	if m.Listeners == nil {
 		m.Listeners = make(map[EventType][]interface{})
 	}
+	if m.listenerHandles == nil {
+		m.listenerHandles = make(map[uint64]int)
+	}
+
+	handleID := atomic.AddUint64(&m.nextHandleID, 1)
+	index := len(m.Listeners[EventGuard])
 	m.Listeners[EventGuard] = append(m.Listeners[EventGuard], listener)
+	m.listenerHandles[handleID] = index
+
+	return &ListenerHandle{
+		id:        handleID,
+		eventType: EventGuard,
+		owner:     m,
+	}
 }
 
-// RemoveEventListener removes a dynamic event listener
-func (m *Manager) RemoveEventListener(eventType EventType, listener interface{}) {
-	if m.Listeners == nil {
+// RemoveListener removes a listener using its handle
+// This is the recommended way to remove listeners as it's reliable and efficient
+func (m *Manager) RemoveListener(handle *ListenerHandle) {
+	if m.Listeners == nil || m.listenerHandles == nil || handle == nil {
 		return
 	}
-	listeners := m.Listeners[eventType]
-	for i, l := range listeners {
-		if &l == &listener {
-			m.Listeners[eventType] = append(listeners[:i], listeners[i+1:]...)
-			break
+
+	// Verify the handle belongs to this manager
+	if handle.owner != m {
+		return
+	}
+
+	index, ok := m.listenerHandles[handle.id]
+	if !ok {
+		return // Handle not found
+	}
+
+	listeners := m.Listeners[handle.eventType]
+	if index >= len(listeners) {
+		return // Index out of bounds
+	}
+
+	// Remove from slice
+	m.Listeners[handle.eventType] = append(listeners[:index], listeners[index+1:]...)
+
+	// Update indices for handles after the removed one
+	for id, idx := range m.listenerHandles {
+		if idx > index {
+			m.listenerHandles[id] = idx - 1
 		}
 	}
+
+	delete(m.listenerHandles, handle.id)
 }

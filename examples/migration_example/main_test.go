@@ -1,4 +1,4 @@
-package main
+package main_test
 
 import (
 	"database/sql"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ehabterra/workflow"
+	main "github.com/ehabterra/workflow/examples/migration_example"
 	"github.com/ehabterra/workflow/history"
 	"github.com/ehabterra/workflow/storage"
 	_ "github.com/mattn/go-sqlite3"
@@ -27,7 +28,7 @@ func TestMigrationWorkflow(t *testing.T) {
 	defer db.Close()
 
 	// Run migrations
-	if err := runMigrations(db); err != nil {
+	if err := main.RunMigrations(db); err != nil {
 		t.Fatalf("Migration failed: %v", err)
 	}
 
@@ -144,7 +145,7 @@ func TestMigrationHistory(t *testing.T) {
 	defer db.Close()
 
 	// Run migrations
-	if err := runMigrations(db); err != nil {
+	if err := main.RunMigrations(db); err != nil {
 		t.Fatalf("Migration failed: %v", err)
 	}
 
@@ -264,7 +265,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	}
 
 	// Step 2: Run migrations (simulating upgrade)
-	if err := runMigrations(db); err != nil {
+	if err := main.RunMigrations(db); err != nil {
 		t.Fatalf("Migration failed: %v", err)
 	}
 

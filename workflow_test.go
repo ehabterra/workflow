@@ -1071,3 +1071,65 @@ func TestConditionalJoinPattern(t *testing.T) {
 		t.Errorf("Expected [task_c, done] (partial join), got %v", places)
 	}
 }
+
+func TestWorkflow_RemoveListener(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Add listeners and get handles
+	handle1 := wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+	handle2 := wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+	handle3 := wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+
+	// Remove middle listener using handle
+	wf.RemoveListener(handle2)
+
+	// Remove last listener
+	wf.RemoveListener(handle3)
+
+	// Remove first listener
+	wf.RemoveListener(handle1)
+
+	// Test removing with nil handle (should not panic)
+	wf.RemoveListener(nil)
+
+	// Test removing same handle twice (should not panic)
+	handle4 := wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+	wf.RemoveListener(handle4)
+	wf.RemoveListener(handle4) // Should be safe to call twice
+}
+
+func TestWorkflow_RemoveListener_EdgeCases(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	wf2, err := workflow.NewWorkflow("test2", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Test removing handle from different workflow
+	handle1 := wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+	handle2 := wf2.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+
+	// Try to remove handle2 (from wf2) from wf1 - should not remove anything
+	wf.RemoveListener(handle2)
+
+	// Clean up
+	wf.RemoveListener(handle1)
+	wf2.RemoveListener(handle2)
+}
