@@ -1,5 +1,11 @@
 # Go Workflow
 
+[![CI](https://github.com/ehabterra/workflow/actions/workflows/ci.yml/badge.svg)](https://github.com/ehabterra/workflow/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ehabterra/workflow)](https://goreportcard.com/report/github.com/ehabterra/workflow)
+[![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ehabterra/workflow/blob/main/LICENSE)
+[![codecov](https://codecov.io/gh/ehabterra/workflow/branch/main/graph/badge.svg)](https://codecov.io/gh/ehabterra/workflow)
+
 > **⚠️ A Note from the Developers:**  
 > This workflow engine is currently in active development. We're building it to be reliable and easy to use, but it's **not quite ready for mission-critical production yet**. We're a growing open-source project, and we truly welcome any feedback, contributions, or real-world testing you can offer to help us make it great.  
 >
