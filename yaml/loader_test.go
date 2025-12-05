@@ -191,3 +191,29 @@ workflow:
 		t.Errorf("Expected test_field='test_value', got '%v'", record.CustomFields["test_field"])
 	}
 }
+
+func TestNewLoaderWithEnv(t *testing.T) {
+	// Test creating a loader with custom environment builder
+	envBuilder := func(event workflow.Event) map[string]any {
+		return map[string]any{
+			"custom": "value",
+		}
+	}
+
+	loader := yaml.NewLoaderWithEnv(envBuilder)
+	if loader == nil {
+		t.Fatal("NewLoaderWithEnv() should not return nil")
+	}
+	if loader.EnvBuilder == nil {
+		t.Error("NewLoaderWithEnv() should set EnvBuilder")
+	}
+
+	// Test that the env builder is used
+	tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
+	event := workflow.NewEvent(context.Background(), workflow.EventBeforeTransition, tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil)
+
+	env := loader.EnvBuilder(event)
+	if env["custom"] != "value" {
+		t.Errorf("EnvBuilder() = %v, want map with 'custom' key", env)
+	}
+}
