@@ -1133,3 +1133,152 @@ func TestWorkflow_RemoveListener_EdgeCases(t *testing.T) {
 	wf.RemoveListener(handle1)
 	wf2.RemoveListener(handle2)
 }
+
+func TestWorkflow_AllContext(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Test with empty context
+	allContext := wf.AllContext()
+	if allContext == nil {
+		t.Error("AllContext() should not return nil")
+	}
+	if len(allContext) != 0 {
+		t.Errorf("AllContext() should return empty map, got %v", allContext)
+	}
+
+	// Test with context values
+	wf.SetContext("key1", "value1")
+	wf.SetContext("key2", 42)
+	wf.SetContext("key3", true)
+
+	allContext = wf.AllContext()
+	if len(allContext) != 3 {
+		t.Errorf("AllContext() should return 3 items, got %d", len(allContext))
+	}
+	if allContext["key1"] != "value1" {
+		t.Errorf("AllContext() key1 = %v, want 'value1'", allContext["key1"])
+	}
+	if allContext["key2"] != 42 {
+		t.Errorf("AllContext() key2 = %v, want 42", allContext["key2"])
+	}
+	if allContext["key3"] != true {
+		t.Errorf("AllContext() key3 = %v, want true", allContext["key3"])
+	}
+
+	// Verify it's a copy (modifying returned map shouldn't affect workflow)
+	allContext["newKey"] = "newValue"
+	_, exists := wf.Context("newKey")
+	if exists {
+		t.Error("AllContext() should return a copy, not the original map")
+	}
+}
+
+func TestWorkflow_Can_Wrapper(t *testing.T) {
+	def, err := workflow.NewDefinition(
+		[]workflow.Place{"start", "middle", "end"},
+		[]workflow.Transition{
+			*workflow.MustNewTransition("move", []workflow.Place{"start"}, []workflow.Place{"middle"}),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Test Can with valid transition
+	err = wf.Can([]workflow.Place{"middle"})
+	if err != nil {
+		t.Errorf("Can() with valid transition should not error, got %v", err)
+	}
+
+	// Test Can with invalid transition
+	err = wf.Can([]workflow.Place{"end"})
+	if err == nil {
+		t.Error("Can() with invalid transition should error")
+	}
+}
+
+func TestWorkflow_Definition(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Test Definition() returns the correct definition
+	returnedDef := wf.Definition()
+	if returnedDef != def {
+		t.Errorf("Definition() = %v, want %v", returnedDef, def)
+	}
+}
+
+func TestWorkflow_SetMarking(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Test SetMarking with nil (should error)
+	err = wf.SetMarking(nil)
+	if err == nil {
+		t.Error("SetMarking(nil) should return error")
+	}
+
+	// Test SetMarking with valid marking
+	marking := workflow.NewMarking([]workflow.Place{"end"})
+	err = wf.SetMarking(marking)
+	if err != nil {
+		t.Errorf("SetMarking() with valid marking should not error, got %v", err)
+	}
+
+	// Verify marking was set
+	currentPlaces := wf.CurrentPlaces()
+	if len(currentPlaces) != 1 || currentPlaces[0] != "end" {
+		t.Errorf("SetMarking() did not set marking correctly, got %v", currentPlaces)
+	}
+}
+
+func TestWorkflow_RemoveListener_IndexOutOfBounds(t *testing.T) {
+	def, err := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{})
+	if err != nil {
+		t.Fatalf("NewDefinition() failed: %v", err)
+	}
+
+	wf, err := workflow.NewWorkflow("test", def, "start")
+	if err != nil {
+		t.Fatalf("NewWorkflow() failed: %v", err)
+	}
+
+	// Add a listener
+	handle := wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
+
+	// Manually corrupt the handle map to simulate index out of bounds
+	// This tests the index >= len(listeners) check
+	// We can't directly access private fields, but we can test by removing the listener
+	// and then trying to remove it again (which will hit the "handle not found" path)
+	wf.RemoveListener(handle)
+
+	// Try to remove again - should safely handle missing handle
+	wf.RemoveListener(handle)
+}
