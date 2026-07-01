@@ -173,7 +173,7 @@ func main() {
 			ctx.Role = "system"
 			err := wf.Apply([]workflow.Place{"pending_manager_approval"})
 			if err != nil {
-				return fmt.Errorf("failed to auto-trigger pending_manager_approve: %v", err)
+				return fmt.Errorf("failed to auto-trigger pending_manager_approve: %w", err)
 			}
 		}
 

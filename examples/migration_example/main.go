@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -95,12 +96,12 @@ func main() {
 		time.Sleep(10 * time.Millisecond)
 		duration := time.Since(startTime)
 
-		metadataJSON, _ := json.Marshal(map[string]interface{}{
+		metadataJSON, _ := json.Marshal(map[string]any{
 			"transition_time":  startTime.Format(time.RFC3339),
 			"workflow_version": "1.0",
 		})
 
-		return historyStore.SaveTransition(&history.TransitionRecord{
+		return historyStore.SaveTransition(context.Background(), &history.TransitionRecord{
 			WorkflowID: e.Workflow().Name(),
 			FromState:  fmt.Sprintf("%v", e.From()),
 			ToState:    fmt.Sprintf("%v", e.To()),
@@ -108,7 +109,7 @@ func main() {
 			Notes:      "Automated transition",
 			Actor:      "system",
 			CreatedAt:  time.Now(),
-			CustomFields: map[string]interface{}{
+			CustomFields: map[string]any{
 				"duration_ms": duration.Milliseconds(),
 				"metadata":    string(metadataJSON),
 			},
@@ -119,7 +120,7 @@ func main() {
 	log.Println("\n=== Creating workflows ===")
 
 	// Create first workflow with initial fields
-	wf1, err := workflowMgr.CreateWorkflow("doc-1", workflowDef, "draft")
+	wf1, err := workflowMgr.CreateWorkflow(context.Background(), "doc-1", workflowDef, "draft")
 	if err != nil {
 		log.Fatalf("Failed to create workflow: %v", err)
 	}
@@ -130,13 +131,13 @@ func main() {
 	wf1.SetContext("created_at", time.Now().Format(time.RFC3339))
 	wf1.SetContext("updated_at", time.Now().Format(time.RFC3339))
 
-	if err := workflowMgr.SaveWorkflow("doc-1", wf1); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), "doc-1", wf1); err != nil {
 		log.Fatalf("Failed to save workflow: %v", err)
 	}
 	log.Printf("Created workflow: doc-1 in state: %v", wf1.CurrentPlaces())
 
 	// Create second workflow
-	wf2, err := workflowMgr.CreateWorkflow("doc-2", workflowDef, "draft")
+	wf2, err := workflowMgr.CreateWorkflow(context.Background(), "doc-2", workflowDef, "draft")
 	if err != nil {
 		log.Fatalf("Failed to create workflow: %v", err)
 	}
@@ -146,7 +147,7 @@ func main() {
 	wf2.SetContext("created_at", time.Now().Format(time.RFC3339))
 	wf2.SetContext("updated_at", time.Now().Format(time.RFC3339))
 
-	if err := workflowMgr.SaveWorkflow("doc-2", wf2); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), "doc-2", wf2); err != nil {
 		log.Fatalf("Failed to save workflow: %v", err)
 	}
 	log.Printf("Created workflow: doc-2 in state: %v", wf2.CurrentPlaces())
@@ -155,7 +156,7 @@ func main() {
 	log.Println("\n=== Applying transitions ===")
 
 	// Transition doc-1 to review
-	wf1, err = workflowMgr.GetWorkflow("doc-1", workflowDef)
+	wf1, err = workflowMgr.GetWorkflow(context.Background(), "doc-1", workflowDef)
 	if err != nil {
 		log.Fatalf("Failed to get workflow: %v", err)
 	}
@@ -167,7 +168,7 @@ func main() {
 		log.Fatalf("Failed to apply transition: %v", err)
 	}
 	wf1.SetContext("updated_at", time.Now().Format(time.RFC3339))
-	if err := workflowMgr.SaveWorkflow("doc-1", wf1); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), "doc-1", wf1); err != nil {
 		log.Fatalf("Failed to save workflow: %v", err)
 	}
 	log.Printf("doc-1 transitioned to: %v", wf1.CurrentPlaces())
@@ -176,7 +177,7 @@ func main() {
 	log.Println("\n=== Verifying data persistence ===")
 
 	// Load workflow and verify all fields are preserved
-	loadedPlaces, loadedCtx, err := sqlStore.LoadState("doc-1")
+	loadedPlaces, loadedCtx, err := sqlStore.LoadState(context.Background(), "doc-1")
 	if err != nil {
 		log.Fatalf("Failed to load state: %v", err)
 	}
@@ -190,7 +191,7 @@ func main() {
 	// Step 11: Query history with new metadata fields
 	log.Println("\n=== Querying transition history ===")
 
-	historyRecords, err := historyStore.ListHistory("doc-1", history.QueryOptions{Limit: 10})
+	historyRecords, err := historyStore.ListHistory(context.Background(), "doc-1", history.QueryOptions{Limit: 10})
 	if err != nil {
 		log.Fatalf("Failed to list history: %v", err)
 	}

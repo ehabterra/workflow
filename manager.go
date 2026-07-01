@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 )
@@ -11,7 +12,7 @@ type Manager struct {
 	storage  Storage
 
 	// Dynamic listeners for all managed workflows
-	Listeners map[EventType][]interface{}
+	Listeners map[EventType][]any
 
 	// Handle tracking for reliable listener removal
 	listenerHandles map[uint64]int // handle ID -> index in slice
@@ -27,7 +28,7 @@ func NewManager(registry *Registry, storage Storage) *Manager {
 }
 
 // LoadWorkflow loads a workflow instance from storage
-func (m *Manager) LoadWorkflow(id string, definition *Definition) (*Workflow, error) {
+func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
 	// Try to get from registry first
 	wf, err := m.registry.Workflow(id)
 	if err == nil {
@@ -35,14 +36,14 @@ func (m *Manager) LoadWorkflow(id string, definition *Definition) (*Workflow, er
 	}
 
 	// Load state and context from storage
-	places, wfContext, err := m.storage.LoadState(id)
+	places, wfContext, err := m.storage.LoadState(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load workflow state: %w", err)
 	}
 
 	// Validate that places slice is not empty
 	if len(places) == 0 {
-		return nil, fmt.Errorf("workflow state has no places")
+		return nil, fmt.Errorf("%w: loaded state has no places", ErrInvalidWorkflow)
 	}
 
 	// Create new workflow instance
@@ -64,12 +65,12 @@ func (m *Manager) LoadWorkflow(id string, definition *Definition) (*Workflow, er
 }
 
 // SaveWorkflow saves a workflow instance state to storage
-func (m *Manager) SaveWorkflow(id string, wf *Workflow) error {
-	return m.storage.SaveState(id, wf.Marking().Places(), wf.context)
+func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) error {
+	return m.storage.SaveState(ctx, id, wf.Marking().Places(), wf.context)
 }
 
 // GetWorkflow gets a workflow instance from the registry or loads it from storage
-func (m *Manager) GetWorkflow(id string, definition *Definition) (*Workflow, error) {
+func (m *Manager) GetWorkflow(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
 	// Try to get from registry first
 	wf, err := m.registry.Workflow(id)
 	if err == nil {
@@ -77,11 +78,11 @@ func (m *Manager) GetWorkflow(id string, definition *Definition) (*Workflow, err
 	}
 
 	// If not in registry, load from storage
-	return m.LoadWorkflow(id, definition)
+	return m.LoadWorkflow(ctx, id, definition)
 }
 
 // CreateWorkflow creates a new workflow instance and saves it to storage
-func (m *Manager) CreateWorkflow(id string, definition *Definition, initialPlace Place) (*Workflow, error) {
+func (m *Manager) CreateWorkflow(ctx context.Context, id string, definition *Definition, initialPlace Place) (*Workflow, error) {
 	wf, err := NewWorkflow(id, definition, initialPlace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow: %w", err)
@@ -89,7 +90,7 @@ func (m *Manager) CreateWorkflow(id string, definition *Definition, initialPlace
 	wf.SetManager(m)
 
 	// Save initial state
-	if err := m.storage.SaveState(id, wf.Marking().Places(), wf.context); err != nil {
+	if err := m.storage.SaveState(ctx, id, wf.Marking().Places(), wf.context); err != nil {
 		return nil, fmt.Errorf("failed to save initial state: %w", err)
 	}
 
@@ -101,19 +102,19 @@ func (m *Manager) CreateWorkflow(id string, definition *Definition, initialPlace
 }
 
 // DeleteWorkflow removes a workflow instance and its state
-func (m *Manager) DeleteWorkflow(id string) error {
+func (m *Manager) DeleteWorkflow(ctx context.Context, id string) error {
 	// Remove from registry (ignore error if workflow not found)
 	_ = m.registry.RemoveWorkflow(id)
 
 	// Remove from storage
-	return m.storage.DeleteState(id)
+	return m.storage.DeleteState(ctx, id)
 }
 
 // AddEventListener adds a dynamic event listener for a specific event type
 // It returns a handle that can be used to remove the listener later
 func (m *Manager) AddEventListener(eventType EventType, listener EventListener) *ListenerHandle {
 	if m.Listeners == nil {
-		m.Listeners = make(map[EventType][]interface{})
+		m.Listeners = make(map[EventType][]any)
 	}
 	if m.listenerHandles == nil {
 		m.listenerHandles = make(map[uint64]int)
@@ -135,7 +136,7 @@ func (m *Manager) AddEventListener(eventType EventType, listener EventListener) 
 // It returns a handle that can be used to remove the listener later
 func (m *Manager) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
 	if m.Listeners == nil {
-		m.Listeners = make(map[EventType][]interface{})
+		m.Listeners = make(map[EventType][]any)
 	}
 	if m.listenerHandles == nil {
 		m.listenerHandles = make(map[uint64]int)

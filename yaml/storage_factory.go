@@ -15,7 +15,7 @@ type StorageConfigBuilder interface {
 	// Build creates a workflow.Storage instance from the raw YAML configuration data.
 	// The config parameter contains the raw YAML data for the storage section.
 	// Returns the Storage instance and any initialization schema/commands needed.
-	Build(config map[string]interface{}) (workflow.Storage, *StorageInit, error)
+	Build(config map[string]any) (workflow.Storage, *StorageInit, error)
 }
 
 // StorageInit contains information needed to initialize the storage (e.g., SQL schema).

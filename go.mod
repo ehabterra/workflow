@@ -1,6 +1,6 @@
 module github.com/ehabterra/workflow
 
-go 1.21
+go 1.24
 
 require (
 	github.com/expr-lang/expr v1.17.6

@@ -1,6 +1,7 @@
 package yaml_test
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -105,7 +106,7 @@ func TestExampleYAML(t *testing.T) {
 		}
 
 		// Check custom fields
-		if customFields, ok := storageConfig["custom_fields"].(map[string]interface{}); ok {
+		if customFields, ok := storageConfig["custom_fields"].(map[string]any); ok {
 			if customFields["title"] != "title TEXT" {
 				t.Errorf("Expected custom_fields.title='title TEXT', got '%v'", customFields["title"])
 			}
@@ -132,7 +133,7 @@ func TestExampleYAML(t *testing.T) {
 	if !ok {
 		t.Error("Expected _place_metadata in context")
 	} else {
-		metaMap := placeMeta.(map[string]map[string]interface{})
+		metaMap := placeMeta.(map[string]map[string]any)
 		if metaMap["draft"]["max_words"] != 500 {
 			t.Errorf("Expected draft.max_words=500, got %v", metaMap["draft"]["max_words"])
 		}
@@ -173,7 +174,7 @@ func TestExampleYAML(t *testing.T) {
 			"ip_address":   "ip_address TEXT",
 		}),
 	)
-	if err := historyStore.Initialize(); err != nil {
+	if err := historyStore.Initialize(context.Background()); err != nil {
 		t.Fatalf("Failed to initialize history: %v", err)
 	}
 

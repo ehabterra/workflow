@@ -1,0 +1,145 @@
+# Banking System CPN Model (True CPN with Request Tokens)
+# 
+# Requirements:
+# - 1000 accounts (numbered 1-1000)
+# - Operations: deposit, withdraw
+# - Amount constraints: 1-5000 EURO
+# - Negative balance allowed
+#
+# CPN Design (True CPN Flow Model):
+# - Account tokens: account_id, balance (in active_accounts place)
+# - Request tokens: account_id, amount, operation_type (in request places)
+# - Transitions consume tokens from BOTH places (account + request)
+# - Token correlation: match account_id between account and request tokens
+# - Guards validate amount constraints (1-5000)
+# - Token transformation updates account balance
+# - Request tokens are consumed (not produced back)
+#
+# Benefits of Request Token Model:
+# - True CPN concurrency: PN structure enforces serialization per account
+# - Batch processing: Multiple request tokens can be processed concurrently
+# - Mathematical rigor: Transitions fire only when both tokens arrive
+# - Isolation: Account token consumption prevents concurrent updates
+
+workflow:
+  name: banking_system
+  initial_place: active_accounts
+  cpn_enabled: true  # Enable Colored Petri Net mode
+  
+  # Multiple token schemas for different token types
+  token_schemas:
+    # Account token schema
+    account:
+      account_id: integer  # Account number (1-1000)
+      balance: number      # Current balance (can be negative)
+    
+    # Transaction request token schema
+    transaction_request:
+      account_id: integer   # Target account number
+      amount: number        # Transaction amount
+      operation_type: string # "deposit" or "withdraw"
+      request_id: string    # Unique request identifier
+  
+  # Workflow-level metadata
+  metadata:
+    system_name: "Simple Banking System (True CPN Model)"
+    max_accounts: 1000
+    min_amount: 1
+    max_amount: 5000
+    allow_negative: true
+  
+  # Places
+  places:
+    - name: active_accounts
+      metadata:
+        description: "All active accounts in the system"
+        token_schema: account
+        capacity: "unlimited"  # Can hold all 1000 account tokens
+    
+    - name: deposit_requests
+      metadata:
+        description: "Queue of deposit requests"
+        token_schema: transaction_request
+        capacity: "unlimited"
+    
+    - name: withdraw_requests
+      metadata:
+        description: "Queue of withdraw requests"
+        token_schema: transaction_request
+        capacity: "unlimited"
+  
+  # Transitions
+  transitions:
+    # Deposit operation - consumes tokens from BOTH places
+    - name: deposit
+      from: [active_accounts, deposit_requests]
+      to: [active_accounts]
+      # Token correlation: match account_id between account and request tokens
+      token_correlation: |
+        active_accounts.token.account_id == deposit_requests.token.account_id
+      # Guard: validate amount is between 1 and 5000
+      guard: |
+        deposit_requests.token.amount >= 1 and 
+        deposit_requests.token.amount <= 5000
+      # Token transformation: update account balance, consume request
+      token_transform:
+        # Update account token (produce back to active_accounts)
+        active_accounts: |
+          {
+            "account_id": active_accounts.token.account_id,
+            "balance": active_accounts.token.balance + deposit_requests.token.amount
+          }
+        # Consume request token (null means consumed, not produced)
+        deposit_requests: null
+      metadata:
+        operation_type: "deposit"
+        description: "Deposit operation - consumes account and request tokens"
+      notes: "Deposit operation"
+      custom_fields:
+        operation: "deposit"
+        amount: "{{deposit_requests.token.amount}}"
+        account_id: "{{active_accounts.token.account_id}}"
+        request_id: "{{deposit_requests.token.request_id}}"
+    
+    # Withdraw operation - consumes tokens from BOTH places
+    - name: withdraw
+      from: [active_accounts, withdraw_requests]
+      to: [active_accounts]
+      # Token correlation: match account_id between account and request tokens
+      token_correlation: |
+        active_accounts.token.account_id == withdraw_requests.token.account_id
+      # Guard: validate amount is between 1 and 5000
+      guard: |
+        withdraw_requests.token.amount >= 1 and 
+        withdraw_requests.token.amount <= 5000
+      # Token transformation: update account balance, consume request
+      token_transform:
+        # Update account token (produce back to active_accounts)
+        active_accounts: |
+          {
+            "account_id": active_accounts.token.account_id,
+            "balance": active_accounts.token.balance - withdraw_requests.token.amount
+          }
+        # Consume request token (null means consumed, not produced)
+        withdraw_requests: null
+      metadata:
+        operation_type: "withdraw"
+        description: "Withdraw operation - consumes account and request tokens"
+      notes: "Withdraw operation"
+      custom_fields:
+        operation: "withdraw"
+        amount: "{{withdraw_requests.token.amount}}"
+        account_id: "{{active_accounts.token.account_id}}"
+        request_id: "{{withdraw_requests.token.request_id}}"
+
+# Storage configuration
+storage:
+  type: sqlite
+  table: banking_accounts
+  id_column: workflow_id
+  state_column: state
+  custom_fields:
+    system_version: "system_version TEXT"
+    last_operation_time: "last_operation_time TIMESTAMP"
+  database: "banking_system.db"
+

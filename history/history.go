@@ -1,6 +1,9 @@
 package history
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // TransitionRecord is the base struct for a transition event.
 type TransitionRecord struct {
@@ -11,7 +14,7 @@ type TransitionRecord struct {
 	Notes        string
 	Actor        string
 	CreatedAt    time.Time
-	CustomFields map[string]interface{} // For custom columns, if any
+	CustomFields map[string]any // For custom columns, if any
 }
 
 // QueryOptions allows for pagination and filtering.
@@ -25,9 +28,13 @@ type QueryOptions struct {
 }
 
 // HistoryStore is the interface for saving and querying transition history.
+//
+// SaveTransition, ListHistory and Initialize take a context.Context so callers
+// can apply cancellation and deadlines; implementations honor it via the
+// database/sql *Context methods.
 type HistoryStore interface {
-	SaveTransition(record *TransitionRecord) error
-	ListHistory(workflowID string, opts QueryOptions) ([]TransitionRecord, error)
+	SaveTransition(ctx context.Context, record *TransitionRecord) error
+	ListHistory(ctx context.Context, workflowID string, opts QueryOptions) ([]TransitionRecord, error)
 	GenerateSchema() string
-	Initialize() error
+	Initialize(ctx context.Context) error
 }

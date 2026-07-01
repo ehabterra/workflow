@@ -1,6 +1,7 @@
 package yaml
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -108,7 +109,7 @@ func SetupStorageFromConfig(storageConfig *StorageConfig) (*StorageSetupResult, 
 	var historyStore history.HistoryStore
 	if conn != nil {
 		if sqlConn, ok := conn.(*SQLConnection); ok && sqlConn.DB() != nil {
-			if historyConfig, ok := storageConfig.Config["history"].(map[string]interface{}); ok {
+			if historyConfig, ok := storageConfig.Config["history"].(map[string]any); ok {
 				// Extract history configuration
 				table := "transition_history"
 				if tableName, ok := historyConfig["table"].(string); ok && tableName != "" {
@@ -117,7 +118,7 @@ func SetupStorageFromConfig(storageConfig *StorageConfig) (*StorageSetupResult, 
 
 				// Extract custom fields for history
 				customFields := make(map[string]string)
-				if customFieldsRaw, ok := historyConfig["custom_fields"].(map[string]interface{}); ok {
+				if customFieldsRaw, ok := historyConfig["custom_fields"].(map[string]any); ok {
 					for k, v := range customFieldsRaw {
 						if str, ok := v.(string); ok {
 							customFields[k] = str
@@ -131,8 +132,9 @@ func SetupStorageFromConfig(storageConfig *StorageConfig) (*StorageSetupResult, 
 					history.WithCustomFields(customFields),
 				)
 
-				// Initialize history schema
-				if err := historyStore.Initialize(); err != nil {
+				// Initialize history schema. This runs once at startup, so a
+				// background context is sufficient here.
+				if err := historyStore.Initialize(context.Background()); err != nil {
 					return nil, fmt.Errorf("failed to initialize history store: %w", err)
 				}
 				log.Printf("History store initialized with table: %s", table)

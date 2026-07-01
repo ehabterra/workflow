@@ -1,6 +1,7 @@
 package history_test
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 func TestSQLiteHistory_Basic(t *testing.T) {
 	db := setupTestDB(t)
 	h := history.NewSQLiteHistory(db)
-	if err := h.Initialize(); err != nil {
+	if err := h.Initialize(context.Background()); err != nil {
 		t.Fatalf("failed to initialize schema: %v", err)
 	}
 
@@ -34,11 +35,11 @@ func TestSQLiteHistory_Basic(t *testing.T) {
 		Actor:      "user1",
 		CreatedAt:  time.Now(),
 	}
-	if err := h.SaveTransition(rec); err != nil {
+	if err := h.SaveTransition(context.Background(), rec); err != nil {
 		t.Fatalf("failed to save transition: %v", err)
 	}
 
-	hist, err := h.ListHistory("wf1", history.QueryOptions{})
+	hist, err := h.ListHistory(context.Background(), "wf1", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestSQLiteHistory_CustomFields(t *testing.T) {
 		"ip_address": "ip_address TEXT",
 		"user_agent": "user_agent TEXT",
 	}))
-	if err := h.Initialize(); err != nil {
+	if err := h.Initialize(context.Background()); err != nil {
 		t.Fatalf("failed to initialize schema: %v", err)
 	}
 
@@ -68,16 +69,16 @@ func TestSQLiteHistory_CustomFields(t *testing.T) {
 		Notes:      "approved by admin",
 		Actor:      "admin",
 		CreatedAt:  time.Now(),
-		CustomFields: map[string]interface{}{
+		CustomFields: map[string]any{
 			"ip_address": "127.0.0.1",
 			"user_agent": "test-agent",
 		},
 	}
-	if err := h.SaveTransition(rec); err != nil {
+	if err := h.SaveTransition(context.Background(), rec); err != nil {
 		t.Fatalf("failed to save transition with custom fields: %v", err)
 	}
 
-	hist, err := h.ListHistory("wf2", history.QueryOptions{})
+	hist, err := h.ListHistory(context.Background(), "wf2", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestSQLiteHistory_CustomFields(t *testing.T) {
 func TestSQLiteHistory_PaginationAndFiltering(t *testing.T) {
 	db := setupTestDB(t)
 	h := history.NewSQLiteHistory(db)
-	if err := h.Initialize(); err != nil {
+	if err := h.Initialize(context.Background()); err != nil {
 		t.Fatalf("failed to initialize schema: %v", err)
 	}
 	now := time.Now()
@@ -107,12 +108,12 @@ func TestSQLiteHistory_PaginationAndFiltering(t *testing.T) {
 			Actor:      "actor",
 			CreatedAt:  now.Add(time.Duration(i) * time.Minute),
 		}
-		if err := h.SaveTransition(rec); err != nil {
+		if err := h.SaveTransition(context.Background(), rec); err != nil {
 			t.Fatalf("failed to save transition: %v", err)
 		}
 	}
 	// Test limit
-	hist, err := h.ListHistory("wf3", history.QueryOptions{Limit: 3})
+	hist, err := h.ListHistory(context.Background(), "wf3", history.QueryOptions{Limit: 3})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestSQLiteHistory_PaginationAndFiltering(t *testing.T) {
 		t.Errorf("expected 3 records, got %d", len(hist))
 	}
 	// Test offset
-	hist2, err := h.ListHistory("wf3", history.QueryOptions{Limit: 2, Offset: 2})
+	hist2, err := h.ListHistory(context.Background(), "wf3", history.QueryOptions{Limit: 2, Offset: 2})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestSQLiteHistory_PaginationAndFiltering(t *testing.T) {
 		t.Errorf("expected 2 records, got %d", len(hist2))
 	}
 	// Test filtering by actor
-	hist3, err := h.ListHistory("wf3", history.QueryOptions{Actor: "actor"})
+	hist3, err := h.ListHistory(context.Background(), "wf3", history.QueryOptions{Actor: "actor"})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestSQLiteHistory_WithTable(t *testing.T) {
 	// Test with custom table name
 	customTable := "custom_history_table"
 	h := history.NewSQLiteHistory(db, history.WithTable(customTable))
-	if err := h.Initialize(); err != nil {
+	if err := h.Initialize(context.Background()); err != nil {
 		t.Fatalf("failed to initialize schema: %v", err)
 	}
 
@@ -163,11 +164,11 @@ func TestSQLiteHistory_WithTable(t *testing.T) {
 		Actor:      "user",
 		CreatedAt:  time.Now(),
 	}
-	if err := h.SaveTransition(rec); err != nil {
+	if err := h.SaveTransition(context.Background(), rec); err != nil {
 		t.Fatalf("failed to save transition: %v", err)
 	}
 
-	hist, err := h.ListHistory("wf_custom", history.QueryOptions{})
+	hist, err := h.ListHistory(context.Background(), "wf_custom", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestSQLiteHistory_WithTable(t *testing.T) {
 
 	// Test with default table name
 	h2 := history.NewSQLiteHistory(db)
-	if err := h2.Initialize(); err != nil {
+	if err := h2.Initialize(context.Background()); err != nil {
 		t.Fatalf("failed to initialize schema: %v", err)
 	}
 
@@ -190,7 +191,7 @@ func TestSQLiteHistory_WithTable(t *testing.T) {
 func TestSQLiteHistory_EdgeCases(t *testing.T) {
 	db := setupTestDB(t)
 	h := history.NewSQLiteHistory(db)
-	if err := h.Initialize(); err != nil {
+	if err := h.Initialize(context.Background()); err != nil {
 		t.Fatalf("failed to initialize schema: %v", err)
 	}
 
@@ -204,12 +205,12 @@ func TestSQLiteHistory_EdgeCases(t *testing.T) {
 		Actor:      "",
 		CreatedAt:  time.Now(),
 	}
-	if err := h.SaveTransition(rec); err != nil {
+	if err := h.SaveTransition(context.Background(), rec); err != nil {
 		t.Fatalf("failed to save transition with empty fields: %v", err)
 	}
 
 	// Test listing history for non-existent workflow
-	hist, err := h.ListHistory("non_existent", history.QueryOptions{})
+	hist, err := h.ListHistory(context.Background(), "non_existent", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -218,7 +219,7 @@ func TestSQLiteHistory_EdgeCases(t *testing.T) {
 	}
 
 	// Test with negative limit
-	hist2, err := h.ListHistory("wf1", history.QueryOptions{Limit: -1})
+	hist2, err := h.ListHistory(context.Background(), "wf1", history.QueryOptions{Limit: -1})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -226,7 +227,7 @@ func TestSQLiteHistory_EdgeCases(t *testing.T) {
 	_ = hist2
 
 	// Test with very large offset
-	hist3, err := h.ListHistory("wf1", history.QueryOptions{Offset: 1000000})
+	hist3, err := h.ListHistory(context.Background(), "wf1", history.QueryOptions{Offset: 1000000})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}
@@ -235,7 +236,7 @@ func TestSQLiteHistory_EdgeCases(t *testing.T) {
 	}
 
 	// Test with empty actor filter
-	hist4, err := h.ListHistory("wf1", history.QueryOptions{Actor: ""})
+	hist4, err := h.ListHistory(context.Background(), "wf1", history.QueryOptions{Actor: ""})
 	if err != nil {
 		t.Fatalf("failed to list history: %v", err)
 	}

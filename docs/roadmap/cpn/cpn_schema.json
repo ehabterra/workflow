@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CPN Workflow YAML Schema",
+  "description": "Schema for Colored Petri Net (CPN) workflow definitions",
+  "type": "object",
+  "required": ["workflow"],
+  "properties": {
+    "workflow": {
+      "type": "object",
+      "required": ["name", "initial_place", "token_schemas", "places", "transitions"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Workflow name (unique identifier)"
+        },
+        "initial_place": {
+          "type": "string",
+          "description": "Name of the initial place"
+        },
+        "token_schemas": {
+          "type": "object",
+          "description": "Token schema definitions",
+          "additionalProperties": {
+            "type": "object",
+            "description": "Token schema - maps field names to types",
+            "additionalProperties": {
+              "type": "string",
+              "enum": ["integer", "number", "string", "boolean", "array", "object"],
+              "description": "Field type"
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Workflow-level metadata (injected into context)",
+          "additionalProperties": true
+        },
+        "places": {
+          "type": "array",
+          "description": "Place definitions",
+          "items": {
+            "type": "object",
+            "required": ["name", "token_schema"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Place name (must be unique)"
+              },
+              "token_schema": {
+                "type": "string",
+                "description": "Token schema name (must reference token_schemas)"
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Place metadata",
+                "additionalProperties": true
+              },
+              "initial_tokens": {
+                "type": "array",
+                "description": "Initial tokens in this place",
+                "items": {
+                  "type": "object",
+                  "description": "Token data (must match token_schema)"
+                }
+              }
+            }
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "description": "Transition definitions",
+          "items": {
+            "type": "object",
+            "required": ["name", "from", "to", "token_transform"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Transition name (must be unique)"
+              },
+              "from": {
+                "type": "array",
+                "description": "Input place names",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              "to": {
+                "type": "array",
+                "description": "Output place names",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              "token_selection": {
+                "type": "string",
+                "enum": ["first", "all", "filter", "custom"],
+                "description": "Token selection strategy"
+              },
+              "token_filter": {
+                "type": "string",
+                "description": "Filter expression (required if token_selection is 'filter')"
+              },
+              "token_correlation": {
+                "type": "string",
+                "description": "Correlation expression for multi-place transitions"
+              },
+              "guard": {
+                "type": "string",
+                "description": "Guard expression (must evaluate to boolean)"
+              },
+              "token_transform": {
+                "type": "object",
+                "description": "Token transformation per output place",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "Expression that returns token data (JSON object)"
+                    },
+                    {
+                      "type": "null",
+                      "description": "Consume token (don't produce to output place)"
+                    }
+                  ]
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Transition metadata",
+                "additionalProperties": true
+              },
+              "notes": {
+                "type": "string",
+                "description": "Default notes for history"
+              },
+              "actor": {
+                "type": "string",
+                "description": "Default actor for history"
+              },
+              "custom_fields": {
+                "type": "object",
+                "description": "Default custom fields for history",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "description": "Storage configuration",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Storage type (sqlite, postgres, mysql, etc.)"
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": true
+    }
+  }
+}
+

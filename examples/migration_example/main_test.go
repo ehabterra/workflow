@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"testing"
@@ -64,7 +65,7 @@ func TestMigrationWorkflow(t *testing.T) {
 	workflowMgr := workflow.NewManager(registry, sqlStore)
 
 	// Test: Create workflow with all fields
-	wf, err := workflowMgr.CreateWorkflow("test-1", workflowDef, "start")
+	wf, err := workflowMgr.CreateWorkflow(context.Background(), "test-1", workflowDef, "start")
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
@@ -79,12 +80,12 @@ func TestMigrationWorkflow(t *testing.T) {
 	wf.SetContext("updated_at", now)
 
 	// Save workflow
-	if err := workflowMgr.SaveWorkflow("test-1", wf); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), "test-1", wf); err != nil {
 		t.Fatalf("Failed to save workflow: %v", err)
 	}
 
 	// Test: Load workflow and verify all fields are preserved
-	loadedPlaces, loadedCtx, err := sqlStore.LoadState("test-1")
+	loadedPlaces, loadedCtx, err := sqlStore.LoadState(context.Background(), "test-1")
 	if err != nil {
 		t.Fatalf("Failed to load state: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestMigrationWorkflow(t *testing.T) {
 	}
 
 	// Test: Apply transition and update timestamp
-	wf, err = workflowMgr.GetWorkflow("test-1", workflowDef)
+	wf, err = workflowMgr.GetWorkflow(context.Background(), "test-1", workflowDef)
 	if err != nil {
 		t.Fatalf("Failed to get workflow: %v", err)
 	}
@@ -118,12 +119,12 @@ func TestMigrationWorkflow(t *testing.T) {
 	}
 
 	wf.SetContext("updated_at", time.Now().Format(time.RFC3339))
-	if err := workflowMgr.SaveWorkflow("test-1", wf); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), "test-1", wf); err != nil {
 		t.Fatalf("Failed to save workflow after transition: %v", err)
 	}
 
 	// Verify state changed
-	loadedPlaces, _, err = sqlStore.LoadState("test-1")
+	loadedPlaces, _, err = sqlStore.LoadState(context.Background(), "test-1")
 	if err != nil {
 		t.Fatalf("Failed to load state after transition: %v", err)
 	}
@@ -167,18 +168,18 @@ func TestMigrationHistory(t *testing.T) {
 		Notes:      "Test transition",
 		Actor:      "test-user",
 		CreatedAt:  time.Now(),
-		CustomFields: map[string]interface{}{
+		CustomFields: map[string]any{
 			"duration_ms": 150,
 			"metadata":    `{"key":"value"}`,
 		},
 	}
 
-	if err := historyStore.SaveTransition(record); err != nil {
+	if err := historyStore.SaveTransition(context.Background(), record); err != nil {
 		t.Fatalf("Failed to save transition: %v", err)
 	}
 
 	// Query history
-	historyRecords, err := historyStore.ListHistory("test-wf", history.QueryOptions{})
+	historyRecords, err := historyStore.ListHistory(context.Background(), "test-wf", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("Failed to list history: %v", err)
 	}
@@ -253,14 +254,14 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	registry := workflow.NewRegistry()
 	workflowMgr := workflow.NewManager(registry, sqlStore)
 
-	wf, err := workflowMgr.CreateWorkflow("old-wf", workflowDef, "start")
+	wf, err := workflowMgr.CreateWorkflow(context.Background(), "old-wf", workflowDef, "start")
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
 	wf.SetContext("title", "Old Document")
 	wf.SetContext("content", "Old Content")
 
-	if err := workflowMgr.SaveWorkflow("old-wf", wf); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), "old-wf", wf); err != nil {
 		t.Fatalf("Failed to save workflow: %v", err)
 	}
 
@@ -286,7 +287,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	}
 
 	// Step 4: Verify old workflow still loads correctly
-	loadedPlaces, loadedCtx, err := sqlStoreNew.LoadState("old-wf")
+	loadedPlaces, loadedCtx, err := sqlStoreNew.LoadState(context.Background(), "old-wf")
 	if err != nil {
 		t.Fatalf("Failed to load old workflow: %v", err)
 	}
@@ -314,7 +315,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	}
 
 	// Step 5: Update workflow with new fields
-	wfNew, err := workflowMgr.GetWorkflow("old-wf", workflowDef)
+	wfNew, err := workflowMgr.GetWorkflow(context.Background(), "old-wf", workflowDef)
 	if err != nil {
 		t.Fatalf("Failed to get workflow: %v", err)
 	}
@@ -324,12 +325,12 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	wfNew.SetContext("updated_at", time.Now().Format(time.RFC3339))
 
 	workflowMgrNew := workflow.NewManager(registry, sqlStoreNew)
-	if err := workflowMgrNew.SaveWorkflow("old-wf", wfNew); err != nil {
+	if err := workflowMgrNew.SaveWorkflow(context.Background(), "old-wf", wfNew); err != nil {
 		t.Fatalf("Failed to save workflow with new fields: %v", err)
 	}
 
 	// Step 6: Verify new fields are saved
-	_, loadedCtx, err = sqlStoreNew.LoadState("old-wf")
+	_, loadedCtx, err = sqlStoreNew.LoadState(context.Background(), "old-wf")
 	if err != nil {
 		t.Fatalf("Failed to load workflow after update: %v", err)
 	}

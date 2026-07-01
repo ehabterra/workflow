@@ -78,7 +78,7 @@ func (m *marking) RemovePlace(place Place) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("place %s not found", place)
+	return fmt.Errorf("%w: %s", ErrPlaceNotFound, place)
 }
 
 // MarshalJSON implements json.Marshaler

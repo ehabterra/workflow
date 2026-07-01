@@ -1,0 +1,22 @@
+graph TD
+    subgraph "Banking System CPN Model (True CPN with Request Tokens)"
+        A[active_accounts<br/>1000 tokens<br/>account_id, balance]
+        D[deposit_requests<br/>Request queue<br/>account_id, amount, operation_type]
+        W[withdraw_requests<br/>Request queue<br/>account_id, amount, operation_type]
+        
+        A -->|"Account Token"| B[deposit]
+        D -->|"Request Token"| B
+        
+        A -->|"Account Token"| C[withdraw]
+        W -->|"Request Token"| C
+        
+        B -->|"Token Correlation:<br/>acc.id == req.id<br/>Guard: 1 ≤ amt ≤ 5000<br/>Transform: bal += amt<br/>Request consumed"| A
+        C -->|"Token Correlation:<br/>acc.id == req.id<br/>Guard: 1 ≤ amt ≤ 5000<br/>Transform: bal -= amt<br/>Request consumed"| A
+    end
+    
+    style A fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    style D fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    style W fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    style B fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style C fill:#ffccbc,stroke:#d84315,stroke-width:2px
+

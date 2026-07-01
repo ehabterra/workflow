@@ -11,7 +11,7 @@ type Definition struct {
 	Transitions []Transition
 
 	// Default listeners for this workflow type
-	Listeners map[EventType][]interface{}
+	Listeners map[EventType][]any
 
 	// Handle tracking for reliable listener removal
 	listenerHandles map[uint64]int // handle ID -> index in slice
@@ -87,7 +87,7 @@ func (d *Definition) Place(place Place) bool {
 // It returns a handle that can be used to remove the listener later
 func (d *Definition) AddEventListener(eventType EventType, listener EventListener) *ListenerHandle {
 	if d.Listeners == nil {
-		d.Listeners = make(map[EventType][]interface{})
+		d.Listeners = make(map[EventType][]any)
 	}
 	if d.listenerHandles == nil {
 		d.listenerHandles = make(map[uint64]int)
@@ -109,7 +109,7 @@ func (d *Definition) AddEventListener(eventType EventType, listener EventListene
 // It returns a handle that can be used to remove the listener later
 func (d *Definition) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
 	if d.Listeners == nil {
-		d.Listeners = make(map[EventType][]interface{})
+		d.Listeners = make(map[EventType][]any)
 	}
 	if d.listenerHandles == nil {
 		d.listenerHandles = make(map[uint64]int)

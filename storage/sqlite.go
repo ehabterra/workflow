@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -107,14 +109,14 @@ func Initialize(db *sql.DB, schema string) error {
 }
 
 // SaveState saves the workflow's current places and any configured custom fields from its context.
-func (s *SQLiteStorage) SaveState(id string, places []workflow.Place, context map[string]interface{}) error {
+func (s *SQLiteStorage) SaveState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any) error {
 	stateJSON, err := json.Marshal(places)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
 	columns := []string{s.idColumn, s.stateColumn}
-	values := []interface{}{id, stateJSON}
+	values := []any{id, stateJSON}
 	placeholders := []string{"?", "?"}
 
 	for key, colDef := range s.customFields {
@@ -122,7 +124,7 @@ func (s *SQLiteStorage) SaveState(id string, places []workflow.Place, context ma
 		columns = append(columns, colName)
 		placeholders = append(placeholders, "?")
 
-		if val, ok := context[key]; ok {
+		if val, ok := ctxData[key]; ok {
 			// Handle slices and arrays by marshaling to JSON
 			// This is needed for fields like "roles" which is []string
 			if val != nil {
@@ -161,12 +163,12 @@ func (s *SQLiteStorage) SaveState(id string, places []workflow.Place, context ma
 		strings.Join(placeholders, ", "),
 	)
 
-	_, err = s.db.Exec(query, values...)
+	_, err = s.db.ExecContext(ctx, query, values...)
 	return err
 }
 
 // LoadState loads the workflow's places and all configured custom fields into the context map.
-func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]interface{}, error) {
+func (s *SQLiteStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
 	columns := []string{s.stateColumn}
 	customFieldKeys := make([]string, 0, len(s.customFields))
 
@@ -182,25 +184,25 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 		s.idColumn,
 	)
 
-	row := s.db.QueryRow(query, id)
+	row := s.db.QueryRowContext(ctx, query, id)
 
-	// Prepare to scan into a slice of interface{} pointers
-	scanArgs := make([]interface{}, len(columns))
+	// Prepare to scan into a slice of any pointers
+	scanArgs := make([]any, len(columns))
 	for i := range columns {
-		scanArgs[i] = new(interface{})
+		scanArgs[i] = new(any)
 	}
 
 	err := row.Scan(scanArgs...)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil, fmt.Errorf("workflow with id %s not found", id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
 		}
 		return nil, nil, fmt.Errorf("failed to load state: %w", err)
 	}
 
 	// Process results
 	var stateJSON []byte
-	if rawState, ok := (*scanArgs[0].(*interface{})).([]byte); ok {
+	if rawState, ok := (*scanArgs[0].(*any)).([]byte); ok {
 		stateJSON = rawState
 	} else {
 		return nil, nil, fmt.Errorf("unexpected type for state column")
@@ -211,16 +213,16 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
-	context := make(map[string]interface{})
+	context := make(map[string]any)
 
 	for i, key := range customFieldKeys {
-		val := *(scanArgs[i+1].(*interface{}))
+		val := *(scanArgs[i+1].(*any))
 
 		// Check if this is a JSON string that should be unmarshaled
 		// This handles fields like "roles" (arrays) and "nested" (maps) which are stored as JSON
 		if strVal, ok := val.(string); ok && strVal != "" {
 			// Try to unmarshal as JSON array first
-			var jsonArray []interface{}
+			var jsonArray []any
 			if err := json.Unmarshal([]byte(strVal), &jsonArray); err == nil {
 				// Successfully unmarshaled as JSON array
 				// Try to convert to []string if all elements are strings
@@ -241,7 +243,7 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 				}
 			} else {
 				// Try to unmarshal as JSON object (map)
-				var jsonMap map[string]interface{}
+				var jsonMap map[string]any
 				if err := json.Unmarshal([]byte(strVal), &jsonMap); err == nil {
 					context[key] = jsonMap
 				} else {
@@ -273,8 +275,8 @@ func (s *SQLiteStorage) LoadState(id string) ([]workflow.Place, map[string]inter
 }
 
 // DeleteState removes a workflow's state from the database.
-func (s *SQLiteStorage) DeleteState(id string) error {
+func (s *SQLiteStorage) DeleteState(ctx context.Context, id string) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", s.table, s.idColumn)
-	_, err := s.db.Exec(query, id)
+	_, err := s.db.ExecContext(ctx, query, id)
 	return err
 }

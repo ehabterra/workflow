@@ -141,7 +141,7 @@ func TestNewExpressionConstraintWithEnv(t *testing.T) {
 
 func TestExpressionConstraint_Validate(t *testing.T) {
 	// Helper to create a test workflow
-	createWorkflow := func(contextData map[string]interface{}) *workflow.Workflow {
+	createWorkflow := func(contextData map[string]any) *workflow.Workflow {
 		def, err := workflow.NewDefinition(
 			[]workflow.Place{"start", "end"},
 			[]workflow.Transition{*workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})},
@@ -207,7 +207,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "context value access - exists",
 			exprStr: "workflow.Context('amount') > 100",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"amount": 200})
+				return createWorkflow(map[string]any{"amount": 200})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -230,7 +230,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasRole with []string - found",
 			exprStr: "hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": []string{"admin", "user"}})
+				return createWorkflow(map[string]any{"roles": []string{"admin", "user"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -241,7 +241,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasRole with []string - not found",
 			exprStr: "hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": []string{"user", "guest"}})
+				return createWorkflow(map[string]any{"roles": []string{"user", "guest"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -253,7 +253,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasRole with []any - found",
 			exprStr: "hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": []any{"admin", "user"}})
+				return createWorkflow(map[string]any{"roles": []any{"admin", "user"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -264,7 +264,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasRole with string - matches",
 			exprStr: "hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": "admin"})
+				return createWorkflow(map[string]any{"roles": "admin"})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -275,7 +275,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasRole with string - no match",
 			exprStr: "hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": "user"})
+				return createWorkflow(map[string]any{"roles": "user"})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -313,7 +313,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasPermission with []string - found",
 			exprStr: "hasPermission('write')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"permissions": []string{"read", "write"}})
+				return createWorkflow(map[string]any{"permissions": []string{"read", "write"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -324,7 +324,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasPermission with []string - not found",
 			exprStr: "hasPermission('write')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"permissions": []string{"read"}})
+				return createWorkflow(map[string]any{"permissions": []string{"read"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -336,7 +336,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasPermission with []any - found",
 			exprStr: "hasPermission('write')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"permissions": []any{"read", "write"}})
+				return createWorkflow(map[string]any{"permissions": []any{"read", "write"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -347,7 +347,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "hasPermission with string - matches",
 			exprStr: "hasPermission('write')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"permissions": "write"})
+				return createWorkflow(map[string]any{"permissions": "write"})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -416,7 +416,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "getContext - key exists",
 			exprStr: "getContext('amount', 0) > 100",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"amount": 200})
+				return createWorkflow(map[string]any{"amount": 200})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -451,7 +451,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "complex expression with multiple conditions",
 			exprStr: "workflow.Context('amount') > 100 and hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{
+				return createWorkflow(map[string]any{
 					"amount": 200,
 					"roles":  []string{"admin"},
 				})
@@ -465,7 +465,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "complex expression - first condition fails",
 			exprStr: "workflow.Context('amount') > 100 and hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{
+				return createWorkflow(map[string]any{
 					"amount": 50,
 					"roles":  []string{"admin"},
 				})
@@ -480,7 +480,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "complex expression - second condition fails",
 			exprStr: "workflow.Context('amount') > 100 and hasRole('admin')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{
+				return createWorkflow(map[string]any{
 					"amount": 200,
 					"roles":  []string{"user"},
 				})
@@ -495,7 +495,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "or condition - first true",
 			exprStr: "hasRole('admin') or hasRole('user')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": []string{"admin"}})
+				return createWorkflow(map[string]any{"roles": []string{"admin"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -506,7 +506,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "or condition - second true",
 			exprStr: "hasRole('admin') or hasRole('user')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": []string{"user"}})
+				return createWorkflow(map[string]any{"roles": []string{"user"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -517,7 +517,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "or condition - both false",
 			exprStr: "hasRole('admin') or hasRole('user')",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"roles": []string{"guest"}})
+				return createWorkflow(map[string]any{"roles": []string{"guest"}})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -633,7 +633,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "expression with numeric context values",
 			exprStr: "workflow.Context('count') + workflow.Context('offset') > 10",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{
+				return createWorkflow(map[string]any{
 					"count":  7,
 					"offset": 5,
 				})
@@ -647,7 +647,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "expression with string context values",
 			exprStr: "workflow.Context('status') == 'active'",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"status": "active"})
+				return createWorkflow(map[string]any{"status": "active"})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
@@ -658,7 +658,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			name:    "expression with boolean context values",
 			exprStr: "workflow.Context('enabled') == true",
 			setupWorkflow: func() *workflow.Workflow {
-				return createWorkflow(map[string]interface{}{"enabled": true})
+				return createWorkflow(map[string]any{"enabled": true})
 			},
 			setupTransition: func() *workflow.Transition {
 				return workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})

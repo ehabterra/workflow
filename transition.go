@@ -9,7 +9,7 @@ type Transition struct {
 	name        string
 	from        []Place
 	to          []Place
-	metadata    map[string]interface{}
+	metadata    map[string]any
 	constraints []Constraint
 }
 
@@ -54,7 +54,7 @@ func NewTransition(name string, from []Place, to []Place) (*Transition, error) {
 		name:        name,
 		from:        from,
 		to:          to,
-		metadata:    make(map[string]interface{}),
+		metadata:    make(map[string]any),
 		constraints: make([]Constraint, 0),
 	}, nil
 }
@@ -86,12 +86,12 @@ func (t *Transition) AddConstraint(constraint Constraint) {
 }
 
 // SetMetadata sets metadata for the transition
-func (t *Transition) SetMetadata(key string, value interface{}) {
+func (t *Transition) SetMetadata(key string, value any) {
 	t.metadata[key] = value
 }
 
 // Metadata returns the value for the given key from the transition metadata
-func (t *Transition) Metadata(key string) (interface{}, bool) {
+func (t *Transition) Metadata(key string) (any, bool) {
 	value, ok := t.metadata[key]
 	return value, ok
 }
