@@ -23,7 +23,6 @@ reviews:
   # Keep generated/large artifacts out of review.
   path_filters:
     - "!**/*.pb.go"
-    - "!**/examples/**"
     - "!coverage*.out"
     - "!coverage*.txt"
     - "!coverage*.html"
