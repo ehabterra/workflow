@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// execer abstracts the statement-execution method shared by *sql.DB and *sql.Tx,
+// so a transition can be written either directly or inside a caller's transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // SQLiteHistory is a SQLite-backed implementation of HistoryStore. It records
 // every transition in a configurable table and supports additional custom columns.
 type SQLiteHistory struct {
@@ -73,6 +79,18 @@ func (h *SQLiteHistory) Initialize(ctx context.Context) error {
 
 // SaveTransition appends a single transition record to the history table.
 func (h *SQLiteHistory) SaveTransition(ctx context.Context, record *TransitionRecord) error {
+	return h.saveTransition(ctx, h.db, record)
+}
+
+// SaveTransitionTx behaves like SaveTransition but writes through the provided
+// transaction, so a history record can be committed atomically with a state
+// change. The same *sql.DB must back the state store for the writes to share
+// the transaction. See storage.RunInTx.
+func (h *SQLiteHistory) SaveTransitionTx(ctx context.Context, tx *sql.Tx, record *TransitionRecord) error {
+	return h.saveTransition(ctx, tx, record)
+}
+
+func (h *SQLiteHistory) saveTransition(ctx context.Context, q execer, record *TransitionRecord) error {
 	cols := []string{"workflow_id", "from_state", "to_state", "transition", "notes", "actor", "created_at"}
 	vals := []any{record.WorkflowID, record.FromState, record.ToState, record.Transition, record.Notes, record.Actor, record.CreatedAt.Format(time.RFC3339)}
 	placeholders := []string{"?", "?", "?", "?", "?", "?", "?"}
@@ -89,7 +107,7 @@ func (h *SQLiteHistory) SaveTransition(ctx context.Context, record *TransitionRe
 	}
 
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", h.table, strings.Join(cols, ","), strings.Join(placeholders, ","))
-	_, err := h.db.ExecContext(ctx, query, vals...)
+	_, err := q.ExecContext(ctx, query, vals...)
 	return err
 }
 

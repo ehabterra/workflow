@@ -44,4 +44,9 @@ var (
 	// ErrInvalidExpression is returned when a guard expression is empty or fails to
 	// compile.
 	ErrInvalidExpression = errors.New("invalid expression")
+
+	// ErrConflict is returned by a VersionedStorage when a save is rejected because
+	// the stored version no longer matches the expected version — i.e. another writer
+	// updated the workflow first (optimistic-concurrency conflict).
+	ErrConflict = errors.New("version conflict")
 )
