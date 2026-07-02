@@ -487,18 +487,9 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	}
 	w.mu.Lock()
 
-	// Remove the 'from' places from marking
-	currentPlaces = w.marking.Places()
-	newPlaces := make([]Place, 0, len(currentPlaces))
-	for _, place := range currentPlaces {
-		if !slices.Contains(from, place) {
-			newPlaces = append(newPlaces, place)
-		}
-	}
-
-	// Add the target places to marking
-	newPlaces = append(newPlaces, to...)
-	w.marking.SetPlaces(newPlaces)
+	// Move tokens from the input places to the output places, preserving colored
+	// token data and leaving unrelated places untouched.
+	w.moveMarking(from, to)
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
@@ -575,17 +566,9 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	}
 	w.mu.Lock()
 
-	// Remove the 'from' places from marking
-	newPlaces := make([]Place, 0, len(currentPlaces))
-	for _, place := range currentPlaces {
-		if !slices.Contains(from, place) {
-			newPlaces = append(newPlaces, place)
-		}
-	}
-
-	// Add the target places to marking
-	newPlaces = append(newPlaces, targetPlaces...)
-	w.marking.SetPlaces(newPlaces)
+	// Move tokens from the input places to the output places, preserving colored
+	// token data and leaving unrelated places untouched.
+	w.moveMarking(from, targetPlaces)
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
