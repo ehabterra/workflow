@@ -1,0 +1,26 @@
+# Codecov configuration.
+#
+# Coverage is collected from `go test ./...` on the root module only. Example
+# modules and test-only helper packages are excluded so they don't distort the
+# reported numbers.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 3%      # tolerate small dips from refactors
+        informational: true # report, but don't block merges on project delta
+    patch:
+      default:
+        target: 60%
+        threshold: 5%
+        informational: true # report new-code coverage without hard-failing
+
+ignore:
+  - "examples/**"      # separate modules, not covered by the root test run
+  - "storagetest/**"   # test-only conformance harness (exercised via other packages)
+  - "**/*_test.go"
+
+comment:
+  layout: "reason, diff, files"
+  require_changes: true

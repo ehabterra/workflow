@@ -105,6 +105,21 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 	}
 }
 
+// TestRunInTx_NilDB verifies RunInTx rejects a nil database handle.
+func TestRunInTx_NilDB(t *testing.T) {
+	called := false
+	err := storage.RunInTx(context.Background(), nil, func(*sql.Tx) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error for nil db")
+	}
+	if called {
+		t.Fatal("fn should not run with a nil db")
+	}
+}
+
 // TestRunInTx_RollsBackOnPanic verifies a panic in fn rolls back and re-raises.
 func TestRunInTx_RollsBackOnPanic(t *testing.T) {
 	ctx := context.Background()
