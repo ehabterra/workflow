@@ -24,12 +24,12 @@ func (r *Registry) AddWorkflow(wf *Workflow) error {
 	defer r.mu.Unlock()
 
 	if wf == nil {
-		return fmt.Errorf("workflow cannot be nil")
+		return fmt.Errorf("%w: workflow cannot be nil", ErrInvalidWorkflow)
 	}
 
 	name := wf.Name()
 	if _, exists := r.workflows[name]; exists {
-		return fmt.Errorf("workflow with name %s already exists", name)
+		return fmt.Errorf("%w: %s", ErrWorkflowExists, name)
 	}
 
 	r.workflows[name] = wf
@@ -44,7 +44,7 @@ func (r *Registry) Workflow(name string) (*Workflow, error) {
 	if wf, ok := r.workflows[name]; ok {
 		return wf, nil
 	}
-	return nil, fmt.Errorf("workflow %s not found", name)
+	return nil, fmt.Errorf("%w: %s", ErrWorkflowNotFound, name)
 }
 
 // RemoveWorkflow removes a workflow from the registry
@@ -53,7 +53,7 @@ func (r *Registry) RemoveWorkflow(name string) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.workflows[name]; !exists {
-		return fmt.Errorf("workflow %s not found", name)
+		return fmt.Errorf("%w: %s", ErrWorkflowNotFound, name)
 	}
 
 	delete(r.workflows, name)

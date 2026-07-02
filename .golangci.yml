@@ -1,0 +1,45 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose # unclosed HTTP/SQL response bodies
+    - errorlint # correct error wrapping / errors.Is-As usage
+    - gosec # common security issues
+    - misspell # spelling in comments/strings
+    - unconvert # redundant type conversions
+    - copyloopvar # loop-variable capture bugs (Go 1.22+)
+    - revive # golint successor (style)
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true # deferred to M0.8 (godoc audit)
+        - name: package-comments
+          disabled: true # deferred to M0.8
+    gosec:
+      excludes:
+        - G404 # weak RNG — not used for crypto here
+  exclusions:
+    generated: lax
+    rules:
+      # Test files may use weaker patterns and unchecked errors.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - bodyclose
+      # SQL string building in storage layer is parameterized where it matters;
+      # table/column names are developer-controlled config, not user input.
+      - path: (storage|history)/.*\.go
+        linters:
+          - gosec
+        text: "G201|G202"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

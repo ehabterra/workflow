@@ -18,7 +18,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.24'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -43,6 +43,33 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
 
+  examples:
+    name: Build examples
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # Example modules have their own go.mod and are not covered by the root
+      # `go test ./...`, so build and vet each one to catch breakage early.
+      - name: Build and vet example modules
+        run: |
+          set -euo pipefail
+          fail=0
+          for mod in $(find examples -name go.mod -maxdepth 2); do
+            dir=$(dirname "$mod")
+            echo "::group::$dir"
+            (cd "$dir" && go build ./... && go vet ./...) || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -54,7 +81,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.24'
 
       - name: Download dependencies
         run: go mod download
@@ -69,4 +96,9 @@ jobs:
 
       - name: Run go vet
         run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.4
 

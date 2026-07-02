@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -35,14 +36,14 @@ func TestNewWorkflow(t *testing.T) {
 			},
 			initialPlace:  "start",
 			wantErr:       true,
-			errorContains: "workflow name cannot be empty",
+			errorContains: "name cannot be empty",
 		},
 		{
 			name:          "nil definition",
 			definition:    func() (*workflow.Definition, error) { return nil, nil },
 			initialPlace:  "start",
 			wantErr:       true,
-			errorContains: "workflow definition cannot be nil",
+			errorContains: "definition cannot be nil",
 		},
 		{
 			name: "invalid initial place",
@@ -913,11 +914,11 @@ func TestApplyTransitionNotEnabled(t *testing.T) {
 	}
 
 	// Try to apply step2 when we're still at start (not enabled)
-	if err := wf.CanTransition("step2"); err != workflow.ErrTransitionNotAllowed {
+	if err := wf.CanTransition("step2"); !errors.Is(err, workflow.ErrTransitionNotAllowed) {
 		t.Errorf("Expected ErrTransitionNotAllowed, got %v", err)
 	}
 
-	if err := wf.ApplyTransition("step2"); err != workflow.ErrTransitionNotAllowed {
+	if err := wf.ApplyTransition("step2"); !errors.Is(err, workflow.ErrTransitionNotAllowed) {
 		t.Errorf("Expected ErrTransitionNotAllowed, got %v", err)
 	}
 

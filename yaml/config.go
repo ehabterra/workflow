@@ -1,6 +1,7 @@
 package yaml
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -15,29 +16,29 @@ type Config struct {
 
 // WorkflowConfig defines the workflow structure.
 type WorkflowConfig struct {
-	Name         string                 `yaml:"name"`
-	InitialPlace string                 `yaml:"initial_place"`
-	Metadata     map[string]interface{} `yaml:"metadata,omitempty"`
-	Places       []PlaceConfig          `yaml:"places,omitempty"`
-	Transitions  []TransitionConfig     `yaml:"transitions"`
+	Name         string             `yaml:"name"`
+	InitialPlace string             `yaml:"initial_place"`
+	Metadata     map[string]any     `yaml:"metadata,omitempty"`
+	Places       []PlaceConfig      `yaml:"places,omitempty"`
+	Transitions  []TransitionConfig `yaml:"transitions"`
 }
 
 // PlaceConfig defines a place with optional metadata.
 type PlaceConfig struct {
-	Name     string                 `yaml:"name"`
-	Metadata map[string]interface{} `yaml:"metadata,omitempty"`
+	Name     string         `yaml:"name"`
+	Metadata map[string]any `yaml:"metadata,omitempty"`
 }
 
 // TransitionConfig defines a transition with guards, metadata, and history fields.
 type TransitionConfig struct {
-	Name         string                 `yaml:"name"`
-	From         []string               `yaml:"from"`
-	To           []string               `yaml:"to"`
-	Guard        string                 `yaml:"guard,omitempty"`         // Expression string
-	Metadata     map[string]interface{} `yaml:"metadata,omitempty"`      // Transition metadata
-	Notes        string                 `yaml:"notes,omitempty"`         // Default notes for history
-	Actor        string                 `yaml:"actor,omitempty"`         // Default actor for history
-	CustomFields map[string]interface{} `yaml:"custom_fields,omitempty"` // Default custom fields for history
+	Name         string         `yaml:"name"`
+	From         []string       `yaml:"from"`
+	To           []string       `yaml:"to"`
+	Guard        string         `yaml:"guard,omitempty"`         // Expression string
+	Metadata     map[string]any `yaml:"metadata,omitempty"`      // Transition metadata
+	Notes        string         `yaml:"notes,omitempty"`         // Default notes for history
+	Actor        string         `yaml:"actor,omitempty"`         // Default actor for history
+	CustomFields map[string]any `yaml:"custom_fields,omitempty"` // Default custom fields for history
 }
 
 // StorageConfig defines generic storage configuration.
@@ -48,13 +49,13 @@ type StorageConfig struct {
 
 	// Raw configuration data - structure depends on storage type
 	// This allows each storage implementation to define its own config structure
-	Config map[string]interface{} `yaml:",inline"`
+	Config map[string]any `yaml:",inline"`
 }
 
 // UnmarshalYAML implements custom YAML unmarshaling to capture all fields.
-func (sc *StorageConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (sc *StorageConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	// First, unmarshal into a map to get all fields
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := unmarshal(&raw); err != nil {
 		return err
 	}
@@ -71,12 +72,12 @@ func (sc *StorageConfig) UnmarshalYAML(unmarshal func(interface{}) error) error 
 }
 
 // ToMap converts StorageConfig to a raw map for builder consumption.
-func (sc *StorageConfig) ToMap() map[string]interface{} {
+func (sc *StorageConfig) ToMap() map[string]any {
 	if sc == nil {
 		return nil
 	}
 
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 	result["type"] = sc.Type
 
 	// Merge all config fields
@@ -89,27 +90,28 @@ func (sc *StorageConfig) ToMap() map[string]interface{} {
 
 // LoadConfig loads a workflow configuration from a YAML file.
 func LoadConfig(filename string) (*Config, error) {
-	data, err := os.ReadFile(filename)
+	// The filename is a developer-supplied path to a trusted workflow definition,
+	// not attacker-controlled input; reading it directly is intended.
+	data, err := os.ReadFile(filename) // #nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-
-	return &config, nil
+	return LoadConfigFromBytes(data)
 }
 
 // LoadConfigFromBytes loads a workflow configuration from YAML bytes.
+//
+// Decoding is strict: any key that is not part of the schema causes an error
+// (reported with its line number) rather than being silently ignored. This
+// prevents typos and not-yet-implemented features (for example the planned
+// CPN token keys) from being accepted and then quietly dropped.
 func LoadConfigFromBytes(data []byte) (*Config, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+
 	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	if err := dec.Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 

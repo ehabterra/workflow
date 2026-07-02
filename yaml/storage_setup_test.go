@@ -12,7 +12,7 @@ func TestSQLConnection_DB(t *testing.T) {
 	// Create SQLConnection through SetupStorageBuildersFromConfig
 	storageConfig := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"database": ":memory:",
 		},
 	}
@@ -52,7 +52,7 @@ func TestSQLConnection_Underlying(t *testing.T) {
 	// Create SQLConnection through SetupStorageBuildersFromConfig
 	storageConfig := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"database": ":memory:",
 		},
 	}
@@ -108,7 +108,7 @@ func TestSetupStorageBuilders(t *testing.T) {
 	// Test with sqlite type
 	storageConfig := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"database": ":memory:",
 		},
 	}
@@ -143,7 +143,7 @@ func TestSetupStorageBuildersFromConfig(t *testing.T) {
 	// Test with sqlite type
 	storageConfig := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"database": ":memory:",
 		},
 	}
@@ -204,14 +204,14 @@ func TestSetupStorageFromConfig(t *testing.T) {
 	// Test with sqlite type and full config
 	storageConfig := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"database": ":memory:",
-			"custom_fields": map[string]interface{}{
+			"custom_fields": map[string]any{
 				"key": "key TEXT",
 			},
-			"history": map[string]interface{}{
+			"history": map[string]any{
 				"table": "custom_history",
-				"custom_fields": map[string]interface{}{
+				"custom_fields": map[string]any{
 					"ip_address": "ip_address TEXT",
 				},
 			},
@@ -256,9 +256,9 @@ func TestSetupStorageFromConfig(t *testing.T) {
 	// Test with sqlite type without history config
 	storageConfigNoHistory := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"database": ":memory:",
-			"custom_fields": map[string]interface{}{
+			"custom_fields": map[string]any{
 				"key": "key TEXT",
 			},
 		},
@@ -275,9 +275,7 @@ func TestSetupStorageFromConfig(t *testing.T) {
 	// Test with storage config that has empty database path (should use default)
 	storageConfigDefaultDB := &yaml.StorageConfig{
 		Type:   "sqlite",
-		Config: map[string]interface{}{
-			// No database specified - should default to :memory:
-		},
+		Config: map[string]any{},
 	}
 
 	result3, err := yaml.SetupStorageFromConfig(storageConfigDefaultDB)

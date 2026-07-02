@@ -571,7 +571,7 @@ func handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save workflow with all context values set
-	if err := workflowMgr.SaveWorkflow(id, wf); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), id, wf); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -591,9 +591,9 @@ type ProjectPageData struct {
 	Project            *Project
 	Transitions        []workflow.Transition
 	History            []history.TransitionRecord
-	WorkflowMetadata   map[string]interface{}
-	PlaceMetadata      map[string]map[string]interface{}
-	TransitionMetadata map[string]map[string]interface{}
+	WorkflowMetadata   map[string]any
+	PlaceMetadata      map[string]map[string]any
+	TransitionMetadata map[string]map[string]any
 	GuardErrors        map[string]string
 	CurrentRole        string
 	RoleConfig         *RoleConfig
@@ -607,7 +607,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		// Check if this is a context update request
 		if r.FormValue("update_context") == "true" {
-			wf, err := workflowMgr.GetWorkflow(id, workflowDef)
+			wf, err := workflowMgr.GetWorkflow(context.Background(), id, workflowDef)
 			if err != nil {
 				http.Error(w, "Workflow not found", http.StatusNotFound)
 				return
@@ -662,7 +662,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 			// Update timestamp
 			wf.SetContext("updated_at", time.Now().Format("2006-01-02 15:04:05"))
 
-			if err := workflowMgr.SaveWorkflow(id, wf); err != nil {
+			if err := workflowMgr.SaveWorkflow(context.Background(), id, wf); err != nil {
 				http.Error(w, fmt.Sprintf("Failed to save workflow: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -677,7 +677,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 			actor = "user"
 		}
 
-		wf, err := workflowMgr.GetWorkflow(id, workflowDef)
+		wf, err := workflowMgr.GetWorkflow(context.Background(), id, workflowDef)
 		if err != nil {
 			http.Error(w, "Workflow not found", http.StatusNotFound)
 			return
@@ -732,7 +732,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Add request info for template resolution
-		requestInfo := map[string]interface{}{
+		requestInfo := map[string]any{
 			"ip":     r.RemoteAddr,
 			"method": r.Method,
 		}
@@ -778,7 +778,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 		var roles []string
 		if rolesList, ok := currentRoles.([]string); ok {
 			roles = rolesList
-		} else if rolesList, ok := currentRoles.([]interface{}); ok {
+		} else if rolesList, ok := currentRoles.([]any); ok {
 			roles = make([]string, len(rolesList))
 			for i, r := range rolesList {
 				if str, ok := r.(string); ok {
@@ -856,7 +856,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 		// Update the updated_at timestamp
 		wf.SetContext("updated_at", time.Now().Format("2006-01-02 15:04:05"))
 
-		if err := workflowMgr.SaveWorkflow(id, wf); err != nil {
+		if err := workflowMgr.SaveWorkflow(context.Background(), id, wf); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to save workflow: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -864,7 +864,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wf, err := workflowMgr.GetWorkflow(id, workflowDef)
+	wf, err := workflowMgr.GetWorkflow(context.Background(), id, workflowDef)
 	if err != nil {
 		http.Error(w, "Workflow not found", http.StatusNotFound)
 		return
@@ -903,7 +903,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 	enabledTransitions = filteredTransitions
 
 	// Load history
-	historyRecords, _ := historyStore.ListHistory(id, history.QueryOptions{Limit: 100, Offset: 0})
+	historyRecords, _ := historyStore.ListHistory(context.Background(), id, history.QueryOptions{Limit: 100, Offset: 0})
 
 	// Extract metadata
 	workflowMetadata := make(map[string]any)
@@ -911,7 +911,7 @@ func handleProjectPage(w http.ResponseWriter, r *http.Request) {
 		workflowMetadata = yamlConfig.Workflow.Metadata
 	}
 
-	placeMetadata := make(map[string]map[string]interface{})
+	placeMetadata := make(map[string]map[string]any)
 	for _, place := range yamlConfig.Workflow.Places {
 		if place.Metadata != nil {
 			placeMetadata[place.Name] = place.Metadata
@@ -955,8 +955,8 @@ func buildProjectFromWorkflow(id string, wf *workflow.Workflow) *Project {
 	project := &Project{
 		ID:        id,
 		State:     []string{},
-		Context:   make(map[string]interface{}),
-		Metadata:  make(map[string]interface{}),
+		Context:   make(map[string]any),
+		Metadata:  make(map[string]any),
 		CreatedAt: time.Now(), // Default if not in context
 		UpdatedAt: time.Now(), // Default if not in context
 	}

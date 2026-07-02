@@ -203,7 +203,7 @@ func handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	id := fmt.Sprintf("content_%d", len(listWorkflowsHelper())+1)
 
-	wf, err := workflowMgr.CreateWorkflow(id, workflowDef, "draft")
+	wf, err := workflowMgr.CreateWorkflow(context.Background(), id, workflowDef, "draft")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -212,7 +212,7 @@ func handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	wf.SetContext("title", title)
 	wf.SetContext("content", content)
 
-	if err := workflowMgr.SaveWorkflow(id, wf); err != nil {
+	if err := workflowMgr.SaveWorkflow(context.Background(), id, wf); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -242,7 +242,7 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 			actor = "user" // Default actor if not provided
 		}
 
-		wf, err := workflowMgr.GetWorkflow(id, workflowDef)
+		wf, err := workflowMgr.GetWorkflow(context.Background(), id, workflowDef)
 		if err != nil {
 			http.Error(w, "Workflow not found", http.StatusNotFound)
 			return
@@ -288,7 +288,7 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := workflowMgr.SaveWorkflow(id, wf); err != nil {
+		if err := workflowMgr.SaveWorkflow(context.Background(), id, wf); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to save workflow: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -296,7 +296,7 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wf, err := workflowMgr.GetWorkflow(id, workflowDef)
+	wf, err := workflowMgr.GetWorkflow(context.Background(), id, workflowDef)
 	if err != nil {
 		http.Error(w, "Workflow not found", http.StatusNotFound)
 		return
@@ -305,7 +305,7 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 	title, _ := wf.Context("title")
 	content, _ := wf.Context("content")
 	enabledTransitions, _ := wf.EnabledTransitions()
-	history, _ := historyStore.ListHistory(id, history.QueryOptions{Limit: 50, Offset: 0})
+	history, _ := historyStore.ListHistory(context.Background(), id, history.QueryOptions{Limit: 50, Offset: 0})
 
 	data := WorkflowPageData{
 		ID:          id,

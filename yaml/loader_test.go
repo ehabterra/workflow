@@ -112,7 +112,7 @@ func TestYAMLLoaderWithHistory(t *testing.T) {
 			"test_field": "test_field TEXT",
 		}),
 	)
-	if err := historyStore.Initialize(); err != nil {
+	if err := historyStore.Initialize(context.Background()); err != nil {
 		t.Fatalf("Failed to initialize history: %v", err)
 	}
 
@@ -167,7 +167,7 @@ workflow:
 	}
 
 	// Check history
-	records, err := historyStore.ListHistory("test-workflow-1", history.QueryOptions{})
+	records, err := historyStore.ListHistory(context.Background(), "test-workflow-1", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("Failed to list history: %v", err)
 	}

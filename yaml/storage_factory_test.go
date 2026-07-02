@@ -30,11 +30,11 @@ func TestStorageFactory(t *testing.T) {
 	// Test building storage
 	config := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"table":        "test_workflows",
 			"id_column":    "id",
 			"state_column": "state",
-			"custom_fields": map[string]interface{}{
+			"custom_fields": map[string]any{
 				"title": "title TEXT",
 			},
 		},
@@ -89,7 +89,7 @@ func TestDefaultFactory(t *testing.T) {
 	// Test building with default factory
 	config := &yaml.StorageConfig{
 		Type: "sqlite",
-		Config: map[string]interface{}{
+		Config: map[string]any{
 			"table": "test_workflows",
 		},
 	}

@@ -19,7 +19,7 @@ func ApplyTransitionWithHistory(
 	ctx context.Context,
 	overrideNotes string,
 	overrideActor string,
-	overrideCustomFields map[string]interface{},
+	overrideCustomFields map[string]any,
 ) error {
 	// Get current places before transition
 	currentPlaces := wf.Marking().Places()
@@ -58,7 +58,7 @@ func ApplyTransitionWithHistory(
 	}
 
 	if transition == nil {
-		return fmt.Errorf("transition not found for places %v -> %v", currentPlaces, to)
+		return fmt.Errorf("%w: for places %v -> %v", workflow.ErrTransitionNotFound, currentPlaces, to)
 	}
 
 	// Apply the transition
@@ -78,7 +78,7 @@ func ApplyTransitionByNameWithHistory(
 	ctx context.Context,
 	overrideNotes string,
 	overrideActor string,
-	overrideCustomFields map[string]interface{},
+	overrideCustomFields map[string]any,
 ) error {
 	// Get current places before transition
 	currentPlaces := wf.Marking().Places()
@@ -121,7 +121,7 @@ func saveTransitionHistory(
 	ctx context.Context,
 	overrideNotes string,
 	overrideActor string,
-	overrideCustomFields map[string]interface{},
+	overrideCustomFields map[string]any,
 ) error {
 
 	// Prepare history record
@@ -199,7 +199,7 @@ func saveTransitionHistory(
 
 	// Start with transition metadata
 	if customFieldsMeta, ok := transition.Metadata("history_custom_fields"); ok {
-		if cfMap, ok := customFieldsMeta.(map[string]interface{}); ok {
+		if cfMap, ok := customFieldsMeta.(map[string]any); ok {
 			for k, v := range cfMap {
 				// Resolve template variables
 				resolved := ResolveTemplateValue(v, ctx, wf)
@@ -209,7 +209,7 @@ func saveTransitionHistory(
 	}
 
 	// Merge with context custom fields
-	if ctxCustomFields, ok := ctx.Value("custom_fields").(map[string]interface{}); ok {
+	if ctxCustomFields, ok := ctx.Value("custom_fields").(map[string]any); ok {
 		for k, v := range ctxCustomFields {
 			// Resolve template variables
 			resolved := ResolveTemplateValue(v, ctx, wf)
@@ -228,7 +228,7 @@ func saveTransitionHistory(
 
 	// Save history
 	if historyStore != nil {
-		if err := historyStore.SaveTransition(record); err != nil {
+		if err := historyStore.SaveTransition(ctx, record); err != nil {
 			// Log error but don't fail the transition
 			// In production, you might want to handle this differently
 			return fmt.Errorf("failed to save history (transition succeeded): %w", err)

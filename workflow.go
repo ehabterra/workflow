@@ -14,8 +14,8 @@ type Workflow struct {
 	definition   *Definition
 	initialPlace Place
 	marking      Marking
-	listeners    map[EventType][]interface{}
-	context      map[string]interface{}
+	listeners    map[EventType][]any
+	context      map[string]any
 
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
@@ -28,29 +28,33 @@ type Workflow struct {
 // Storage defines the interface for persisting workflow state.
 // It is responsible for loading and saving the workflow's places (state)
 // and its context data (custom fields).
+//
+// Every method takes a context.Context so callers can apply cancellation and
+// deadlines; implementations are expected to honor it (e.g. by using the
+// database/sql *Context methods).
 type Storage interface {
 	// LoadState loads the workflow's places and its context data for the given ID.
-	LoadState(id string) (places []Place, context map[string]interface{}, err error)
+	LoadState(ctx context.Context, id string) (places []Place, context map[string]any, err error)
 
 	// SaveState saves the workflow's places and its context data for the given ID.
-	SaveState(id string, places []Place, context map[string]interface{}) error
+	SaveState(ctx context.Context, id string, places []Place, context map[string]any) error
 
 	// DeleteState removes the workflow state for the given ID.
-	DeleteState(id string) error
+	DeleteState(ctx context.Context, id string) error
 }
 
 // NewWorkflow constructor
 func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Workflow, error) {
 	if name == "" {
-		return nil, fmt.Errorf("workflow name cannot be empty")
+		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)
 	}
 
 	if definition == nil {
-		return nil, fmt.Errorf("workflow definition cannot be nil")
+		return nil, fmt.Errorf("%w: definition cannot be nil", ErrInvalidDefinition)
 	}
 
 	if !definition.Place(initialPlace) {
-		return nil, fmt.Errorf("initial place %s is not defined in the workflow", initialPlace)
+		return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, initialPlace)
 	}
 
 	marking := NewMarking([]Place{initialPlace})
@@ -60,8 +64,8 @@ func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Work
 		definition:      definition,
 		initialPlace:    initialPlace,
 		marking:         marking,
-		listeners:       make(map[EventType][]interface{}),
-		context:         make(map[string]interface{}),
+		listeners:       make(map[EventType][]any),
+		context:         make(map[string]any),
 		manager:         nil,
 		listenerHandles: make(map[uint64]int),
 	}, nil
@@ -150,14 +154,14 @@ func (w *Workflow) RemoveListener(handle *ListenerHandle) {
 }
 
 // SetContext sets a value in the workflow context
-func (w *Workflow) SetContext(key string, value interface{}) {
+func (w *Workflow) SetContext(key string, value any) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.context[key] = value
 }
 
 // Context returns the value for the given key from the workflow context
-func (w *Workflow) Context(key string) (interface{}, bool) {
+func (w *Workflow) Context(key string) (any, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	value, ok := w.context[key]
@@ -165,10 +169,10 @@ func (w *Workflow) Context(key string) (interface{}, bool) {
 }
 
 // AllContext returns a copy of all context values
-func (w *Workflow) AllContext() map[string]interface{} {
+func (w *Workflow) AllContext() map[string]any {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 	for k, v := range w.context {
 		result[k] = v
 	}
@@ -276,7 +280,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 	}
 
 	if targetTransition == nil {
-		return fmt.Errorf("transition %s not found", transitionName)
+		return fmt.Errorf("%w: %s", ErrTransitionNotFound, transitionName)
 	}
 
 	// Check if transition is enabled (all 'from' places must be present)
@@ -392,7 +396,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	}
 
 	if targetTransition == nil {
-		return fmt.Errorf("transition %s not found", transitionName)
+		return fmt.Errorf("%w: %s", ErrTransitionNotFound, transitionName)
 	}
 
 	// Check if transition is enabled (all 'from' places must be present)
@@ -597,7 +601,7 @@ func (w *Workflow) SetMarking(marking Marking) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if marking == nil {
-		return fmt.Errorf("marking cannot be nil")
+		return fmt.Errorf("%w: marking cannot be nil", ErrInvalidMarking)
 	}
 	w.marking = marking
 	return nil

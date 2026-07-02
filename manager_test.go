@@ -1,6 +1,8 @@
 package workflow_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -10,38 +12,38 @@ import (
 // MockStorage implements the Storage interface for testing
 type MockStorage struct {
 	states   map[string][]workflow.Place
-	contexts map[string]map[string]interface{}
+	contexts map[string]map[string]any
 }
 
 func NewMockStorage() *MockStorage {
 	return &MockStorage{
 		states:   make(map[string][]workflow.Place),
-		contexts: make(map[string]map[string]interface{}),
+		contexts: make(map[string]map[string]any),
 	}
 }
 
-func (m *MockStorage) LoadState(id string) ([]workflow.Place, map[string]interface{}, error) {
+func (m *MockStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
 	states, ok := m.states[id]
 	if !ok {
 		return nil, nil, fmt.Errorf("workflow not found")
 	}
-	ctx := m.contexts[id]
-	if ctx == nil {
-		ctx = map[string]interface{}{}
+	contextData := m.contexts[id]
+	if contextData == nil {
+		contextData = map[string]any{}
 	}
-	return states, ctx, nil
+	return states, contextData, nil
 }
 
-func (m *MockStorage) SaveState(id string, places []workflow.Place, context map[string]interface{}) error {
+func (m *MockStorage) SaveState(ctx context.Context, id string, places []workflow.Place, context map[string]any) error {
 	m.states[id] = places
 	if context == nil {
-		context = map[string]interface{}{}
+		context = map[string]any{}
 	}
 	m.contexts[id] = context
 	return nil
 }
 
-func (m *MockStorage) DeleteState(id string) error {
+func (m *MockStorage) DeleteState(ctx context.Context, id string) error {
 	delete(m.states, id)
 	delete(m.contexts, id)
 	return nil
@@ -73,7 +75,7 @@ func TestManager_CreateWorkflow(t *testing.T) {
 	// Test creating a new workflow
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	wf, err := manager.CreateWorkflow(id, definition, initialPlace)
+	wf, err := manager.CreateWorkflow(context.Background(), id, definition, initialPlace)
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
@@ -93,7 +95,7 @@ func TestManager_CreateWorkflow(t *testing.T) {
 	}
 
 	// Verify initial state was saved
-	states, _, err := storage.LoadState(id)
+	states, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
 		t.Errorf("Failed to load workflow state: %v", err)
 	}
@@ -115,7 +117,7 @@ func TestManager_GetWorkflow(t *testing.T) {
 	}
 
 	// Test getting a non-existent workflow
-	_, err = manager.GetWorkflow("non_existent", definition)
+	_, err = manager.GetWorkflow(context.Background(), "non_existent", definition)
 	if err == nil {
 		t.Error("Expected error when getting non-existent workflow")
 	}
@@ -123,13 +125,13 @@ func TestManager_GetWorkflow(t *testing.T) {
 	// Create a workflow
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	wf, err := manager.CreateWorkflow(id, definition, initialPlace)
+	wf, err := manager.CreateWorkflow(context.Background(), id, definition, initialPlace)
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
 
 	// Test getting the workflow
-	retrievedWf, err := manager.GetWorkflow(id, definition)
+	retrievedWf, err := manager.GetWorkflow(context.Background(), id, definition)
 	if err != nil {
 		t.Errorf("Failed to get workflow: %v", err)
 	}
@@ -153,7 +155,7 @@ func TestManager_SaveWorkflow(t *testing.T) {
 	// Create a workflow
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	wf, err := manager.CreateWorkflow(id, definition, initialPlace)
+	wf, err := manager.CreateWorkflow(context.Background(), id, definition, initialPlace)
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
@@ -163,13 +165,13 @@ func TestManager_SaveWorkflow(t *testing.T) {
 	wf.Marking().SetPlaces([]workflow.Place{newPlace})
 
 	// Save the workflow
-	err = manager.SaveWorkflow(id, wf)
+	err = manager.SaveWorkflow(context.Background(), id, wf)
 	if err != nil {
 		t.Errorf("Failed to save workflow: %v", err)
 	}
 
 	// Verify the state was saved
-	states, _, err := storage.LoadState(id)
+	states, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
 		t.Errorf("Failed to load workflow state: %v", err)
 	}
@@ -193,13 +195,13 @@ func TestManager_DeleteWorkflow(t *testing.T) {
 	// Create a workflow
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	_, err = manager.CreateWorkflow(id, definition, initialPlace)
+	_, err = manager.CreateWorkflow(context.Background(), id, definition, initialPlace)
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
 
 	// Delete the workflow
-	err = manager.DeleteWorkflow(id)
+	err = manager.DeleteWorkflow(context.Background(), id)
 	if err != nil {
 		t.Errorf("Failed to delete workflow: %v", err)
 	}
@@ -211,7 +213,7 @@ func TestManager_DeleteWorkflow(t *testing.T) {
 	}
 
 	// Verify workflow state was removed from storage
-	_, _, err = storage.LoadState(id)
+	_, _, err = storage.LoadState(context.Background(), id)
 	if err == nil {
 		t.Error("Expected error when getting deleted workflow from storage")
 	}
@@ -230,7 +232,7 @@ func TestManager_LoadWorkflow(t *testing.T) {
 	}
 
 	// Test loading a non-existent workflow
-	_, err = manager.LoadWorkflow("non_existent", definition)
+	_, err = manager.LoadWorkflow(context.Background(), "non_existent", definition)
 	if err == nil {
 		t.Error("Expected error when loading non-existent workflow")
 	}
@@ -238,13 +240,13 @@ func TestManager_LoadWorkflow(t *testing.T) {
 	// Create a workflow and save its state
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	err = storage.SaveState(id, []workflow.Place{initialPlace}, nil)
+	err = storage.SaveState(context.Background(), id, []workflow.Place{initialPlace}, nil)
 	if err != nil {
 		t.Fatalf("Failed to save workflow state: %v", err)
 	}
 
 	// Load the workflow
-	wf, err := manager.LoadWorkflow(id, definition)
+	wf, err := manager.LoadWorkflow(context.Background(), id, definition)
 	if err != nil {
 		t.Errorf("Failed to load workflow: %v", err)
 	}
@@ -284,13 +286,13 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 	// Test loading workflow that exists in registry (should return from registry)
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	wf, err := manager.CreateWorkflow(id, definition, initialPlace)
+	wf, err := manager.CreateWorkflow(context.Background(), id, definition, initialPlace)
 	if err != nil {
 		t.Fatalf("Failed to create workflow: %v", err)
 	}
 
 	// Load should return from registry, not storage
-	loadedWf, err := manager.LoadWorkflow(id, definition)
+	loadedWf, err := manager.LoadWorkflow(context.Background(), id, definition)
 	if err != nil {
 		t.Errorf("Failed to load workflow: %v", err)
 	}
@@ -303,12 +305,12 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 	manager2 := workflow.NewManager(workflow.NewRegistry(), storage2)
 
 	// Save empty state (should cause error when loading)
-	err = storage2.SaveState("empty_workflow", []workflow.Place{}, nil)
+	err = storage2.SaveState(context.Background(), "empty_workflow", []workflow.Place{}, nil)
 	if err != nil {
 		t.Fatalf("Failed to save empty state: %v", err)
 	}
 
-	_, err = manager2.LoadWorkflow("empty_workflow", definition)
+	_, err = manager2.LoadWorkflow(context.Background(), "empty_workflow", definition)
 	if err == nil {
 		t.Error("Expected error when loading workflow with empty places")
 	}
@@ -317,17 +319,17 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 	storage3 := NewMockStorage()
 	manager3 := workflow.NewManager(workflow.NewRegistry(), storage3)
 
-	contextData := map[string]interface{}{
+	contextData := map[string]any{
 		"key1": "value1",
 		"key2": 42,
 		"key3": true,
 	}
-	err = storage3.SaveState("workflow_with_context", []workflow.Place{initialPlace}, contextData)
+	err = storage3.SaveState(context.Background(), "workflow_with_context", []workflow.Place{initialPlace}, contextData)
 	if err != nil {
 		t.Fatalf("Failed to save workflow with context: %v", err)
 	}
 
-	loadedWf3, err := manager3.LoadWorkflow("workflow_with_context", definition)
+	loadedWf3, err := manager3.LoadWorkflow(context.Background(), "workflow_with_context", definition)
 	if err != nil {
 		t.Errorf("Failed to load workflow with context: %v", err)
 	}
@@ -356,7 +358,7 @@ func TestManager_CreateWorkflow_EdgeCases(t *testing.T) {
 	}
 
 	// Test creating workflow with invalid initial place
-	_, err = manager.CreateWorkflow("invalid", definition, workflow.Place("invalid_place"))
+	_, err = manager.CreateWorkflow(context.Background(), "invalid", definition, workflow.Place("invalid_place"))
 	if err == nil {
 		t.Error("Expected error when creating workflow with invalid initial place")
 	}
@@ -365,19 +367,19 @@ func TestManager_CreateWorkflow_EdgeCases(t *testing.T) {
 	errorStorage := &ErrorStorage{}
 	manager2 := workflow.NewManager(workflow.NewRegistry(), errorStorage)
 
-	_, err = manager2.CreateWorkflow("error_test", definition, workflow.Place("draft"))
+	_, err = manager2.CreateWorkflow(context.Background(), "error_test", definition, workflow.Place("draft"))
 	if err == nil {
 		t.Error("Expected error when storage fails")
 	}
 
 	// Test creating workflow when registry fails (simulate duplicate)
-	wf1, err := manager.CreateWorkflow("duplicate_test", definition, workflow.Place("draft"))
+	wf1, err := manager.CreateWorkflow(context.Background(), "duplicate_test", definition, workflow.Place("draft"))
 	if err != nil {
 		t.Fatalf("Failed to create first workflow: %v", err)
 	}
 
 	// Try to create duplicate (should fail in registry)
-	_, err = manager.CreateWorkflow("duplicate_test", definition, workflow.Place("draft"))
+	_, err = manager.CreateWorkflow(context.Background(), "duplicate_test", definition, workflow.Place("draft"))
 	if err == nil {
 		t.Error("Expected error when creating duplicate workflow")
 	}
@@ -573,32 +575,32 @@ func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
 	}
 
 	// Save state with empty places
-	err = storage.SaveState("empty_places", []workflow.Place{}, nil)
+	err = storage.SaveState(context.Background(), "empty_places", []workflow.Place{}, nil)
 	if err != nil {
 		t.Fatalf("SaveState() failed: %v", err)
 	}
 
 	// Try to load workflow with empty places - should return error
-	_, err = manager.LoadWorkflow("empty_places", def)
+	_, err = manager.LoadWorkflow(context.Background(), "empty_places", def)
 	if err == nil {
 		t.Error("LoadWorkflow() with empty places should return error")
 	}
-	if err != nil && err.Error() != "workflow state has no places" {
-		t.Errorf("LoadWorkflow() error = %v, want 'workflow state has no places'", err)
+	if err != nil && !errors.Is(err, workflow.ErrInvalidWorkflow) {
+		t.Errorf("LoadWorkflow() error = %v, want it to wrap ErrInvalidWorkflow", err)
 	}
 }
 
 // ErrorStorage is a mock storage that always returns an error
 type ErrorStorage struct{}
 
-func (e *ErrorStorage) LoadState(id string) ([]workflow.Place, map[string]interface{}, error) {
+func (e *ErrorStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
 	return nil, nil, fmt.Errorf("storage error")
 }
 
-func (e *ErrorStorage) SaveState(id string, places []workflow.Place, context map[string]interface{}) error {
+func (e *ErrorStorage) SaveState(ctx context.Context, id string, places []workflow.Place, context map[string]any) error {
 	return fmt.Errorf("storage error")
 }
 
-func (e *ErrorStorage) DeleteState(id string) error {
+func (e *ErrorStorage) DeleteState(ctx context.Context, id string) error {
 	return fmt.Errorf("storage error")
 }

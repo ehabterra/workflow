@@ -32,7 +32,7 @@ func TestApplyTransitionWithHistory_TemplateResolution(t *testing.T) {
 			"reason":       "reason TEXT",
 		}),
 	)
-	if err := historyStore.Initialize(); err != nil {
+	if err := historyStore.Initialize(context.Background()); err != nil {
 		t.Fatalf("Failed to initialize history: %v", err)
 	}
 
@@ -47,7 +47,7 @@ func TestApplyTransitionWithHistory_TemplateResolution(t *testing.T) {
 
 	// Add template variables to transition metadata
 	transition := def.Transition("to-end")
-	transition.SetMetadata("history_custom_fields", map[string]interface{}{
+	transition.SetMetadata("history_custom_fields", map[string]any{
 		"publish_time": "now()",
 		"ip_address":   "{{request.ip}}",
 		"reason":       "{{reason}}",
@@ -58,7 +58,7 @@ func TestApplyTransitionWithHistory_TemplateResolution(t *testing.T) {
 	ctx := yaml.WithTemplateValue(
 		context.Background(),
 		"request",
-		map[string]interface{}{
+		map[string]any{
 			"ip": "192.168.1.1",
 		},
 	)
@@ -71,7 +71,7 @@ func TestApplyTransitionWithHistory_TemplateResolution(t *testing.T) {
 	}
 
 	// Check history
-	records, err := historyStore.ListHistory("test", history.QueryOptions{})
+	records, err := historyStore.ListHistory(context.Background(), "test", history.QueryOptions{})
 	if err != nil {
 		t.Fatalf("Failed to list history: %v", err)
 	}

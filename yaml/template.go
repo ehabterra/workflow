@@ -22,7 +22,7 @@ var templateRegex = regexp.MustCompile(`\{\{([^}]+)\}\}`)
 // Usage:
 //
 //	ctx = yaml.WithTemplateValue(ctx, "reason", "value")
-//	ctx = yaml.WithTemplateValue(ctx, "request", map[string]interface{}{"ip": "192.168.1.1"})
+//	ctx = yaml.WithTemplateValue(ctx, "request", map[string]any{"ip": "192.168.1.1"})
 //
 // For non-template context values, you can use custom type keys following Go best practices:
 //
@@ -146,7 +146,7 @@ func getValueFromContext(ctx context.Context, key string, wf *workflow.Workflow)
 // Supports: {{request.ip}} where ctx has a "request" object with an "ip" property.
 func getNestedValueFromContext(ctx context.Context, objName, propPath string, wf *workflow.Workflow) any {
 	// Get the object from context
-	var obj interface{}
+	var obj any
 	if val := ctx.Value(objName); val != nil {
 		obj = val
 	} else if wf != nil {
@@ -170,7 +170,7 @@ func getNestedValueFromContext(ctx context.Context, objName, propPath string, wf
 	}
 
 	// For struct-like objects, we'd need reflection, but that's complex
-	// For now, support map[string]interface{} which is common in web contexts
+	// For now, support map[string]any which is common in web contexts
 	// Users can provide a custom resolver if needed
 
 	return nil
