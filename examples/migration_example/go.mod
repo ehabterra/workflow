@@ -1,6 +1,6 @@
 module github.com/ehabterra/workflow/examples/migration_example
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/ehabterra/workflow v0.0.0

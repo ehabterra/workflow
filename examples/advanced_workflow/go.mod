@@ -1,6 +1,6 @@
 module github.com/ehabterra/workflow/examples/advanced_workflow
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/ehabterra/workflow v0.0.0
