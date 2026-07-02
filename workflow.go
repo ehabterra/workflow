@@ -20,9 +20,30 @@ type Workflow struct {
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
 
+	// version is the optimistic-concurrency version last loaded from or saved to
+	// a VersionedStorage backend. It is 0 for a workflow that has never been
+	// persisted, and ignored by non-versioned backends.
+	version int64
+
 	// Handle tracking for reliable listener removal
 	listenerHandles map[uint64]int // handle ID -> index in slice
 	nextHandleID    uint64         // atomic counter for unique handle IDs
+}
+
+// Version returns the workflow's current optimistic-concurrency version. It is 0
+// until the workflow has been persisted to a VersionedStorage backend.
+func (w *Workflow) Version() int64 {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.version
+}
+
+// setVersion updates the cached concurrency version (used by Manager after a
+// versioned load or save).
+func (w *Workflow) setVersion(v int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.version = v
 }
 
 // Storage defines the interface for persisting workflow state.
@@ -41,6 +62,29 @@ type Storage interface {
 
 	// DeleteState removes the workflow state for the given ID.
 	DeleteState(ctx context.Context, id string) error
+}
+
+// VersionedStorage is an optional interface a Storage backend may implement to
+// support optimistic concurrency control. When the Manager is backed by a
+// VersionedStorage it uses these methods so that two writers racing to save the
+// same workflow cannot silently clobber each other: the second save fails with
+// ErrConflict instead.
+//
+// Each workflow row carries a monotonically increasing version. A caller loads
+// the current version with LoadVersionedState, and passes it back to
+// SaveVersionedState; the save only succeeds if the stored version still matches.
+type VersionedStorage interface {
+	Storage
+
+	// LoadVersionedState loads the workflow's places, context data, and current
+	// version. A brand-new (never saved) workflow has version 0.
+	LoadVersionedState(ctx context.Context, id string) (places []Place, context map[string]any, version int64, err error)
+
+	// SaveVersionedState saves the workflow only if the stored version equals
+	// expectedVersion, returning the new (incremented) version on success. Pass
+	// expectedVersion 0 to create a new workflow. A mismatch — because another
+	// writer saved first, or the row already exists — returns ErrConflict.
+	SaveVersionedState(ctx context.Context, id string, places []Place, context map[string]any, expectedVersion int64) (newVersion int64, err error)
 }
 
 // NewWorkflow constructor

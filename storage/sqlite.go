@@ -14,54 +14,10 @@ import (
 // SQLiteStorage provides a persistent storage implementation using SQLite.
 // It is highly configurable to allow for custom table and column names,
 // as well as storing arbitrary application-specific data alongside the
-// workflow state.
+// workflow state. It implements workflow.Storage and workflow.VersionedStorage.
 type SQLiteStorage struct {
 	db *sql.DB
-
-	// Configuration for the main workflow state table.
-	table       string
-	idColumn    string
-	stateColumn string
-
-	// CustomFields maps a context key to a database column name and its type.
-	// Example: {"document_id": "document_id_col TEXT", "approver": "approver_col TEXT"}
-	customFields map[string]string
-}
-
-// Option is a function that configures a SQLiteStorage.
-type Option func(*SQLiteStorage)
-
-// WithTable sets the name of the table used to store workflow state.
-// Default: "workflow_states".
-func WithTable(name string) Option {
-	return func(s *SQLiteStorage) {
-		s.table = name
-	}
-}
-
-// WithIDColumn sets the name of the column used to store the workflow ID.
-// Default: "id".
-func WithIDColumn(name string) Option {
-	return func(s *SQLiteStorage) {
-		s.idColumn = name
-	}
-}
-
-// WithStateColumn sets the name of the column used to store the workflow's current places (state).
-// Default: "state".
-func WithStateColumn(name string) Option {
-	return func(s *SQLiteStorage) {
-		s.stateColumn = name
-	}
-}
-
-// WithCustomFields defines the schema for additional application-specific data to be stored.
-// The map key is the key used in the workflow's context map.
-// The map value is the full SQL column definition (e.g., "title TEXT", "amount INTEGER NOT NULL").
-func WithCustomFields(fields map[string]string) Option {
-	return func(s *SQLiteStorage) {
-		s.customFields = fields
-	}
+	config
 }
 
 // NewSQLiteStorage creates a new SQLiteStorage with the given options.
@@ -70,19 +26,12 @@ func NewSQLiteStorage(db *sql.DB, opts ...Option) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("db cannot be nil")
 	}
 
-	s := &SQLiteStorage{
-		db:           db,
-		table:        "workflow_states",
-		idColumn:     "id",
-		stateColumn:  "state",
-		customFields: make(map[string]string),
-	}
-
+	cfg := defaultConfig()
 	for _, opt := range opts {
-		opt(s)
+		opt(&cfg)
 	}
 
-	return s, nil
+	return &SQLiteStorage{db: db, config: cfg}, nil
 }
 
 // GenerateSchema returns the `CREATE TABLE` SQL statement based on the storage configuration.
@@ -91,6 +40,7 @@ func (s *SQLiteStorage) GenerateSchema() string {
 	columns := []string{
 		fmt.Sprintf("%s TEXT PRIMARY KEY", s.idColumn),
 		fmt.Sprintf("%s TEXT NOT NULL", s.stateColumn),
+		fmt.Sprintf("%s INTEGER NOT NULL DEFAULT 0", s.versionColumn),
 	}
 
 	for _, colDef := range s.customFields {
@@ -110,49 +60,28 @@ func Initialize(db *sql.DB, schema string) error {
 
 // SaveState saves the workflow's current places and any configured custom fields from its context.
 func (s *SQLiteStorage) SaveState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any) error {
+	return s.saveState(ctx, s.db, id, places, ctxData)
+}
+
+// SaveStateTx behaves like SaveState but writes through the provided transaction,
+// so it can be committed atomically with other writes (e.g. a history record).
+// See RunInTx.
+func (s *SQLiteStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, places []workflow.Place, ctxData map[string]any) error {
+	return s.saveState(ctx, tx, id, places, ctxData)
+}
+
+func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, places []workflow.Place, ctxData map[string]any) error {
 	stateJSON, err := json.Marshal(places)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	columns := []string{s.idColumn, s.stateColumn}
-	values := []any{id, stateJSON}
-	placeholders := []string{"?", "?"}
-
-	for key, colDef := range s.customFields {
-		colName := strings.Fields(colDef)[0]
-		columns = append(columns, colName)
-		placeholders = append(placeholders, "?")
-
-		if val, ok := ctxData[key]; ok {
-			// Handle slices and arrays by marshaling to JSON
-			// This is needed for fields like "roles" which is []string
-			if val != nil {
-				// Check if it's a complex type that needs JSON marshaling
-				switch value := val.(type) {
-				case []string, []any, map[string]any:
-					// Marshal slice to JSON
-					if jsonBytes, err := json.Marshal(value); err == nil {
-						values = append(values, string(jsonBytes))
-					} else {
-						values = append(values, nil)
-					}
-				case bool:
-					// SQLite doesn't have a native boolean type, convert to integer
-					if value {
-						values = append(values, 1)
-					} else {
-						values = append(values, 0)
-					}
-				default:
-					values = append(values, val)
-				}
-			} else {
-				values = append(values, nil)
-			}
-		} else {
-			values = append(values, nil) // Use NULL if key not in context
-		}
+	customCols, customVals := s.customColumns(ctxData, encodeValue)
+	columns := append([]string{s.idColumn, s.stateColumn}, customCols...)
+	values := append([]any{id, stateJSON}, customVals...)
+	placeholders := make([]string, len(columns))
+	for i := range placeholders {
+		placeholders[i] = "?"
 	}
 
 	// Using "REPLACE INTO" which is a SQLite-specific convenience.
@@ -163,12 +92,44 @@ func (s *SQLiteStorage) SaveState(ctx context.Context, id string, places []workf
 		strings.Join(placeholders, ", "),
 	)
 
-	_, err = s.db.ExecContext(ctx, query, values...)
+	_, err = q.ExecContext(ctx, query, values...)
 	return err
+}
+
+// encodeValue converts a context value into a form SQLite can store. SQLite has
+// no native boolean, so bools become 0/1; slices and maps are JSON-encoded.
+func encodeValue(val any, present bool) any {
+	if !present || val == nil {
+		return nil
+	}
+	switch value := val.(type) {
+	case []string, []any, map[string]any:
+		if jsonBytes, err := json.Marshal(value); err == nil {
+			return string(jsonBytes)
+		}
+		return nil
+	case bool:
+		if value {
+			return 1
+		}
+		return 0
+	default:
+		return val
+	}
 }
 
 // LoadState loads the workflow's places and all configured custom fields into the context map.
 func (s *SQLiteStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
+	return s.loadState(ctx, s.db, id)
+}
+
+// LoadStateTx behaves like LoadState but reads through the provided transaction,
+// so it observes the transaction's own uncommitted writes.
+func (s *SQLiteStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) ([]workflow.Place, map[string]any, error) {
+	return s.loadState(ctx, tx, id)
+}
+
+func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) ([]workflow.Place, map[string]any, error) {
 	columns := []string{s.stateColumn}
 	customFieldKeys := make([]string, 0, len(s.customFields))
 
@@ -184,7 +145,7 @@ func (s *SQLiteStorage) LoadState(ctx context.Context, id string) ([]workflow.Pl
 		s.idColumn,
 	)
 
-	row := s.db.QueryRowContext(ctx, query, id)
+	row := q.QueryRowContext(ctx, query, id)
 
 	// Prepare to scan into a slice of any pointers
 	scanArgs := make([]any, len(columns))
@@ -276,7 +237,110 @@ func (s *SQLiteStorage) LoadState(ctx context.Context, id string) ([]workflow.Pl
 
 // DeleteState removes a workflow's state from the database.
 func (s *SQLiteStorage) DeleteState(ctx context.Context, id string) error {
+	return s.deleteState(ctx, s.db, id)
+}
+
+// DeleteStateTx behaves like DeleteState but writes through the provided transaction.
+func (s *SQLiteStorage) DeleteStateTx(ctx context.Context, tx *sql.Tx, id string) error {
+	return s.deleteState(ctx, tx, id)
+}
+
+func (s *SQLiteStorage) deleteState(ctx context.Context, q querier, id string) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", s.table, s.idColumn)
-	_, err := s.db.ExecContext(ctx, query, id)
+	_, err := q.ExecContext(ctx, query, id)
 	return err
+}
+
+// LoadVersionedState implements workflow.VersionedStorage. It loads the workflow's
+// places and context data along with its current optimistic-concurrency version.
+// A never-saved workflow returns workflow.ErrWorkflowNotFound.
+func (s *SQLiteStorage) LoadVersionedState(ctx context.Context, id string) ([]workflow.Place, map[string]any, int64, error) {
+	places, ctxData, err := s.loadState(ctx, s.db, id)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	var version int64
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?", s.versionColumn, s.table, s.idColumn)
+	if err := s.db.QueryRowContext(ctx, query, id).Scan(&version); err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to load version: %w", err)
+	}
+	return places, ctxData, version, nil
+}
+
+// SaveVersionedState implements workflow.VersionedStorage. It saves the workflow
+// only if the stored version equals expectedVersion, returning the new version.
+// Pass expectedVersion 0 to create a new workflow. A mismatch returns
+// workflow.ErrConflict.
+func (s *SQLiteStorage) SaveVersionedState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveVersionedState(ctx, s.db, id, places, ctxData, expectedVersion)
+}
+
+// SaveVersionedStateTx behaves like SaveVersionedState but writes through the
+// provided transaction, so a versioned state change and a history record can be
+// committed atomically. See RunInTx.
+func (s *SQLiteStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveVersionedState(ctx, tx, id, places, ctxData, expectedVersion)
+}
+
+func (s *SQLiteStorage) saveVersionedState(ctx context.Context, q querier, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	stateJSON, err := json.Marshal(places)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal state: %w", err)
+	}
+	customCols, customVals := s.customColumns(ctxData, encodeValue)
+
+	if expectedVersion <= 0 {
+		// Create a new row at version 1; do nothing if the id already exists so we
+		// can distinguish "created" (1 row affected) from "already exists" (0).
+		columns := append([]string{s.idColumn, s.stateColumn, s.versionColumn}, customCols...)
+		values := append([]any{id, stateJSON, int64(1)}, customVals...)
+		placeholders := make([]string, len(columns))
+		for i := range placeholders {
+			placeholders[i] = "?"
+		}
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(%s) DO NOTHING;",
+			s.table, strings.Join(columns, ", "), strings.Join(placeholders, ", "), s.idColumn)
+
+		res, err := q.ExecContext(ctx, query, values...)
+		if err != nil {
+			return 0, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			return 0, fmt.Errorf("%w: workflow %s already exists (expected version 0)", workflow.ErrConflict, id)
+		}
+		return 1, nil
+	}
+
+	// Update the existing row only if its version still matches, bumping the version.
+	setClauses := []string{
+		fmt.Sprintf("%s = ?", s.stateColumn),
+		fmt.Sprintf("%s = %s + 1", s.versionColumn, s.versionColumn),
+	}
+	args := []any{stateJSON}
+	for i, col := range customCols {
+		setClauses = append(setClauses, fmt.Sprintf("%s = ?", col))
+		args = append(args, customVals[i])
+	}
+	args = append(args, id, expectedVersion)
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ? AND %s = ?;",
+		s.table, strings.Join(setClauses, ", "), s.idColumn, s.versionColumn)
+
+	res, err := q.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("%w: workflow %s (expected version %d)", workflow.ErrConflict, id, expectedVersion)
+	}
+	return expectedVersion + 1, nil
 }
