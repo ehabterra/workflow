@@ -16,18 +16,60 @@ type Config struct {
 
 // WorkflowConfig defines the workflow structure.
 type WorkflowConfig struct {
-	Name         string             `yaml:"name"`
-	InitialPlace string             `yaml:"initial_place"`
-	Metadata     map[string]any     `yaml:"metadata,omitempty"`
-	Places       []PlaceConfig      `yaml:"places,omitempty"`
-	Transitions  []TransitionConfig `yaml:"transitions"`
+	Name           string               `yaml:"name"`
+	InitialMarking InitialMarkingConfig `yaml:"initial_marking"`
+	Metadata       map[string]any       `yaml:"metadata,omitempty"`
+	Places         []PlaceConfig        `yaml:"places,omitempty"`
+	Transitions    []TransitionConfig   `yaml:"transitions"`
+}
 
-	// InitialTokens seeds data-carrying (colored) tokens into places when the
-	// workflow is created, keyed by place name. Each entry is one token's data.
-	// A place listed here is seeded with exactly these tokens (any initial
-	// presence token is cleared first), turning the workflow into a Colored
-	// Petri Net source — for example a batch of orders at a "pending" place.
-	InitialTokens map[string][]map[string]any `yaml:"initial_tokens,omitempty"`
+// InitialMarkingConfig declares a workflow's starting marking. It accepts three
+// YAML forms, so the simple case stays a one-liner and the Colored Petri Net case
+// is a single coherent construct:
+//
+//	initial_marking: draft                 # one place, an uncolored presence token
+//	initial_marking: [draft, needs_legal]  # several presence places
+//	initial_marking:                       # data-carrying (colored) tokens per place
+//	  pending:
+//	    - {order_id: "001", amount: 100}
+//	    - {order_id: "002", amount: 250}
+//
+// A place with a nil/empty token list gets a single uncolored presence token
+// (the boolean case); a place with tokens is seeded with exactly those tokens.
+type InitialMarkingConfig struct {
+	// Places maps each initial place to its colored tokens (nil = presence token).
+	Places map[string][]map[string]any
+}
+
+// UnmarshalYAML accepts a scalar place name, a sequence of place names, or a
+// mapping of place name to token list.
+func (im *InitialMarkingConfig) UnmarshalYAML(value *yaml.Node) error {
+	im.Places = make(map[string][]map[string]any)
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var name string
+		if err := value.Decode(&name); err != nil {
+			return err
+		}
+		if name != "" { // a bare/null value leaves Places empty; Validate reports it
+			im.Places[name] = nil
+		}
+	case yaml.SequenceNode:
+		var names []string
+		if err := value.Decode(&names); err != nil {
+			return err
+		}
+		for _, n := range names {
+			im.Places[n] = nil
+		}
+	case yaml.MappingNode:
+		if err := value.Decode(&im.Places); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("initial_marking must be a place name, a list of place names, or a map of place to tokens")
+	}
+	return nil
 }
 
 // PlaceConfig defines a place with optional metadata.
@@ -136,8 +178,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("workflow name is required")
 	}
 
-	if c.Workflow.InitialPlace == "" {
-		return fmt.Errorf("initial_place is required")
+	if len(c.Workflow.InitialMarking.Places) == 0 {
+		return fmt.Errorf("initial_marking is required")
 	}
 
 	if len(c.Workflow.Transitions) == 0 {
@@ -164,9 +206,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate initial place exists
-	if !placeSet[c.Workflow.InitialPlace] {
-		return fmt.Errorf("initial_place '%s' is not defined in places", c.Workflow.InitialPlace)
+	// Validate every initial_marking place is defined.
+	for place := range c.Workflow.InitialMarking.Places {
+		if !placeSet[place] {
+			return fmt.Errorf("initial_marking references undefined place '%s'", place)
+		}
 	}
 
 	// Validate transitions reference valid places
@@ -193,13 +237,6 @@ func (c *Config) Validate() error {
 			if !placeSet[to] {
 				return fmt.Errorf("transition '%s' references undefined place '%s'", trans.Name, to)
 			}
-		}
-	}
-
-	// Validate initial_tokens reference defined places.
-	for place := range c.Workflow.InitialTokens {
-		if !placeSet[place] {
-			return fmt.Errorf("initial_tokens references undefined place '%s'", place)
 		}
 	}
 

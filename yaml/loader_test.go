@@ -17,7 +17,7 @@ func TestYAMLLoader(t *testing.T) {
 	yamlContent := `
 workflow:
   name: test_workflow
-  initial_place: start
+  initial_marking: start
   metadata:
     version: "1.0"
   transitions:
@@ -60,8 +60,8 @@ workflow:
 		t.Errorf("Expected workflow name 'test_workflow', got '%s'", config.Workflow.Name)
 	}
 
-	if config.Workflow.InitialPlace != "start" {
-		t.Errorf("Expected initial_place 'start', got '%s'", config.Workflow.InitialPlace)
+	if _, ok := config.Workflow.InitialMarking.Places["start"]; !ok {
+		t.Errorf("Expected initial_marking to include 'start', got %v", config.Workflow.InitialMarking.Places)
 	}
 
 	if len(config.Workflow.Transitions) != 1 {
@@ -120,7 +120,7 @@ func TestYAMLLoaderWithHistory(t *testing.T) {
 	yamlContent := `
 workflow:
   name: test_workflow
-  initial_place: start
+  initial_marking: start
   transitions:
     - name: to_end
       from: [start]

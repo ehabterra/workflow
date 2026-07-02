@@ -10,12 +10,12 @@ import (
 
 // Workflow represents a workflow instance
 type Workflow struct {
-	name         string
-	definition   *Definition
-	initialPlace Place
-	marking      Marking
-	listeners    map[EventType][]any
-	context      map[string]any
+	name          string
+	definition    *Definition
+	initialPlaces []Place
+	marking       Marking
+	listeners     map[EventType][]any
+	context       map[string]any
 
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
@@ -107,18 +107,50 @@ func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Work
 		return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, initialPlace)
 	}
 
-	marking := NewMarking([]Place{initialPlace})
+	return newWorkflow(name, definition, []Place{initialPlace}, NewMarking([]Place{initialPlace})), nil
+}
 
+// NewWorkflowFromMarking creates a workflow instance whose starting state is the
+// given marking. Use it when the initial state has multiple places or
+// data-carrying (colored) tokens; NewWorkflow is the single-place shorthand.
+//
+// The marking is adopted as-is (its tokens are preserved), and every place it
+// occupies must be defined in the workflow.
+func NewWorkflowFromMarking(name string, definition *Definition, initial Marking) (*Workflow, error) {
+	if name == "" {
+		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)
+	}
+	if definition == nil {
+		return nil, fmt.Errorf("%w: definition cannot be nil", ErrInvalidDefinition)
+	}
+	if initial == nil {
+		return nil, fmt.Errorf("%w: initial marking cannot be nil", ErrInvalidMarking)
+	}
+
+	places := initial.Places()
+	if len(places) == 0 {
+		return nil, fmt.Errorf("%w: initial marking has no places", ErrInvalidMarking)
+	}
+	for _, p := range places {
+		if !definition.Place(p) {
+			return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, p)
+		}
+	}
+
+	return newWorkflow(name, definition, places, initial), nil
+}
+
+func newWorkflow(name string, definition *Definition, initialPlaces []Place, marking Marking) *Workflow {
 	return &Workflow{
 		name:            name,
 		definition:      definition,
-		initialPlace:    initialPlace,
+		initialPlaces:   initialPlaces,
 		marking:         marking,
 		listeners:       make(map[EventType][]any),
 		context:         make(map[string]any),
 		manager:         nil,
 		listenerHandles: make(map[uint64]int),
-	}, nil
+	}
 }
 
 // Name returns the workflow name
@@ -640,9 +672,24 @@ func (w *Workflow) SetMarking(marking Marking) error {
 	return nil
 }
 
-// InitialPlace returns the initial place of the workflow
+// InitialPlace returns the workflow's first initial place. When the workflow
+// started from a marking with multiple initial places it returns the first
+// (sorted); use InitialPlaces for the full set.
 func (w *Workflow) InitialPlace() Place {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.initialPlace
+	if len(w.initialPlaces) == 0 {
+		return ""
+	}
+	return w.initialPlaces[0]
+}
+
+// InitialPlaces returns a copy of the places the workflow's initial marking
+// occupied.
+func (w *Workflow) InitialPlaces() []Place {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := make([]Place, len(w.initialPlaces))
+	copy(out, w.initialPlaces)
+	return out
 }

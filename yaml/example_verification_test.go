@@ -23,8 +23,8 @@ func TestExampleYAML(t *testing.T) {
 		t.Errorf("Expected name 'blog_publishing', got '%s'", config.Workflow.Name)
 	}
 
-	if config.Workflow.InitialPlace != "draft" {
-		t.Errorf("Expected initial_place 'draft', got '%s'", config.Workflow.InitialPlace)
+	if _, ok := config.Workflow.InitialMarking.Places["draft"]; !ok {
+		t.Errorf("Expected initial_marking to include 'draft', got %v", config.Workflow.InitialMarking.Places)
 	}
 
 	// Verify metadata

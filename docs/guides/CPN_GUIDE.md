@@ -107,24 +107,32 @@ wf.TransformTokens("pending",
 
 ## Declaring tokens in YAML
 
-Seed colored tokens with `initial_tokens`, keyed by place:
+The starting state is declared with `initial_marking`, which accepts three forms.
+The simple case is a one-liner; colored tokens use the map form:
 
 ```yaml
+# boolean shorthand — one presence token
+initial_marking: draft
+
+# several presence places
+initial_marking: [design, legal]
+
+# Colored Petri Net — data-carrying tokens per place
 workflow:
   name: batch
-  initial_place: pending
-  places: [{name: pending}, {name: processing}, {name: done}]
-  initial_tokens:
+  initial_marking:
     pending:
       - {order_id: "001", amount: 100}
       - {order_id: "002", amount: 250}
+  places: [{name: pending}, {name: processing}, {name: done}]
   transitions:
     - {name: start,  from: [pending],    to: [processing]}
     - {name: finish, from: [processing], to: [done]}
 ```
 
-Each listed place is seeded with exactly the declared tokens. Unknown keys are
-still rejected by strict decoding, so typos fail loudly.
+A place with no listed tokens gets a single uncolored presence token; a place
+with tokens is seeded with exactly those. Unknown keys are still rejected by
+strict decoding, so typos fail loudly.
 
 ## Persistence
 

@@ -150,8 +150,10 @@ func (w *Workflow) Diagram() string {
 		}
 	}
 
-	diagram.WriteString("\n    %% Initial place\n")
-	fmt.Fprintf(&diagram, "    [*] --> %s\n", w.InitialPlace())
+	diagram.WriteString("\n    %% Initial place(s)\n")
+	for _, place := range w.InitialPlaces() {
+		fmt.Fprintf(&diagram, "    [*] --> %s\n", place)
+	}
 
 	return diagram.String()
 }
