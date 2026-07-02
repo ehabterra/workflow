@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it automatically when the backend supports it — two writers racing to save the same
   workflow no longer silently clobber each other; the stale save returns `ErrConflict`.
   `Workflow.Version()` exposes the current instance version.
+- PostgreSQL backend (M1.3): `storage.NewPostgresStorage` implements `Storage` and
+  `VersionedStorage` using PostgreSQL syntax (`$N` placeholders, `INSERT ... ON
+  CONFLICT` upserts). It works with any PostgreSQL database/sql driver; the pgx v5
+  stdlib adapter is recommended. It passes the same conformance suite as SQLite,
+  proving the storage interface is not SQLite-shaped.
+- Storage conformance kit (M1.4): new `storagetest` package with
+  `storagetest.Run(t, factory)` that any `workflow.Storage` backend can run to verify
+  it honors the Storage contract (and the versioning contract, when supported). Both
+  the SQLite and PostgreSQL backends run it.
 - `ROADMAP.md` describing the phased path (M0–M8) to a production-ready v1.0.
 - Strict YAML decoding: unknown keys in a workflow config are now rejected with a
   line number instead of being silently ignored.
@@ -30,7 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GitHub issue/PR templates.
 
 ### Changed
-- Minimum Go version raised to 1.24 (module and CI).
+- Minimum Go version is 1.25 (module and CI). It was raised to 1.24 during M0, then to
+  1.25 in M1.3 because the pgx v5 PostgreSQL driver requires it.
+- Postgres integration tests use a "both" strategy: `WORKFLOW_TEST_POSTGRES_DSN` when
+  set (CI uses a service container), otherwise a throwaway Postgres via testcontainers
+  when Docker is available; skipped when neither is present.
 - Repository layout: planning/comparison/guide docs moved under `docs/`; not-yet-
   implemented CPN/HCPN schemas and examples quarantined under `docs/roadmap/`.
 

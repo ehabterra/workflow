@@ -10,7 +10,27 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow
+          POSTGRES_DB: workflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Run the Postgres conformance suite against the service above via the fast
+      # env-DSN path (no testcontainers image pulls in CI).
+      WORKFLOW_TEST_POSTGRES_DSN: postgres://workflow:workflow@localhost:5432/workflow?sslmode=disable
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,7 +38,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -54,7 +74,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       # Example modules have their own go.mod and are not covered by the root
       # `go test ./...`, so build and vet each one to catch breakage early.
@@ -81,7 +101,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Download dependencies
         run: go mod download

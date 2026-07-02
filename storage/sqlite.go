@@ -14,57 +14,10 @@ import (
 // SQLiteStorage provides a persistent storage implementation using SQLite.
 // It is highly configurable to allow for custom table and column names,
 // as well as storing arbitrary application-specific data alongside the
-// workflow state.
+// workflow state. It implements workflow.Storage and workflow.VersionedStorage.
 type SQLiteStorage struct {
 	db *sql.DB
-
-	// Configuration for the main workflow state table.
-	table       string
-	idColumn    string
-	stateColumn string
-
-	// CustomFields maps a context key to a database column name and its type.
-	// Example: {"document_id": "document_id_col TEXT", "approver": "approver_col TEXT"}
-	customFields map[string]string
-
-	// versionColumn holds the optimistic-concurrency version for each workflow row.
-	versionColumn string
-}
-
-// Option is a function that configures a SQLiteStorage.
-type Option func(*SQLiteStorage)
-
-// WithTable sets the name of the table used to store workflow state.
-// Default: "workflow_states".
-func WithTable(name string) Option {
-	return func(s *SQLiteStorage) {
-		s.table = name
-	}
-}
-
-// WithIDColumn sets the name of the column used to store the workflow ID.
-// Default: "id".
-func WithIDColumn(name string) Option {
-	return func(s *SQLiteStorage) {
-		s.idColumn = name
-	}
-}
-
-// WithStateColumn sets the name of the column used to store the workflow's current places (state).
-// Default: "state".
-func WithStateColumn(name string) Option {
-	return func(s *SQLiteStorage) {
-		s.stateColumn = name
-	}
-}
-
-// WithCustomFields defines the schema for additional application-specific data to be stored.
-// The map key is the key used in the workflow's context map.
-// The map value is the full SQL column definition (e.g., "title TEXT", "amount INTEGER NOT NULL").
-func WithCustomFields(fields map[string]string) Option {
-	return func(s *SQLiteStorage) {
-		s.customFields = fields
-	}
+	config
 }
 
 // NewSQLiteStorage creates a new SQLiteStorage with the given options.
@@ -73,20 +26,12 @@ func NewSQLiteStorage(db *sql.DB, opts ...Option) (*SQLiteStorage, error) {
 		return nil, fmt.Errorf("db cannot be nil")
 	}
 
-	s := &SQLiteStorage{
-		db:            db,
-		table:         "workflow_states",
-		idColumn:      "id",
-		stateColumn:   "state",
-		versionColumn: "version",
-		customFields:  make(map[string]string),
-	}
-
+	cfg := defaultConfig()
 	for _, opt := range opts {
-		opt(s)
+		opt(&cfg)
 	}
 
-	return s, nil
+	return &SQLiteStorage{db: db, config: cfg}, nil
 }
 
 // GenerateSchema returns the `CREATE TABLE` SQL statement based on the storage configuration.
@@ -131,7 +76,7 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, pla
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	customCols, customVals := s.customColumns(ctxData)
+	customCols, customVals := s.customColumns(ctxData, encodeValue)
 	columns := append([]string{s.idColumn, s.stateColumn}, customCols...)
 	values := append([]any{id, stateJSON}, customVals...)
 	placeholders := make([]string, len(columns))
@@ -151,22 +96,8 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, pla
 	return err
 }
 
-// customColumns returns the configured custom column names alongside the values
-// encoded from ctxData for those columns, in a single consistent iteration order.
-// Missing keys and nil values become SQL NULL; slices/maps are JSON-encoded and
-// bools become 0/1 (SQLite has no native boolean).
-func (s *SQLiteStorage) customColumns(ctxData map[string]any) (names []string, values []any) {
-	names = make([]string, 0, len(s.customFields))
-	values = make([]any, 0, len(s.customFields))
-	for key, colDef := range s.customFields {
-		names = append(names, strings.Fields(colDef)[0])
-		val, ok := ctxData[key]
-		values = append(values, encodeValue(val, ok))
-	}
-	return names, values
-}
-
-// encodeValue converts a context value into a form SQLite can store.
+// encodeValue converts a context value into a form SQLite can store. SQLite has
+// no native boolean, so bools become 0/1; slices and maps are JSON-encoded.
 func encodeValue(val any, present bool) any {
 	if !present || val == nil {
 		return nil
@@ -357,7 +288,7 @@ func (s *SQLiteStorage) saveVersionedState(ctx context.Context, q querier, id st
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal state: %w", err)
 	}
-	customCols, customVals := s.customColumns(ctxData)
+	customCols, customVals := s.customColumns(ctxData, encodeValue)
 
 	if expectedVersion <= 0 {
 		// Create a new row at version 1; do nothing if the id already exists so we

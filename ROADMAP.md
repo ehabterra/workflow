@@ -73,9 +73,11 @@ every example module builds in CI.
 
 ---
 
-## M1 — Crash-safe storage (ACID) (🔴) — target: **v0.5.0**
+## M1 — Crash-safe storage (ACID) (🔴) — target: **v0.5.0** — ✅ **COMPLETE (2026-07-02)**
 
 Durability is the foundation every later feature leans on. Do it before tokens.
+All tasks done: transactional state+history saves, optimistic concurrency, a second
+(PostgreSQL) backend, and a shared conformance kit that both backends pass.
 
 | # | Task | Effort | Acceptance |
 |---|------|--------|-----------|
