@@ -22,5 +22,5 @@ ignore:
   - "**/*_test.go"
 
 comment:
-  layout: "reason, diff, files"
+  layout: "condensed_header, diff, files"
   require_changes: true
