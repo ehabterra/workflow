@@ -55,17 +55,17 @@ func (s *PostgresStorage) GenerateSchema() string {
 }
 
 // SaveState upserts the workflow's places and custom fields (last write wins).
-func (s *PostgresStorage) SaveState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any) error {
-	return s.saveState(ctx, s.db, id, places, ctxData)
+func (s *PostgresStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any) error {
+	return s.saveState(ctx, s.db, id, marking, ctxData)
 }
 
 // SaveStateTx behaves like SaveState but writes through the provided transaction.
-func (s *PostgresStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, places []workflow.Place, ctxData map[string]any) error {
-	return s.saveState(ctx, tx, id, places, ctxData)
+func (s *PostgresStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any) error {
+	return s.saveState(ctx, tx, id, marking, ctxData)
 }
 
-func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, places []workflow.Place, ctxData map[string]any) error {
-	stateJSON, err := json.Marshal(places)
+func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any) error {
+	stateJSON, err := json.Marshal(marking)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
@@ -92,17 +92,17 @@ func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, p
 	return err
 }
 
-// LoadState loads the workflow's places and custom fields.
-func (s *PostgresStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
+// LoadState loads the workflow's marking and custom fields.
+func (s *PostgresStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
 	return s.loadState(ctx, s.db, id)
 }
 
 // LoadStateTx behaves like LoadState but reads through the provided transaction.
-func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) ([]workflow.Place, map[string]any, error) {
+func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) (workflow.Marking, map[string]any, error) {
 	return s.loadState(ctx, tx, id)
 }
 
-func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) ([]workflow.Place, map[string]any, error) {
+func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
 	columns := []string{s.stateColumn}
 	customKeys := make([]string, 0, len(s.customFields))
 	for key, colDef := range s.customFields {
@@ -127,8 +127,8 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 		return nil, nil, fmt.Errorf("failed to load state: %w", err)
 	}
 
-	var places []workflow.Place
-	if err := json.Unmarshal([]byte(stateJSON), &places); err != nil {
+	marking, err := workflow.UnmarshalMarkingJSON([]byte(stateJSON))
+	if err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
@@ -136,7 +136,7 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	for i, key := range customKeys {
 		ctxData[key] = decodeValue(customVals[i])
 	}
-	return places, ctxData, nil
+	return marking, ctxData, nil
 }
 
 // DeleteState removes a workflow's state.
@@ -156,8 +156,8 @@ func (s *PostgresStorage) deleteState(ctx context.Context, q querier, id string)
 }
 
 // LoadVersionedState implements workflow.VersionedStorage.
-func (s *PostgresStorage) LoadVersionedState(ctx context.Context, id string) ([]workflow.Place, map[string]any, int64, error) {
-	places, ctxData, err := s.loadState(ctx, s.db, id)
+func (s *PostgresStorage) LoadVersionedState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
+	marking, ctxData, err := s.loadState(ctx, s.db, id)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -166,22 +166,22 @@ func (s *PostgresStorage) LoadVersionedState(ctx context.Context, id string) ([]
 	if err := s.db.QueryRowContext(ctx, query, id).Scan(&version); err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to load version: %w", err)
 	}
-	return places, ctxData, version, nil
+	return marking, ctxData, version, nil
 }
 
 // SaveVersionedState implements workflow.VersionedStorage.
-func (s *PostgresStorage) SaveVersionedState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, s.db, id, places, ctxData, expectedVersion)
+func (s *PostgresStorage) SaveVersionedState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion)
 }
 
 // SaveVersionedStateTx behaves like SaveVersionedState but writes through the
 // provided transaction.
-func (s *PostgresStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, tx, id, places, ctxData, expectedVersion)
+func (s *PostgresStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
 }
 
-func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	stateJSON, err := json.Marshal(places)
+func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	stateJSON, err := json.Marshal(marking)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal state: %w", err)
 	}

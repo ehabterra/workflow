@@ -38,20 +38,21 @@ func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Defin
 	// Load state and context from storage, using the versioned path when the
 	// backend supports optimistic concurrency so we can track the loaded version.
 	var (
-		places    []Place
+		loaded    Marking
 		wfContext map[string]any
 		version   int64
 	)
 	if vs, ok := m.storage.(VersionedStorage); ok {
-		places, wfContext, version, err = vs.LoadVersionedState(ctx, id)
+		loaded, wfContext, version, err = vs.LoadVersionedState(ctx, id)
 	} else {
-		places, wfContext, err = m.storage.LoadState(ctx, id)
+		loaded, wfContext, err = m.storage.LoadState(ctx, id)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load workflow state: %w", err)
 	}
 
-	// Validate that places slice is not empty
+	// Validate that the loaded marking has at least one place.
+	places := loaded.Places()
 	if len(places) == 0 {
 		return nil, fmt.Errorf("%w: loaded state has no places", ErrInvalidWorkflow)
 	}
@@ -65,8 +66,10 @@ func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Defin
 	wf.context = wfContext // Set the loaded context
 	wf.setVersion(version) // Track the loaded concurrency version (0 if unversioned)
 
-	// Set the current marking
-	wf.Marking().SetPlaces(places)
+	// Adopt the full loaded marking (preserves colored tokens, not just presence).
+	if err := wf.SetMarking(loaded); err != nil {
+		return nil, fmt.Errorf("failed to set loaded marking: %w", err)
+	}
 
 	// Add to registry
 	if err := m.registry.AddWorkflow(wf); err != nil {
@@ -82,14 +85,14 @@ func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Defin
 // workflow's version is left unchanged so the caller can reload and retry.
 func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) error {
 	if vs, ok := m.storage.(VersionedStorage); ok {
-		newVersion, err := vs.SaveVersionedState(ctx, id, wf.Marking().Places(), wf.context, wf.Version())
+		newVersion, err := vs.SaveVersionedState(ctx, id, wf.Marking(), wf.context, wf.Version())
 		if err != nil {
 			return err
 		}
 		wf.setVersion(newVersion)
 		return nil
 	}
-	return m.storage.SaveState(ctx, id, wf.Marking().Places(), wf.context)
+	return m.storage.SaveState(ctx, id, wf.Marking(), wf.context)
 }
 
 // GetWorkflow gets a workflow instance from the registry or loads it from storage
@@ -115,12 +118,12 @@ func (m *Manager) CreateWorkflow(ctx context.Context, id string, definition *Def
 	// Save initial state. With a versioned backend this inserts at version 1 and
 	// fails with ErrConflict if a workflow with this id already exists.
 	if vs, ok := m.storage.(VersionedStorage); ok {
-		newVersion, err := vs.SaveVersionedState(ctx, id, wf.Marking().Places(), wf.context, 0)
+		newVersion, err := vs.SaveVersionedState(ctx, id, wf.Marking(), wf.context, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to save initial state: %w", err)
 		}
 		wf.setVersion(newVersion)
-	} else if err := m.storage.SaveState(ctx, id, wf.Marking().Places(), wf.context); err != nil {
+	} else if err := m.storage.SaveState(ctx, id, wf.Marking(), wf.context); err != nil {
 		return nil, fmt.Errorf("failed to save initial state: %w", err)
 	}
 

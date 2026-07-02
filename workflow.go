@@ -54,11 +54,13 @@ func (w *Workflow) setVersion(v int64) {
 // deadlines; implementations are expected to honor it (e.g. by using the
 // database/sql *Context methods).
 type Storage interface {
-	// LoadState loads the workflow's places and its context data for the given ID.
-	LoadState(ctx context.Context, id string) (places []Place, context map[string]any, err error)
+	// LoadState loads the workflow's marking and its context data for the given ID.
+	LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, err error)
 
-	// SaveState saves the workflow's places and its context data for the given ID.
-	SaveState(ctx context.Context, id string, places []Place, context map[string]any) error
+	// SaveState saves the workflow's marking and its context data for the given ID.
+	// The full marking is persisted, so data-carrying (colored) tokens round-trip;
+	// simple boolean workflows serialize to the compact place-array form.
+	SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
 
 	// DeleteState removes the workflow state for the given ID.
 	DeleteState(ctx context.Context, id string) error
@@ -76,18 +78,22 @@ type Storage interface {
 type VersionedStorage interface {
 	Storage
 
-	// LoadVersionedState loads the workflow's places, context data, and current
+	// LoadVersionedState loads the workflow's marking, context data, and current
 	// version. A brand-new (never saved) workflow has version 0.
-	LoadVersionedState(ctx context.Context, id string) (places []Place, context map[string]any, version int64, err error)
+	LoadVersionedState(ctx context.Context, id string) (marking Marking, context map[string]any, version int64, err error)
 
 	// SaveVersionedState saves the workflow only if the stored version equals
 	// expectedVersion, returning the new (incremented) version on success. Pass
 	// expectedVersion 0 to create a new workflow. A mismatch — because another
 	// writer saved first, or the row already exists — returns ErrConflict.
-	SaveVersionedState(ctx context.Context, id string, places []Place, context map[string]any, expectedVersion int64) (newVersion int64, err error)
+	SaveVersionedState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
 }
 
-// NewWorkflow constructor
+// NewWorkflow creates a workflow instance starting at initialPlace.
+//
+// Every workflow's marking is a Colored Petri Net marking; a plain workflow just
+// uses uncolored tokens (boolean presence). Reach for the token methods
+// (CreateToken, GetTokens, ...) only when you need data-carrying tokens.
 func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Workflow, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)

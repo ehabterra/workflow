@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -9,33 +10,43 @@ import (
 	"github.com/ehabterra/workflow"
 )
 
-// MockStorage implements the Storage interface for testing
+// MockStorage implements the Storage interface for testing. It stores the
+// serialized marking (as the real backends do) so loaded state is decoupled from
+// the in-memory workflow.
 type MockStorage struct {
-	states   map[string][]workflow.Place
+	states   map[string][]byte
 	contexts map[string]map[string]any
 }
 
 func NewMockStorage() *MockStorage {
 	return &MockStorage{
-		states:   make(map[string][]workflow.Place),
+		states:   make(map[string][]byte),
 		contexts: make(map[string]map[string]any),
 	}
 }
 
-func (m *MockStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
-	states, ok := m.states[id]
+func (m *MockStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
+	data, ok := m.states[id]
 	if !ok {
 		return nil, nil, fmt.Errorf("workflow not found")
+	}
+	marking, err := workflow.UnmarshalMarkingJSON(data)
+	if err != nil {
+		return nil, nil, err
 	}
 	contextData := m.contexts[id]
 	if contextData == nil {
 		contextData = map[string]any{}
 	}
-	return states, contextData, nil
+	return marking, contextData, nil
 }
 
-func (m *MockStorage) SaveState(ctx context.Context, id string, places []workflow.Place, context map[string]any) error {
-	m.states[id] = places
+func (m *MockStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, context map[string]any) error {
+	data, err := json.Marshal(marking)
+	if err != nil {
+		return err
+	}
+	m.states[id] = data
 	if context == nil {
 		context = map[string]any{}
 	}
@@ -95,10 +106,11 @@ func TestManager_CreateWorkflow(t *testing.T) {
 	}
 
 	// Verify initial state was saved
-	states, _, err := storage.LoadState(context.Background(), id)
+	m, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
 		t.Errorf("Failed to load workflow state: %v", err)
 	}
+	states := m.Places()
 	if len(states) != 1 || states[0] != initialPlace {
 		t.Errorf("Expected initial state to be %v, got %v", initialPlace, states)
 	}
@@ -171,10 +183,11 @@ func TestManager_SaveWorkflow(t *testing.T) {
 	}
 
 	// Verify the state was saved
-	states, _, err := storage.LoadState(context.Background(), id)
+	m, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
 		t.Errorf("Failed to load workflow state: %v", err)
 	}
+	states := m.Places()
 	if len(states) != 1 || states[0] != newPlace {
 		t.Errorf("Expected state to be %v, got %v", newPlace, states)
 	}
@@ -240,7 +253,7 @@ func TestManager_LoadWorkflow(t *testing.T) {
 	// Create a workflow and save its state
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	err = storage.SaveState(context.Background(), id, []workflow.Place{initialPlace}, nil)
+	err = storage.SaveState(context.Background(), id, workflow.NewMarking([]workflow.Place{initialPlace}), nil)
 	if err != nil {
 		t.Fatalf("Failed to save workflow state: %v", err)
 	}
@@ -305,7 +318,7 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 	manager2 := workflow.NewManager(workflow.NewRegistry(), storage2)
 
 	// Save empty state (should cause error when loading)
-	err = storage2.SaveState(context.Background(), "empty_workflow", []workflow.Place{}, nil)
+	err = storage2.SaveState(context.Background(), "empty_workflow", workflow.NewMarking(nil), nil)
 	if err != nil {
 		t.Fatalf("Failed to save empty state: %v", err)
 	}
@@ -324,7 +337,7 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 		"key2": 42,
 		"key3": true,
 	}
-	err = storage3.SaveState(context.Background(), "workflow_with_context", []workflow.Place{initialPlace}, contextData)
+	err = storage3.SaveState(context.Background(), "workflow_with_context", workflow.NewMarking([]workflow.Place{initialPlace}), contextData)
 	if err != nil {
 		t.Fatalf("Failed to save workflow with context: %v", err)
 	}
@@ -575,7 +588,7 @@ func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
 	}
 
 	// Save state with empty places
-	err = storage.SaveState(context.Background(), "empty_places", []workflow.Place{}, nil)
+	err = storage.SaveState(context.Background(), "empty_places", workflow.NewMarking(nil), nil)
 	if err != nil {
 		t.Fatalf("SaveState() failed: %v", err)
 	}
@@ -593,11 +606,11 @@ func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
 // ErrorStorage is a mock storage that always returns an error
 type ErrorStorage struct{}
 
-func (e *ErrorStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
+func (e *ErrorStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
 	return nil, nil, fmt.Errorf("storage error")
 }
 
-func (e *ErrorStorage) SaveState(ctx context.Context, id string, places []workflow.Place, context map[string]any) error {
+func (e *ErrorStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, context map[string]any) error {
 	return fmt.Errorf("storage error")
 }
 

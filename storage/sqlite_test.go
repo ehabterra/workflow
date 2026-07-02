@@ -33,14 +33,15 @@ func TestSQLiteStorage_Basic(t *testing.T) {
 
 	places := []workflow.Place{"draft"}
 	contextData := map[string]any{"foo": "bar"}
-	if err := s.SaveState(context.Background(), "wf1", places, contextData); err != nil {
+	if err := s.SaveState(context.Background(), "wf1", workflow.NewMarking(places), contextData); err != nil {
 		t.Fatalf("failed to save state: %v", err)
 	}
 
-	loadedPlaces, loadedContext, err := s.LoadState(context.Background(), "wf1")
+	loadedMarking, loadedContext, err := s.LoadState(context.Background(), "wf1")
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
+	loadedPlaces := loadedMarking.Places()
 	if len(loadedPlaces) != 1 || loadedPlaces[0] != "draft" {
 		t.Errorf("unexpected places: %+v", loadedPlaces)
 	}
@@ -67,7 +68,7 @@ func TestSQLiteStorage_CustomFields(t *testing.T) {
 		"ip_address": "127.0.0.1",
 		"user_agent": "test-agent",
 	}
-	if err := s.SaveState(context.Background(), "wf2", places, contextData); err != nil {
+	if err := s.SaveState(context.Background(), "wf2", workflow.NewMarking(places), contextData); err != nil {
 		t.Fatalf("failed to save state: %v", err)
 	}
 
@@ -91,7 +92,7 @@ func TestSQLiteStorage_DeleteState(t *testing.T) {
 	}
 	places := []workflow.Place{"draft"}
 	contextData := map[string]any{}
-	if err := s.SaveState(context.Background(), "wf3", places, contextData); err != nil {
+	if err := s.SaveState(context.Background(), "wf3", workflow.NewMarking(places), contextData); err != nil {
 		t.Fatalf("failed to save state: %v", err)
 	}
 	if err := s.DeleteState(context.Background(), "wf3"); err != nil {
@@ -123,19 +124,19 @@ func TestSQLiteStorage_EdgeCases(t *testing.T) {
 	}
 
 	// Test saving with empty places
-	err = s.SaveState(context.Background(), "empty_places", []workflow.Place{}, nil)
+	err = s.SaveState(context.Background(), "empty_places", workflow.NewMarking(nil), nil)
 	if err != nil {
 		t.Errorf("SaveState() with empty places failed: %v", err)
 	}
 
 	// Test saving with nil context
-	err = s.SaveState(context.Background(), "nil_context", []workflow.Place{"draft"}, nil)
+	err = s.SaveState(context.Background(), "nil_context", workflow.NewMarking([]workflow.Place{"draft"}), nil)
 	if err != nil {
 		t.Errorf("SaveState() with nil context failed: %v", err)
 	}
 
 	// Test saving with empty context
-	err = s.SaveState(context.Background(), "empty_context", []workflow.Place{"draft"}, map[string]any{})
+	err = s.SaveState(context.Background(), "empty_context", workflow.NewMarking([]workflow.Place{"draft"}), map[string]any{})
 	if err != nil {
 		t.Errorf("SaveState() with empty context failed: %v", err)
 	}
@@ -153,15 +154,16 @@ func TestSQLiteStorage_EdgeCases(t *testing.T) {
 	}
 
 	// Test saving with multiple places
-	err = s.SaveState(context.Background(), "multiple_places", []workflow.Place{"place1", "place2", "place3"}, nil)
+	err = s.SaveState(context.Background(), "multiple_places", workflow.NewMarking([]workflow.Place{"place1", "place2", "place3"}), nil)
 	if err != nil {
 		t.Errorf("SaveState() with multiple places failed: %v", err)
 	}
 
-	places, _, err := s.LoadState(context.Background(), "multiple_places")
+	m, _, err := s.LoadState(context.Background(), "multiple_places")
 	if err != nil {
 		t.Fatalf("LoadState() failed: %v", err)
 	}
+	places := m.Places()
 	if len(places) != 3 {
 		t.Errorf("LoadState() places count = %d, want 3", len(places))
 	}
@@ -176,7 +178,7 @@ func TestSQLiteStorage_EdgeCases(t *testing.T) {
 		"array":  []any{1, 2, 3},
 		"nested": map[string]any{"key": "value"},
 	}
-	err = s.SaveState(context.Background(), "complex_context", []workflow.Place{"draft"}, complexContext)
+	err = s.SaveState(context.Background(), "complex_context", workflow.NewMarking([]workflow.Place{"draft"}), complexContext)
 	if err != nil {
 		t.Errorf("SaveState() with complex context failed: %v", err)
 	}
@@ -223,14 +225,15 @@ func TestSQLiteStorage_WithTable(t *testing.T) {
 	// Test saving and loading with custom table
 	places := []workflow.Place{"draft"}
 	contextData := map[string]any{"key": "value"}
-	if err := s.SaveState(context.Background(), "wf_custom", places, contextData); err != nil {
+	if err := s.SaveState(context.Background(), "wf_custom", workflow.NewMarking(places), contextData); err != nil {
 		t.Fatalf("failed to save state: %v", err)
 	}
 
-	loadedPlaces, loadedContext, err := s.LoadState(context.Background(), "wf_custom")
+	loadedMarking, loadedContext, err := s.LoadState(context.Background(), "wf_custom")
 	if err != nil {
 		t.Fatalf("failed to load state: %v", err)
 	}
+	loadedPlaces := loadedMarking.Places()
 	if len(loadedPlaces) != 1 || loadedPlaces[0] != "draft" {
 		t.Errorf("unexpected places: %+v", loadedPlaces)
 	}
@@ -267,7 +270,7 @@ func TestSQLiteStorage_WithCustomFields(t *testing.T) {
 		"field2": 42,
 		"field3": 3.14,
 	}
-	if err := s.SaveState(context.Background(), "wf_custom_fields", []workflow.Place{"draft"}, contextData); err != nil {
+	if err := s.SaveState(context.Background(), "wf_custom_fields", workflow.NewMarking([]workflow.Place{"draft"}), contextData); err != nil {
 		t.Fatalf("failed to save state: %v", err)
 	}
 

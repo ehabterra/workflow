@@ -59,19 +59,19 @@ func Initialize(db *sql.DB, schema string) error {
 }
 
 // SaveState saves the workflow's current places and any configured custom fields from its context.
-func (s *SQLiteStorage) SaveState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any) error {
-	return s.saveState(ctx, s.db, id, places, ctxData)
+func (s *SQLiteStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any) error {
+	return s.saveState(ctx, s.db, id, marking, ctxData)
 }
 
 // SaveStateTx behaves like SaveState but writes through the provided transaction,
 // so it can be committed atomically with other writes (e.g. a history record).
 // See RunInTx.
-func (s *SQLiteStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, places []workflow.Place, ctxData map[string]any) error {
-	return s.saveState(ctx, tx, id, places, ctxData)
+func (s *SQLiteStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any) error {
+	return s.saveState(ctx, tx, id, marking, ctxData)
 }
 
-func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, places []workflow.Place, ctxData map[string]any) error {
-	stateJSON, err := json.Marshal(places)
+func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any) error {
+	stateJSON, err := json.Marshal(marking)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
@@ -118,18 +118,18 @@ func encodeValue(val any, present bool) any {
 	}
 }
 
-// LoadState loads the workflow's places and all configured custom fields into the context map.
-func (s *SQLiteStorage) LoadState(ctx context.Context, id string) ([]workflow.Place, map[string]any, error) {
+// LoadState loads the workflow's marking and all configured custom fields into the context map.
+func (s *SQLiteStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
 	return s.loadState(ctx, s.db, id)
 }
 
 // LoadStateTx behaves like LoadState but reads through the provided transaction,
 // so it observes the transaction's own uncommitted writes.
-func (s *SQLiteStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) ([]workflow.Place, map[string]any, error) {
+func (s *SQLiteStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) (workflow.Marking, map[string]any, error) {
 	return s.loadState(ctx, tx, id)
 }
 
-func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) ([]workflow.Place, map[string]any, error) {
+func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
 	columns := []string{s.stateColumn}
 	customFieldKeys := make([]string, 0, len(s.customFields))
 
@@ -169,8 +169,8 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) ([]
 		return nil, nil, fmt.Errorf("unexpected type for state column")
 	}
 
-	var places []workflow.Place
-	if err := json.Unmarshal(stateJSON, &places); err != nil {
+	marking, err := workflow.UnmarshalMarkingJSON(stateJSON)
+	if err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
@@ -232,7 +232,7 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) ([]
 		}
 	}
 
-	return places, context, nil
+	return marking, context, nil
 }
 
 // DeleteState removes a workflow's state from the database.
@@ -252,10 +252,10 @@ func (s *SQLiteStorage) deleteState(ctx context.Context, q querier, id string) e
 }
 
 // LoadVersionedState implements workflow.VersionedStorage. It loads the workflow's
-// places and context data along with its current optimistic-concurrency version.
+// marking and context data along with its current optimistic-concurrency version.
 // A never-saved workflow returns workflow.ErrWorkflowNotFound.
-func (s *SQLiteStorage) LoadVersionedState(ctx context.Context, id string) ([]workflow.Place, map[string]any, int64, error) {
-	places, ctxData, err := s.loadState(ctx, s.db, id)
+func (s *SQLiteStorage) LoadVersionedState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
+	marking, ctxData, err := s.loadState(ctx, s.db, id)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -265,26 +265,26 @@ func (s *SQLiteStorage) LoadVersionedState(ctx context.Context, id string) ([]wo
 	if err := s.db.QueryRowContext(ctx, query, id).Scan(&version); err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to load version: %w", err)
 	}
-	return places, ctxData, version, nil
+	return marking, ctxData, version, nil
 }
 
 // SaveVersionedState implements workflow.VersionedStorage. It saves the workflow
 // only if the stored version equals expectedVersion, returning the new version.
 // Pass expectedVersion 0 to create a new workflow. A mismatch returns
 // workflow.ErrConflict.
-func (s *SQLiteStorage) SaveVersionedState(ctx context.Context, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, s.db, id, places, ctxData, expectedVersion)
+func (s *SQLiteStorage) SaveVersionedState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion)
 }
 
 // SaveVersionedStateTx behaves like SaveVersionedState but writes through the
 // provided transaction, so a versioned state change and a history record can be
 // committed atomically. See RunInTx.
-func (s *SQLiteStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, tx, id, places, ctxData, expectedVersion)
+func (s *SQLiteStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
 }
 
-func (s *SQLiteStorage) saveVersionedState(ctx context.Context, q querier, id string, places []workflow.Place, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	stateJSON, err := json.Marshal(places)
+func (s *SQLiteStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	stateJSON, err := json.Marshal(marking)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal state: %w", err)
 	}
