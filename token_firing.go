@@ -84,6 +84,15 @@ func (w *Workflow) SelectTokens(place Place, pred TokenPredicate) []Token {
 //
 // The transition must have a single input place, and tokenID must currently be in
 // it. Guards are validated exactly as for ApplyTransition.
+//
+// Concurrency: token consumption is atomic. The token's presence is re-checked
+// under the write lock immediately before it is removed, so callers racing to
+// advance the same token cannot double-consume it — the loser gets
+// ErrTokenNotFound and no token is lost or duplicated. Guards, like the
+// whole-marking Apply methods, are evaluated on a snapshot taken before the final
+// lock (event listeners must run unlocked because they may re-enter the
+// workflow); a guard that depends on marking state beyond the token's own
+// presence may therefore observe a slightly stale view under concurrency.
 func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName string, tokenID TokenID) error {
 	w.mu.RLock()
 	definition := w.definition

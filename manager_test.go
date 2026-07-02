@@ -108,7 +108,7 @@ func TestManager_CreateWorkflow(t *testing.T) {
 	// Verify initial state was saved
 	m, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
-		t.Errorf("Failed to load workflow state: %v", err)
+		t.Fatalf("Failed to load workflow state: %v", err)
 	}
 	states := m.Places()
 	if len(states) != 1 || states[0] != initialPlace {
@@ -185,7 +185,7 @@ func TestManager_SaveWorkflow(t *testing.T) {
 	// Verify the state was saved
 	m, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
-		t.Errorf("Failed to load workflow state: %v", err)
+		t.Fatalf("Failed to load workflow state: %v", err)
 	}
 	states := m.Places()
 	if len(states) != 1 || states[0] != newPlace {

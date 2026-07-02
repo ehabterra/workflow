@@ -2,6 +2,8 @@ package workflow_test
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ehabterra/workflow"
@@ -152,6 +154,85 @@ func TestApplyTransitionForToken_MissingTokenErrors(t *testing.T) {
 	}
 	if err := wf.ApplyTransitionForToken(ctx, "start", "does-not-exist"); err == nil {
 		t.Fatal("expected error for missing token")
+	}
+}
+
+// Racing to advance the SAME token must consume it exactly once: one caller wins,
+// every other gets an error, and processing ends up with a single token.
+func TestApplyTransitionForToken_ConcurrentSameTokenConsumedOnce(t *testing.T) {
+	ctx := context.Background()
+	wf, err := workflow.NewWorkflow("batch", batchDef(t), "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.ClearPlace("pending") // drop the initial presence token so only token A remains
+	tok, err := wf.CreateToken("pending", workflow.TokenData{"order": "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 32
+	var wg sync.WaitGroup
+	var successes int64
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			if err := wf.ApplyTransitionForToken(ctx, "start", tok.ID()); err == nil {
+				atomic.AddInt64(&successes, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 successful fire, got %d", successes)
+	}
+	if got := wf.TokenCount("processing"); got != 1 {
+		t.Fatalf("processing token count = %d, want 1 (no duplication)", got)
+	}
+	if got := wf.TokenCount("pending"); got != 0 {
+		t.Fatalf("pending token count = %d, want 0", got)
+	}
+}
+
+// Racing to advance DIFFERENT tokens must move all of them, with none lost or
+// duplicated.
+func TestApplyTransitionForToken_ConcurrentDistinctTokens(t *testing.T) {
+	ctx := context.Background()
+	wf, err := workflow.NewWorkflow("batch", batchDef(t), "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.ClearPlace("pending")
+
+	const n = 50
+	datas := make([]workflow.TokenData, n)
+	for i := range datas {
+		datas[i] = workflow.TokenData{"i": i}
+	}
+	tokens, err := wf.CreateTokens("pending", datas)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for _, tok := range tokens {
+		go func(id workflow.TokenID) {
+			defer wg.Done()
+			if err := wf.ApplyTransitionForToken(ctx, "start", id); err != nil {
+				t.Errorf("advance %s: %v", id, err)
+			}
+		}(tok.ID())
+	}
+	wg.Wait()
+
+	if got := wf.TokenCount("processing"); got != n {
+		t.Fatalf("processing token count = %d, want %d", got, n)
+	}
+	if got := wf.TokenCount("pending"); got != 0 {
+		t.Fatalf("pending token count = %d, want 0", got)
 	}
 }
 

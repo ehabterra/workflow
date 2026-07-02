@@ -56,12 +56,18 @@ func main() {
 	agg := wf.AggregateTokens(nil, "amount")
 	fmt.Printf("Batch total = %.0f, avg = %.2f, max = %.0f\n", agg.Sum, agg.Avg, agg.Max)
 
-	// Apply a 10%% surcharge to high-value orders (>= 100), keeping their identity.
+	// Apply a 10% surcharge to high-value orders (>= 100), keeping their identity.
 	surcharged := wf.TransformTokens("pending",
-		func(t workflow.Token) bool { v, _ := t.Get("amount"); return v.(float64) >= 100 },
+		func(t workflow.Token) bool {
+			v, ok := t.Get("amount")
+			f, isFloat := v.(float64)
+			return ok && isFloat && f >= 100
+		},
 		func(t workflow.Token) workflow.TokenData {
 			d := t.Data()
-			d["amount"] = d["amount"].(float64) * 1.1
+			if f, ok := d["amount"].(float64); ok {
+				d["amount"] = f * 1.1
+			}
 			return d
 		},
 	)
