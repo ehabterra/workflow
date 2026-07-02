@@ -160,5 +160,18 @@ func (l *Loader) LoadWorkflow(config *Config, workflowID string) (*workflow.Work
 		wf.SetContext("_place_metadata", placeMetadata)
 	}
 
+	// Seed colored tokens declared in initial_tokens. Each listed place is set to
+	// exactly the declared tokens, so the initial presence token does not linger.
+	for place, tokenList := range config.Workflow.InitialTokens {
+		wf.ClearPlace(workflow.Place(place))
+		datas := make([]workflow.TokenData, 0, len(tokenList))
+		for _, d := range tokenList {
+			datas = append(datas, workflow.TokenData(d))
+		}
+		if _, err := wf.CreateTokens(workflow.Place(place), datas); err != nil {
+			return nil, fmt.Errorf("failed to seed initial tokens at place %q: %w", place, err)
+		}
+	}
+
 	return wf, nil
 }

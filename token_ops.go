@@ -70,3 +70,13 @@ func (w *Workflow) RemoveToken(place Place, id TokenID) error {
 	defer w.mu.Unlock()
 	return w.marking.RemoveToken(place, id)
 }
+
+// ClearPlace removes every token from place — both colored tokens and the
+// uncolored presence token a boolean workflow starts with. It is a no-op if the
+// place is already empty. This is useful when seeding a Colored Petri Net place
+// with an exact set of tokens (so the initial presence token does not linger).
+func (w *Workflow) ClearPlace(place Place) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = w.marking.RemovePlace(place) // no-op error when already empty
+}

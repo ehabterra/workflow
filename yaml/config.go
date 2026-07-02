@@ -21,6 +21,13 @@ type WorkflowConfig struct {
 	Metadata     map[string]any     `yaml:"metadata,omitempty"`
 	Places       []PlaceConfig      `yaml:"places,omitempty"`
 	Transitions  []TransitionConfig `yaml:"transitions"`
+
+	// InitialTokens seeds data-carrying (colored) tokens into places when the
+	// workflow is created, keyed by place name. Each entry is one token's data.
+	// A place listed here is seeded with exactly these tokens (any initial
+	// presence token is cleared first), turning the workflow into a Colored
+	// Petri Net source — for example a batch of orders at a "pending" place.
+	InitialTokens map[string][]map[string]any `yaml:"initial_tokens,omitempty"`
 }
 
 // PlaceConfig defines a place with optional metadata.
@@ -104,8 +111,9 @@ func LoadConfig(filename string) (*Config, error) {
 //
 // Decoding is strict: any key that is not part of the schema causes an error
 // (reported with its line number) rather than being silently ignored. This
-// prevents typos and not-yet-implemented features (for example the planned
-// CPN token keys) from being accepted and then quietly dropped.
+// prevents typos and not-yet-implemented features from being accepted and then
+// quietly dropped. Colored Petri Net tokens are declared with the supported
+// initial_tokens key (see WorkflowConfig.InitialTokens).
 func LoadConfigFromBytes(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -185,6 +193,13 @@ func (c *Config) Validate() error {
 			if !placeSet[to] {
 				return fmt.Errorf("transition '%s' references undefined place '%s'", trans.Name, to)
 			}
+		}
+	}
+
+	// Validate initial_tokens reference defined places.
+	for place := range c.Workflow.InitialTokens {
+		if !placeSet[place] {
+			return fmt.Errorf("initial_tokens references undefined place '%s'", place)
 		}
 	}
 
