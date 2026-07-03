@@ -224,6 +224,15 @@ func (s *PostgresStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, 
 	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
 }
 
+// SaveVersionedStateInTx implements workflow.TransactionalStorage: the versioned
+// save and every side effect run in one transaction, committing only if all
+// succeed. Effects receive the *sql.Tx (as an any).
+func (s *PostgresStorage) SaveVersionedStateInTx(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, effects ...workflow.TxSideEffect) (int64, error) {
+	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
+		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+	})
+}
+
 func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
 	stateJSON, err := json.Marshal(marking)
 	if err != nil {

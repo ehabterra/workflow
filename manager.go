@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"time"
 )
 
 // defFingerprintKey is the reserved context key under which the Manager persists
@@ -20,7 +22,11 @@ const defFingerprintKey = "__workflow_def_fingerprint"
 // were recorded.
 type DefinitionMigrationFunc func(ctx context.Context, id, storedFingerprint, currentFingerprint string) error
 
-// Manager handles workflow instances and their persistence
+// Manager handles workflow instances and their persistence.
+//
+// The Manager reserves the context key "__workflow_def_fingerprint" for the
+// definition fingerprint it stamps on every save: a user value stored under
+// that key is overwritten on save and stripped on load.
 type Manager struct {
 	registry *Registry
 	storage  Storage
@@ -78,6 +84,12 @@ func NewManager(registry *Registry, storage Storage, opts ...ManagerOption) *Man
 func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
 	if m.useCache {
 		if wf, err := m.registry.Workflow(id); err == nil {
+			// The definition check must hold on cache hits too: a cached
+			// instance built from a different definition is exactly as unsafe
+			// as loading a persisted one against it.
+			if err := checkCachedDefinition(wf, definition); err != nil {
+				return nil, err
+			}
 			return wf, nil
 		}
 	}
@@ -95,27 +107,50 @@ func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Defin
 	return wf, nil
 }
 
+// checkCachedDefinition verifies a registry-cached instance was built from the
+// same definition the caller supplied (pointer fast path, fingerprint slow
+// path). Unlike a storage load there is no migration path here — the cached
+// instance is live, so a mismatch is always an error.
+func checkCachedDefinition(wf *Workflow, definition *Definition) error {
+	cached := wf.Definition()
+	if cached == definition {
+		return nil
+	}
+	if cached != nil && definition != nil && cached.Fingerprint() == definition.Fingerprint() {
+		return nil
+	}
+	return fmt.Errorf("%w: cached instance %q was built from a different definition", ErrDefinitionMismatch, wf.Name())
+}
+
 // loadFromStorage builds a workflow instance from persisted state without
-// touching the registry. It validates every loaded place against the definition
-// and verifies the definition fingerprint. Execute uses it so each retry runs
-// against fresh, validated state.
+// touching the registry. It verifies the definition fingerprint (consulting the
+// migration handler on mismatch) and then validates every loaded place against
+// the definition. Execute uses it so each retry runs against fresh, validated
+// state.
 func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
-	// Load state and context from storage, using the versioned path when the
-	// backend supports optimistic concurrency so we can track the loaded version.
-	var (
-		loaded    Marking
-		wfContext map[string]any
-		version   int64
-		err       error
-	)
-	if vs, ok := m.storage.(VersionedStorage); ok {
-		loaded, wfContext, version, err = vs.LoadVersionedState(ctx, id)
-	} else {
-		loaded, wfContext, err = m.storage.LoadState(ctx, id)
-	}
+	loaded, wfContext, version, err := m.readState(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load workflow state: %w", err)
+		return nil, err
 	}
+
+	// Verify the definition fingerprint FIRST — before validating places — so a
+	// mismatch consults the migration handler even when the stale marking
+	// references places the new definition no longer has (the very case
+	// migration exists for). After the handler approves, reload: a handler that
+	// migrated the persisted state expects the load to observe its rewrite, not
+	// clobber it with the pre-migration snapshot on the next save.
+	migrated, err := m.checkFingerprint(ctx, id, definition, wfContext)
+	if err != nil {
+		return nil, err
+	}
+	if migrated {
+		if loaded, wfContext, version, err = m.readState(ctx, id); err != nil {
+			return nil, fmt.Errorf("reloading after definition migration: %w", err)
+		}
+	}
+	// Strip the fingerprint so it never reaches the workflow's user-visible
+	// context or guard environment.
+	delete(wfContext, defFingerprintKey)
 
 	// Validate that the loaded marking has at least one place.
 	places := loaded.Places()
@@ -132,13 +167,6 @@ func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *De
 		}
 	}
 
-	// Verify the definition fingerprint, then strip it from the context so it
-	// never reaches the workflow's user-visible context or guard environment.
-	if err := m.checkFingerprint(ctx, id, definition, wfContext); err != nil {
-		return nil, err
-	}
-	delete(wfContext, defFingerprintKey)
-
 	wf, err := NewWorkflow(id, definition, places[0])
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow: %w", err)
@@ -154,22 +182,44 @@ func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *De
 	return wf, nil
 }
 
+// readState loads a workflow's persisted marking, context, and version, using
+// the versioned path when the backend supports optimistic concurrency.
+func (m *Manager) readState(ctx context.Context, id string) (Marking, map[string]any, int64, error) {
+	if vs, ok := m.storage.(VersionedStorage); ok {
+		loaded, wfContext, version, err := vs.LoadVersionedState(ctx, id)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("failed to load workflow state: %w", err)
+		}
+		return loaded, wfContext, version, nil
+	}
+	loaded, wfContext, err := m.storage.LoadState(ctx, id)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to load workflow state: %w", err)
+	}
+	return loaded, wfContext, 0, nil
+}
+
 // checkFingerprint compares the stored definition fingerprint against the
 // supplied definition. A missing stored fingerprint (pre-fingerprint instance)
-// passes. A mismatch is an error unless a migration handler approves it.
-func (m *Manager) checkFingerprint(ctx context.Context, id string, definition *Definition, wfContext map[string]any) error {
+// passes. A mismatch is an error unless a migration handler approves it; the
+// returned bool reports whether a handler was consulted and approved (the
+// caller then reloads state, since the handler may have rewritten it).
+func (m *Manager) checkFingerprint(ctx context.Context, id string, definition *Definition, wfContext map[string]any) (migrated bool, err error) {
 	stored, ok := wfContext[defFingerprintKey].(string)
 	if !ok || stored == "" {
-		return nil // legacy instance saved before fingerprints; nothing to compare
+		return false, nil // legacy instance saved before fingerprints; nothing to compare
 	}
 	current := definition.Fingerprint()
 	if stored == current {
-		return nil
+		return false, nil
 	}
 	if m.onDefinitionMismatch != nil {
-		return m.onDefinitionMismatch(ctx, id, stored, current)
+		if err := m.onDefinitionMismatch(ctx, id, stored, current); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return fmt.Errorf("%w: instance %q stored fingerprint %s, definition fingerprint %s", ErrDefinitionMismatch, id, stored, current)
+	return false, fmt.Errorf("%w: instance %q stored fingerprint %s, definition fingerprint %s", ErrDefinitionMismatch, id, stored, current)
 }
 
 // contextForSave returns a copy of ctxData stamped with the definition
@@ -207,6 +257,54 @@ func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) err
 	return m.storage.SaveState(ctx, id, marking, ctxData)
 }
 
+// ExecuteOption configures a single Manager.Execute call.
+type ExecuteOption func(*executeConfig)
+
+type executeConfig struct {
+	effects     []TxSideEffect
+	maxAttempts int
+}
+
+// WithMaxRetries sets how many times Execute retries the whole
+// load-fn-save cycle when the save hits an optimistic-concurrency conflict.
+// The default is 5. Raise it for instances with many concurrent writers.
+func WithMaxRetries(attempts int) ExecuteOption {
+	return func(c *executeConfig) {
+		if attempts > 0 {
+			c.maxAttempts = attempts
+		}
+	}
+}
+
+// WithTxSideEffect registers a write committed atomically with the state save —
+// the crash-consistent way to append an audit/history record or an outbox row
+// for a firing. Requires the Manager's storage to implement
+// TransactionalStorage (the SQLite and Postgres backends do); Execute fails
+// otherwise rather than silently losing atomicity.
+//
+// Effects registered here differ from listener side effects: an effect shares
+// the save's transaction (state and effect commit or roll back together), while
+// a listener's external side effects happen immediately and are not undone by a
+// later conflict or crash. The canonical use is a history record built inside
+// fn (capturing the fired transition) and written by the effect:
+//
+//	var record *history.TransitionRecord
+//	err := mgr.Execute(ctx, id, def,
+//	    func(wf *workflow.Workflow) error {
+//	        if err := wf.ApplyTransition("approve"); err != nil {
+//	            return err
+//	        }
+//	        record = &history.TransitionRecord{WorkflowID: id, Transition: "approve", ...}
+//	        return nil
+//	    },
+//	    workflow.WithTxSideEffect(func(ctx context.Context, tx any) error {
+//	        return hist.SaveTransitionTx(ctx, tx.(*sql.Tx), record)
+//	    }),
+//	)
+func WithTxSideEffect(effect TxSideEffect) ExecuteOption {
+	return func(c *executeConfig) { c.effects = append(c.effects, effect) }
+}
+
 // Execute atomically advances a persisted instance: it loads the instance fresh
 // from storage, runs fn against it (fn typically applies one or more
 // transitions), and saves it back under optimistic concurrency. If the save
@@ -220,14 +318,46 @@ func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) err
 // reloaded state; a transition that is no longer enabled on reload returns
 // ErrNotEnabled from within fn, which Execute surfaces to the caller.
 //
-// Note on side effects: fn (and any listeners it triggers) may run more than
+// Side-effect semantics: fn (and any listeners it triggers) may run more than
 // once across retries, and a listener's external side effects are not rolled
-// back by a later conflict. Make side effects idempotent, or perform them after
-// Execute returns.
-func (m *Manager) Execute(ctx context.Context, id string, definition *Definition, fn func(*Workflow) error) error {
-	const maxAttempts = 5
+// back by a later conflict — make them idempotent, or perform them after
+// Execute returns. Writes that must be crash-consistent with the state change
+// (history records, outbox rows) belong in a WithTxSideEffect option, which
+// commits them in the same transaction as the save.
+func (m *Manager) Execute(ctx context.Context, id string, definition *Definition, fn func(*Workflow) error, opts ...ExecuteOption) error {
+	var cfg executeConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	// Atomic side effects need transactional support; fail loudly rather than
+	// silently dropping the atomicity guarantee.
+	var ts TransactionalStorage
+	if len(cfg.effects) > 0 {
+		var ok bool
+		if ts, ok = m.storage.(TransactionalStorage); !ok {
+			return fmt.Errorf("WithTxSideEffect requires a TransactionalStorage backend: %w", errors.ErrUnsupported)
+		}
+	}
+
+	maxAttempts := cfg.maxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
 	var lastErr error
-	for range maxAttempts {
+	for attempt := range maxAttempts {
+		// A conflict storm must not outlive the caller: honor cancellation even
+		// if the storage backend ignores ctx.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Back off with jitter before each retry so N concurrent writers on one
+		// instance de-synchronize instead of starving each other out.
+		if attempt > 0 {
+			jitter := time.Duration(rand.Int64N(int64(4 * time.Millisecond)))
+			time.Sleep(time.Duration(attempt)*2*time.Millisecond + jitter)
+		}
+
 		wf, err := m.loadFromStorage(ctx, id, definition)
 		if err != nil {
 			return err
@@ -237,17 +367,25 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		}
 		marking, ctxData := wf.snapshotState()
 		ctxData = contextForSave(ctxData, definition)
-		if vs, ok := m.storage.(VersionedStorage); ok {
-			if _, err := vs.SaveVersionedState(ctx, id, marking, ctxData, wf.Version()); err != nil {
-				if errors.Is(err, ErrConflict) {
-					lastErr = err
-					continue // reload fresh and retry
-				}
-				return err
+
+		switch {
+		case ts != nil:
+			_, err = ts.SaveVersionedStateInTx(ctx, id, marking, ctxData, wf.Version(), cfg.effects...)
+		default:
+			if vs, ok := m.storage.(VersionedStorage); ok {
+				_, err = vs.SaveVersionedState(ctx, id, marking, ctxData, wf.Version())
+			} else {
+				err = m.storage.SaveState(ctx, id, marking, ctxData)
 			}
-		} else if err := m.storage.SaveState(ctx, id, marking, ctxData); err != nil {
+		}
+		if err != nil {
+			if errors.Is(err, ErrConflict) {
+				lastErr = err
+				continue // reload fresh and retry
+			}
 			return err
 		}
+
 		// Keep the registry from serving a now-stale cached copy.
 		if m.useCache {
 			_ = m.registry.RemoveWorkflow(id)
@@ -261,11 +399,6 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 // storage. With registry caching disabled (WithoutRegistryCache) it always
 // loads fresh.
 func (m *Manager) GetWorkflow(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
-	if m.useCache {
-		if wf, err := m.registry.Workflow(id); err == nil {
-			return wf, nil
-		}
-	}
 	return m.LoadWorkflow(ctx, id, definition)
 }
 
@@ -319,11 +452,12 @@ func (m *Manager) EvictWorkflow(id string) {
 
 // ListWorkflowIDs returns the IDs of persisted workflows, ordered by ID, using
 // the backend's ListableStorage support. It returns an error wrapping
-// ErrInvalidWorkflow if the storage backend does not implement ListableStorage.
+// errors.ErrUnsupported if the storage backend does not implement
+// ListableStorage.
 func (m *Manager) ListWorkflowIDs(ctx context.Context, opts ListOptions) ([]string, error) {
 	ls, ok := m.storage.(ListableStorage)
 	if !ok {
-		return nil, fmt.Errorf("%w: storage backend does not implement ListableStorage", ErrInvalidWorkflow)
+		return nil, fmt.Errorf("storage backend does not implement ListableStorage: %w", errors.ErrUnsupported)
 	}
 	return ls.ListIDs(ctx, opts)
 }

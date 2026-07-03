@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/ehabterra/workflow"
 )
 
 // querier abstracts the query-execution methods shared by *sql.DB and *sql.Tx,
@@ -14,6 +16,30 @@ type querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// saveVersionedInTx runs a versioned state save and the given side effects in
+// one RunInTx transaction, returning the new version. It backs the
+// workflow.TransactionalStorage implementations of both SQL backends.
+func saveVersionedInTx(ctx context.Context, db *sql.DB, effects []workflow.TxSideEffect, save func(*sql.Tx) (int64, error)) (int64, error) {
+	var newVersion int64
+	err := RunInTx(ctx, db, func(tx *sql.Tx) error {
+		v, err := save(tx)
+		if err != nil {
+			return err
+		}
+		newVersion = v
+		for _, effect := range effects {
+			if err := effect(ctx, tx); err != nil {
+				return fmt.Errorf("tx side effect: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return newVersion, nil
 }
 
 // scanIDs collects the single-column string results of an ID query, closing the

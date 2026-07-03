@@ -213,6 +213,16 @@ func Run(t *testing.T, newStore Factory) {
 		if want := []string{"c"}; !reflect.DeepEqual(page2, want) {
 			t.Fatalf("ListIDs(offset 2) = %v, want %v", page2, want)
 		}
+
+		// Offset without a limit exercises the engine-specific "no limit"
+		// clause (SQLite requires LIMIT -1 before OFFSET; Postgres does not).
+		rest, err := ls.ListIDs(ctx, workflow.ListOptions{Offset: 1})
+		if err != nil {
+			t.Fatalf("ListIDs(offset only): %v", err)
+		}
+		if want := []string{"b", "c"}; !reflect.DeepEqual(rest, want) {
+			t.Fatalf("ListIDs(offset only) = %v, want %v", rest, want)
+		}
 	})
 
 	// Versioning conformance, only if the backend supports it.

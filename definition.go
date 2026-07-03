@@ -55,7 +55,9 @@ func NewDefinition(places []Place, transitions []Transition) (*Definition, error
 // guard expression string (as stored in the "guard" metadata). It is order-
 // independent — places and transitions are canonically sorted first — so two
 // definitions built in different orders but describing the same net share a
-// fingerprint.
+// fingerprint. Every component is length-prefixed before hashing, so no choice
+// of place or transition name (including separator-looking characters) can make
+// two structurally different definitions collide.
 //
 // The Manager stamps this on each persisted instance and compares it on load to
 // catch a definition changing under running instances (see ErrDefinitionMismatch).
@@ -69,6 +71,8 @@ func (d *Definition) Fingerprint() string {
 	}
 	slices.Sort(places)
 
+	// Serialize each transition into an unambiguous record (length-prefixed
+	// fields), then sort the records for order independence.
 	transitions := make([]string, len(d.Transitions))
 	for i := range d.Transitions {
 		t := &d.Transitions[i]
@@ -80,22 +84,37 @@ func (d *Definition) Fingerprint() string {
 		if g, ok := t.Metadata("guard"); ok {
 			guard, _ = g.(string)
 		}
-		// Field and record separators are bytes that cannot appear in a place or
-		// transition name so the joined form is unambiguous.
-		transitions[i] = strings.Join([]string{
-			t.Name(),
-			strings.Join(from, ","),
-			strings.Join(to, ","),
-			guard,
-		}, "\x1f")
+		var rec strings.Builder
+		writeLenPrefixed(&rec, t.Name())
+		writeLenPrefixedList(&rec, from)
+		writeLenPrefixedList(&rec, to)
+		writeLenPrefixed(&rec, guard)
+		transitions[i] = rec.String()
 	}
 	slices.Sort(transitions)
 
 	h := sha256.New()
-	h.Write([]byte(strings.Join(places, ",")))
-	h.Write([]byte("\x1e"))
-	h.Write([]byte(strings.Join(transitions, "\x1e")))
+	var buf strings.Builder
+	writeLenPrefixedList(&buf, places)
+	writeLenPrefixedList(&buf, transitions)
+	h.Write([]byte(buf.String()))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeLenPrefixed writes s preceded by its byte length ("3:abc"), making the
+// concatenation of several values unambiguous regardless of their content.
+func writeLenPrefixed(b *strings.Builder, s string) {
+	fmt.Fprintf(b, "%d:", len(s))
+	b.WriteString(s)
+}
+
+// writeLenPrefixedList writes the element count followed by each element
+// length-prefixed, so lists of different shapes can never serialize equally.
+func writeLenPrefixedList(b *strings.Builder, items []string) {
+	fmt.Fprintf(b, "#%d;", len(items))
+	for _, s := range items {
+		writeLenPrefixed(b, s)
+	}
 }
 
 func placeStrings(places []Place) []string {

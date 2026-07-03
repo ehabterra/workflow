@@ -258,6 +258,8 @@ func TestManager_Execute_NoLostUpdates(t *testing.T) {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 
+	// More workers than the default retry budget: the backoff plus a raised
+	// retry cap must let every writer land.
 	const workers = 8
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -271,7 +273,7 @@ func TestManager_Execute_NoLostUpdates(t *testing.T) {
 				}
 				wf.SetContext("count", n+1)
 				return nil
-			})
+			}, workflow.WithMaxRetries(3*workers))
 			if err != nil {
 				t.Errorf("Execute: %v", err)
 			}
@@ -331,8 +333,127 @@ func TestManager_ListWorkflowIDs(t *testing.T) {
 	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 
 	// memStore does not implement ListableStorage, so this surfaces the error.
-	if _, err := mgr.ListWorkflowIDs(ctx, workflow.ListOptions{}); !errors.Is(err, workflow.ErrInvalidWorkflow) {
-		t.Fatalf("ListWorkflowIDs on non-listable store err = %v, want ErrInvalidWorkflow", err)
+	if _, err := mgr.ListWorkflowIDs(ctx, workflow.ListOptions{}); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("ListWorkflowIDs on non-listable store err = %v, want errors.ErrUnsupported", err)
 	}
 	_ = def
+}
+
+// Structurally different definitions must never share a fingerprint, even with
+// separator-looking characters in place names (regression: comma-joined
+// components made places ["a,b"] collide with places ["a","b"]).
+func TestDefinitionFingerprint_NoSeparatorCollision(t *testing.T) {
+	d1, err := workflow.NewDefinition(
+		[]workflow.Place{"a,b", "c"},
+		[]workflow.Transition{*workflow.MustNewTransition("t", []workflow.Place{"a,b"}, []workflow.Place{"c"})},
+	)
+	if err != nil {
+		t.Fatalf("NewDefinition(d1): %v", err)
+	}
+	d2, err := workflow.NewDefinition(
+		[]workflow.Place{"a", "b", "c"},
+		[]workflow.Transition{*workflow.MustNewTransition("t", []workflow.Place{"a", "b"}, []workflow.Place{"c"})},
+	)
+	if err != nil {
+		t.Fatalf("NewDefinition(d2): %v", err)
+	}
+	if d1.Fingerprint() == d2.Fingerprint() {
+		t.Fatal("structurally different definitions share a fingerprint (separator collision)")
+	}
+}
+
+// The migration handler must be consulted even when the stale marking
+// references a place the new definition no longer has — that is the primary
+// case migration exists for — and the load must observe state the handler
+// rewrites (regression: place validation ran before the fingerprint check, and
+// the pre-migration snapshot was used after approval).
+func TestManager_DefinitionMigration_RemovedPlaceAndReload(t *testing.T) {
+	store := newMemStore()
+	ctx := context.Background()
+
+	v1, err := workflow.NewDefinition(
+		[]workflow.Place{"a", "b"},
+		[]workflow.Transition{*workflow.MustNewTransition("go", []workflow.Place{"a"}, []workflow.Place{"b"})},
+	)
+	if err != nil {
+		t.Fatalf("NewDefinition(v1): %v", err)
+	}
+	// v2 renames b -> done.
+	v2, err := workflow.NewDefinition(
+		[]workflow.Place{"a", "done"},
+		[]workflow.Transition{*workflow.MustNewTransition("go", []workflow.Place{"a"}, []workflow.Place{"done"})},
+	)
+	if err != nil {
+		t.Fatalf("NewDefinition(v2): %v", err)
+	}
+
+	// Persist an instance resting at v1's "b".
+	mgr1 := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	if _, err := mgr1.CreateWorkflow(ctx, "wf", v1, "a"); err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if err := mgr1.Execute(ctx, "wf", v1, func(wf *workflow.Workflow) error {
+		return wf.ApplyTransition("go")
+	}); err != nil {
+		t.Fatalf("Execute(go): %v", err)
+	}
+
+	// Without a handler: mismatch error (not a place-validation error skipping
+	// the handler path).
+	if _, err := mgr1.LoadWorkflow(ctx, "wf", v2); !errors.Is(err, workflow.ErrDefinitionMismatch) {
+		t.Fatalf("load v2 without handler err = %v, want ErrDefinitionMismatch", err)
+	}
+
+	// With a handler that actually migrates the persisted marking b -> done:
+	// the handler must be consulted, and the load must see the rewrite.
+	called := false
+	migrating := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache(),
+		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
+			called = true
+			_, _, version, err := store.LoadVersionedState(ctx, id)
+			if err != nil {
+				return err
+			}
+			_, err = store.SaveVersionedState(ctx, id,
+				workflow.NewMarking([]workflow.Place{"done"}),
+				map[string]any{"__workflow_def_fingerprint": current}, version)
+			return err
+		}))
+	wf, err := migrating.LoadWorkflow(ctx, "wf", v2)
+	if err != nil {
+		t.Fatalf("load v2 with migrating handler: %v", err)
+	}
+	if !called {
+		t.Fatal("migration handler was not consulted for the removed-place case")
+	}
+	if !wf.Marking().HasPlace("done") {
+		t.Fatalf("marking after migration = %v, want [done] (handler rewrite observed)", wf.CurrentPlaces())
+	}
+}
+
+// A cache hit must apply the same definition check as a storage load.
+func TestManager_CachedInstance_DefinitionMismatch(t *testing.T) {
+	store := newMemStore()
+	ctx := context.Background()
+	def := abDef(t)
+
+	mgr := workflow.NewManager(workflow.NewRegistry(), store) // caching ON
+	if _, err := mgr.CreateWorkflow(ctx, "wf", def, "a"); err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+
+	other, err := workflow.NewDefinition(
+		[]workflow.Place{"x", "y"},
+		[]workflow.Transition{*workflow.MustNewTransition("t", []workflow.Place{"x"}, []workflow.Place{"y"})},
+	)
+	if err != nil {
+		t.Fatalf("NewDefinition(other): %v", err)
+	}
+	if _, err := mgr.GetWorkflow(ctx, "wf", other); !errors.Is(err, workflow.ErrDefinitionMismatch) {
+		t.Fatalf("cached load with different definition err = %v, want ErrDefinitionMismatch", err)
+	}
+	// The matching definition still loads fine from cache.
+	if _, err := mgr.GetWorkflow(ctx, "wf", def); err != nil {
+		t.Fatalf("cached load with same definition: %v", err)
+	}
 }

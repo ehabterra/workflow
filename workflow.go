@@ -112,6 +112,29 @@ type ListableStorage interface {
 	ListIDs(ctx context.Context, opts ListOptions) ([]string, error)
 }
 
+// TxSideEffect is a write executed atomically with a versioned state save —
+// typically an audit/history record or an outbox row. The tx argument is
+// backend-specific: the SQL backends pass a *sql.Tx. An effect that returns an
+// error aborts the whole transaction, so the state change and the effect either
+// both commit or both roll back.
+type TxSideEffect func(ctx context.Context, tx any) error
+
+// TransactionalStorage is an optional interface a VersionedStorage backend may
+// implement to compose a versioned save with additional writes in one atomic
+// transaction. It is what makes "fire a transition + append its history record"
+// crash-consistent: a process dying between the two can never leave the state
+// and the audit log disagreeing. Manager.Execute uses it when side effects are
+// registered via WithTxSideEffect.
+type TransactionalStorage interface {
+	VersionedStorage
+
+	// SaveVersionedStateInTx behaves like SaveVersionedState but runs the save
+	// and every side effect inside a single transaction, committing only if all
+	// succeed. Effects run in order after the state write; each receives the
+	// backend-specific transaction handle.
+	SaveVersionedStateInTx(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, effects ...TxSideEffect) (newVersion int64, err error)
+}
+
 // NewWorkflow creates a workflow instance starting at initialPlace.
 //
 // Every workflow's marking is a Colored Petri Net marking; a plain workflow just
