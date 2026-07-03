@@ -21,6 +21,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ehabterra/workflow"
 )
@@ -229,6 +230,226 @@ func Run(t *testing.T, newStore Factory) {
 	if _, ok := newStore(t).(workflow.VersionedStorage); ok {
 		runVersioned(t, newStore)
 	}
+
+	// Due-index conformance, only if the backend supports it.
+	if _, ok := newStore(t).(workflow.DueStorage); ok {
+		runDue(t, newStore)
+	}
+}
+
+// runDue exercises the workflow.DueStorage contract: the maintained next-due
+// index and the ListDue fleet scan behind Manager.FireDue.
+func runDue(t *testing.T, newStore Factory) {
+	t.Helper()
+
+	dueStore := func(t *testing.T) workflow.DueStorage {
+		ds, ok := newStore(t).(workflow.DueStorage)
+		if !ok {
+			t.Fatal("store does not implement DueStorage")
+		}
+		return ds
+	}
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	saveDue := func(t *testing.T, ds workflow.DueStorage, id string, due *time.Time) int64 {
+		t.Helper()
+		v, err := ds.SaveVersionedStateWithDue(context.Background(), id, mk("s"), nil, 0, due)
+		if err != nil {
+			t.Fatalf("SaveVersionedStateWithDue(%s): %v", id, err)
+		}
+		return v
+	}
+
+	t.Run("Due/ListDueOrdersFiltersAndPages", func(t *testing.T) {
+		ctx := context.Background()
+		ds := dueStore(t)
+
+		d1, d2, d3 := base.Add(1*time.Hour), base.Add(2*time.Hour), base.Add(3*time.Hour)
+		saveDue(t, ds, "c", &d3)
+		saveDue(t, ds, "a", &d1)
+		saveDue(t, ds, "b", &d2)
+		saveDue(t, ds, "notimer", nil) // no running timer → never listed
+
+		// before = d2 includes only a and b, ordered by due ascending.
+		if got, err := ds.ListDue(ctx, d2, 0); err != nil {
+			t.Fatalf("ListDue(d2): %v", err)
+		} else if want := []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue(d2) = %v, want %v", got, want)
+		}
+
+		// Far in the future lists every timer-bearing instance, ordered, and never
+		// the nil-due one.
+		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 0); err != nil {
+			t.Fatalf("ListDue(future): %v", err)
+		} else if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue(future) = %v, want %v", got, want)
+		}
+
+		// A limit pages the ascending order.
+		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 2); err != nil {
+			t.Fatalf("ListDue(limit 2): %v", err)
+		} else if want := []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue(limit 2) = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("Due/BoundaryIsInclusive", func(t *testing.T) {
+		ctx := context.Background()
+		ds := dueStore(t)
+		d := base.Add(time.Hour)
+		saveDue(t, ds, "wf", &d)
+
+		if got, err := ds.ListDue(ctx, d.Add(-time.Nanosecond), 0); err != nil {
+			t.Fatalf("ListDue(just before): %v", err)
+		} else if len(got) != 0 {
+			t.Fatalf("ListDue(just before deadline) = %v, want none", got)
+		}
+		if got, err := ds.ListDue(ctx, d, 0); err != nil {
+			t.Fatalf("ListDue(at): %v", err)
+		} else if want := []string{"wf"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue(at deadline) = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("Due/ClearingDueRemovesFromIndex", func(t *testing.T) {
+		ctx := context.Background()
+		ds := dueStore(t)
+		d := base.Add(time.Hour)
+		v := saveDue(t, ds, "wf", &d)
+
+		// Re-save with a nil due (as FireDue does when a timer stops running):
+		// the instance must drop out of the index.
+		if _, err := ds.SaveVersionedStateWithDue(ctx, "wf", mk("done"), nil, v, nil); err != nil {
+			t.Fatalf("clear due: %v", err)
+		}
+		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 0); err != nil {
+			t.Fatalf("ListDue after clear: %v", err)
+		} else if len(got) != 0 {
+			t.Fatalf("ListDue after clearing due = %v, want none", got)
+		}
+	})
+
+	t.Run("Due/PlainVersionedSavePreservesDue", func(t *testing.T) {
+		ctx := context.Background()
+		ds := dueStore(t)
+		d := base.Add(time.Hour)
+		v := saveDue(t, ds, "wf", &d)
+
+		// A plain (non-due) versioned save must leave the due column untouched, so
+		// the instance still appears in the index.
+		if _, err := ds.SaveVersionedState(ctx, "wf", mk("s2"), nil, v); err != nil {
+			t.Fatalf("plain save: %v", err)
+		}
+		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 0); err != nil {
+			t.Fatalf("ListDue after plain save: %v", err)
+		} else if want := []string{"wf"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue after plain save = %v, want %v (due preserved)", got, want)
+		}
+	})
+
+	// Transactional due-index conformance, only if the backend supports it.
+	if _, ok := newStore(t).(workflow.TransactionalDueStorage); ok {
+		runTxDue(t, newStore, base)
+	}
+}
+
+// runTxDue exercises workflow.TransactionalDueStorage: SaveVersionedStateInTxWithDue
+// must commit the state change, the due-index update, and every side effect as one
+// atom — or roll all of them back together.
+func runTxDue(t *testing.T, newStore Factory, base time.Time) {
+	t.Helper()
+
+	txDueStore := func(t *testing.T) workflow.TransactionalDueStorage {
+		tds, ok := newStore(t).(workflow.TransactionalDueStorage)
+		if !ok {
+			t.Fatal("store does not implement TransactionalDueStorage")
+		}
+		return tds
+	}
+	far := base.Add(1000 * time.Hour)
+
+	t.Run("Due/InTx/CommitsDueWithEffect", func(t *testing.T) {
+		ctx := context.Background()
+		tds := txDueStore(t)
+		d := base.Add(time.Hour)
+		effectRan := false
+		v, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d,
+			func(ctx context.Context, tx any) error { effectRan = true; return nil })
+		if err != nil {
+			t.Fatalf("SaveVersionedStateInTxWithDue: %v", err)
+		}
+		if v != 1 {
+			t.Fatalf("version = %d, want 1", v)
+		}
+		if !effectRan {
+			t.Fatal("side effect did not run")
+		}
+		// State, due, and effect all committed atomically: the instance is indexed.
+		if got, err := tds.ListDue(ctx, far, 0); err != nil {
+			t.Fatalf("ListDue: %v", err)
+		} else if want := []string{"wf"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue = %v, want %v (due committed with effect)", got, want)
+		}
+	})
+
+	t.Run("Due/InTx/NilDueRemovesFromIndex", func(t *testing.T) {
+		ctx := context.Background()
+		tds := txDueStore(t)
+		d := base.Add(time.Hour)
+		v, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d)
+		if err != nil {
+			t.Fatalf("initial in-tx save: %v", err)
+		}
+		// A nil due (timer stopped) clears the index inside the transaction.
+		if _, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("done"), nil, v, nil); err != nil {
+			t.Fatalf("clear due in tx: %v", err)
+		}
+		if got, err := tds.ListDue(ctx, far, 0); err != nil {
+			t.Fatalf("ListDue: %v", err)
+		} else if len(got) != 0 {
+			t.Fatalf("ListDue after clearing due = %v, want none", got)
+		}
+	})
+
+	t.Run("Due/InTx/VersionConflictLeavesDueUntouched", func(t *testing.T) {
+		ctx := context.Background()
+		tds := txDueStore(t)
+		d := base.Add(time.Hour)
+		if _, err := tds.SaveVersionedStateWithDue(ctx, "wf", mk("s"), nil, 0, &d); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		// A stale expected version conflicts; the proposed new due must not apply.
+		newDue := base.Add(500 * time.Hour)
+		if _, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("x"), nil, 99, &newDue); !errors.Is(err, workflow.ErrConflict) {
+			t.Fatalf("stale in-tx save err = %v, want ErrConflict", err)
+		}
+		// The original due is intact: listed at d, not shifted out to newDue.
+		if got, err := tds.ListDue(ctx, d, 0); err != nil {
+			t.Fatalf("ListDue(d): %v", err)
+		} else if want := []string{"wf"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ListDue(d) = %v, want %v (original due untouched)", got, want)
+		}
+	})
+
+	t.Run("Due/InTx/EffectErrorRollsBackDueWrite", func(t *testing.T) {
+		ctx := context.Background()
+		tds := txDueStore(t)
+		d := base.Add(time.Hour)
+		boom := errors.New("effect boom")
+		if _, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d,
+			func(ctx context.Context, tx any) error { return boom }); err == nil {
+			t.Fatal("SaveVersionedStateInTxWithDue with failing effect: want error, got nil")
+		}
+		// The whole transaction rolled back: no row, and nothing in the index.
+		if _, _, _, err := tds.LoadVersionedState(ctx, "wf"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
+			t.Fatalf("LoadVersionedState after rollback err = %v, want ErrWorkflowNotFound", err)
+		}
+		if got, err := tds.ListDue(ctx, far, 0); err != nil {
+			t.Fatalf("ListDue: %v", err)
+		} else if len(got) != 0 {
+			t.Fatalf("ListDue after rolled-back effect = %v, want none (due write rolled back)", got)
+		}
+	})
 }
 
 func runVersioned(t *testing.T, newStore Factory) {

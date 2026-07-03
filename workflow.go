@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 )
 
 // Workflow represents a workflow instance
@@ -22,6 +23,11 @@ type Workflow struct {
 
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
+
+	// now is the clock used to stamp tokens as they enter a place. It defaults to
+	// time.Now and is only ever consulted for a definition with timed transitions;
+	// tests (and Manager.FireDue) inject a fixed clock so stamping is deterministic.
+	now func() time.Time
 
 	// version is the optimistic-concurrency version last loaded from or saved to
 	// a VersionedStorage backend. It is 0 for a workflow that has never been
@@ -43,6 +49,18 @@ func (w *Workflow) setVersion(v int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.version = v
+}
+
+// setClock pins the token-stamping clock (used by Manager.FireDue so tokens
+// produced while firing due transitions are stamped with the same evaluation
+// time the host passed in). A nil clock is ignored.
+func (w *Workflow) setClock(now func() time.Time) {
+	if now == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.now = now
 }
 
 // Storage defines the interface for persisting workflow state.
@@ -135,12 +153,64 @@ type TransactionalStorage interface {
 	SaveVersionedStateInTx(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, effects ...TxSideEffect) (newVersion int64, err error)
 }
 
+// DueStorage is an optional interface a VersionedStorage backend may implement
+// to maintain a per-instance "next due" index and scan the fleet for instances
+// whose deadline has elapsed. It is the storage primitive behind host-driven
+// timers (M4): a host cron finds the due instances with ListDue and advances
+// them with Manager.FireDue, turning a fleet-wide deadline ("escalate if not
+// approved in 3 days") into a single indexed query instead of loading and
+// inspecting every instance.
+//
+// Storage never interprets time itself: the next-due wall-clock is computed by
+// the Manager from the workflow definition (which storage does not know) via
+// the marking's token entry times, and handed to storage on every save. A nil
+// due means no timer is currently running for the instance — the backend
+// stores SQL NULL and such an instance never matches ListDue.
+//
+// The interface embeds VersionedStorage because the fleet-timer model is
+// inherently multi-writer (many hosts may scan the same fleet); optimistic
+// concurrency is what keeps concurrent FireDue calls from clobbering each other.
+type DueStorage interface {
+	VersionedStorage
+
+	// SaveVersionedStateWithDue behaves like SaveVersionedState but also records
+	// the instance's next-due time (nil clears it, so a workflow that reaches a
+	// timer-free state drops out of ListDue). The Manager calls it in place of
+	// SaveVersionedState so the due index is maintained on every save.
+	SaveVersionedStateWithDue(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time) (newVersion int64, err error)
+
+	// ListDue returns the IDs of instances whose stored next-due time is
+	// non-null and at or before `before`, ordered by due time ascending (then by
+	// ID) for stable pagination. A zero limit means no limit. Instances with no
+	// running timer (NULL due) are never returned.
+	ListDue(ctx context.Context, before time.Time, limit int) ([]string, error)
+}
+
+// TransactionalDueStorage composes a due-aware versioned save with atomic side
+// effects — the transactional-path counterpart of DueStorage.
+// SaveVersionedStateWithDue. A backend that is both a TransactionalStorage and
+// a DueStorage MUST implement it so Manager.Execute keeps the due index current
+// even when it commits state together with a history/outbox effect. Manager.Execute
+// requires it: calling Execute with a WithTxSideEffect option against a timed
+// definition on a backend that is a DueStorage but not a TransactionalDueStorage
+// is rejected (errors.ErrUnsupported), because committing state and effect without
+// updating the due column in the same transaction would silently corrupt the index.
+type TransactionalDueStorage interface {
+	DueStorage
+	TransactionalStorage
+
+	// SaveVersionedStateInTxWithDue behaves like SaveVersionedStateInTx but also
+	// records the instance's next-due time (nil clears it), so the state change,
+	// the due-index update, and every side effect commit or roll back together.
+	SaveVersionedStateInTxWithDue(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time, effects ...TxSideEffect) (newVersion int64, err error)
+}
+
 // NewWorkflow creates a workflow instance starting at initialPlace.
 //
 // Every workflow's marking is a Colored Petri Net marking; a plain workflow just
 // uses uncolored tokens (boolean presence). Reach for the token methods
 // (CreateToken, GetTokens, ...) only when you need data-carrying tokens.
-func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Workflow, error) {
+func NewWorkflow(name string, definition *Definition, initialPlace Place, opts ...WorkflowOption) (*Workflow, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)
 	}
@@ -153,16 +223,34 @@ func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Work
 		return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, initialPlace)
 	}
 
-	return newWorkflow(name, definition, NewMarking([]Place{initialPlace})), nil
+	return newWorkflow(name, definition, NewMarking([]Place{initialPlace}), opts...), nil
+}
+
+// WorkflowOption configures a Workflow at construction time.
+type WorkflowOption func(*Workflow)
+
+// WithClock sets the clock used to stamp tokens as they enter a place. It only
+// matters for definitions with timed transitions; pass a fixed clock in tests to
+// make token entry times — and therefore the Due API — deterministic. A nil
+// clock is ignored.
+func WithClock(now func() time.Time) WorkflowOption {
+	return func(w *Workflow) {
+		if now != nil {
+			w.now = now
+		}
+	}
 }
 
 // NewWorkflowFromMarking creates a workflow instance whose starting state is the
 // given marking. Use it when the initial state has multiple places or
 // data-carrying (colored) tokens; NewWorkflow is the single-place shorthand.
 //
-// The marking is adopted as-is (its tokens are preserved), and every place it
-// occupies must be defined in the workflow.
-func NewWorkflowFromMarking(name string, definition *Definition, initial Marking) (*Workflow, error) {
+// The marking is adopted (owned by the workflow), and every place it occupies
+// must be defined in the workflow. When the definition has timed transitions,
+// tokens without an entry time are stamped at construction (so a fresh marking
+// starts its timers); tokens that already carry an entry time keep it, so a
+// persisted marking's running timers are restored rather than reset.
+func NewWorkflowFromMarking(name string, definition *Definition, initial Marking, opts ...WorkflowOption) (*Workflow, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)
 	}
@@ -183,21 +271,35 @@ func NewWorkflowFromMarking(name string, definition *Definition, initial Marking
 		}
 	}
 
-	return newWorkflow(name, definition, initial), nil
+	return newWorkflow(name, definition, initial, opts...), nil
 }
 
 // newWorkflow builds a Workflow from a marking, which is the single source of
 // truth for the initial state: the initial places are derived from it rather than
 // passed separately (so the two can never drift apart).
-func newWorkflow(name string, definition *Definition, marking Marking) *Workflow {
-	return &Workflow{
+//
+// When the definition has timed transitions, the initial marking's tokens are
+// stamped with the workflow clock so the first timeout has a reference point.
+func newWorkflow(name string, definition *Definition, marking Marking, opts ...WorkflowOption) *Workflow {
+	w := &Workflow{
 		name:          name,
 		definition:    definition,
 		initialPlaces: marking.Places(),
 		marking:       marking,
 		context:       make(map[string]any),
 		manager:       nil,
+		now:           time.Now,
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	// When the definition has timed transitions, stamp any initial tokens that
+	// lack an entry time so the first timeout has a reference point; tokens that
+	// already carry a stamp (a persisted marking being adopted) keep it.
+	if definitionHasTimers(definition) {
+		stampMarking(w.marking, w.now())
+	}
+	return w
 }
 
 // Name returns the workflow name

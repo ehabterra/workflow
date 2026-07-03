@@ -78,6 +78,11 @@ func scanIDs(rows *sql.Rows, queryErr error) ([]string, error) {
 //	})
 //
 // The same *sql.DB must back both stores for their writes to share the transaction.
+//
+// Note: composing a versioned save manually here (via SaveVersionedStateTx) does
+// NOT maintain the due index — the storage-level Tx saves leave the due column
+// untouched. For a timed definition, drive saves through the Manager, or use
+// SaveVersionedStateInTxWithDue, so the due index commits atomically with state.
 func RunInTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) (err error) {
 	if db == nil {
 		return errors.New("storage: RunInTx requires a non-nil *sql.DB")

@@ -41,8 +41,10 @@ func TestPostgresConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewPostgresStorage: %v", err)
 		}
-		if _, err := db.ExecContext(context.Background(), store.GenerateSchema()); err != nil {
-			t.Fatalf("create schema: %v", err)
+		// EnsureSchema (rather than a bare CREATE TABLE) so the conformance suite
+		// also runs against the M4 due column and its index.
+		if err := store.EnsureSchema(context.Background()); err != nil {
+			t.Fatalf("EnsureSchema: %v", err)
 		}
 		t.Cleanup(func() {
 			_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))

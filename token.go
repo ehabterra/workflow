@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"time"
 )
 
 // TokenID uniquely identifies a token within a workflow instance.
@@ -28,6 +29,12 @@ type TokenData map[string]any
 type Token struct {
 	id   TokenID
 	data TokenData
+	// enteredAt records when the token was produced into its current place. It
+	// is stamped by the engine during firing only when the workflow's definition
+	// has timed transitions (see Transition.SetTimeoutAfter); for every other
+	// workflow it stays the zero Time and never touches the wire format. It is
+	// the reference point the Due API measures a transition's timeout against.
+	enteredAt time.Time
 }
 
 // NewToken creates a token carrying a copy of data and a freshly generated,
@@ -44,6 +51,21 @@ func NewTokenWithID(id TokenID, data TokenData) Token {
 
 // ID returns the token's unique identifier.
 func (t Token) ID() TokenID { return t.id }
+
+// EnteredAt returns when the token was produced into its current place, and
+// whether that time is known. It is the zero Time (ok=false) for tokens in
+// workflows without timed transitions, and for state persisted before timer
+// support existed.
+func (t Token) EnteredAt() (time.Time, bool) {
+	return t.enteredAt, !t.enteredAt.IsZero()
+}
+
+// withEnteredAt returns a copy of the token stamped with the given entry time.
+// It is engine-internal: enteredAt is not part of a token's identity or data.
+func (t Token) withEnteredAt(at time.Time) Token {
+	t.enteredAt = at
+	return t
+}
 
 // Data returns a copy of the token's data. Mutating the result does not affect
 // the token.
@@ -63,13 +85,13 @@ func (t Token) With(key string, value any) Token {
 		d = TokenData{}
 	}
 	d[key] = value
-	return Token{id: t.id, data: d}
+	return Token{id: t.id, data: d, enteredAt: t.enteredAt}
 }
 
 // WithData returns a copy of the token whose data is replaced by a copy of the
 // given data, keeping the same ID. The receiver is left unchanged.
 func (t Token) WithData(data TokenData) Token {
-	return Token{id: t.id, data: cloneTokenData(data)}
+	return Token{id: t.id, data: cloneTokenData(data), enteredAt: t.enteredAt}
 }
 
 // Equal reports whether two tokens have the same ID (token identity).
@@ -89,13 +111,19 @@ func (t Token) String() string {
 }
 
 type tokenJSON struct {
-	ID   TokenID   `json:"id"`
-	Data TokenData `json:"data,omitempty"`
+	ID        TokenID    `json:"id"`
+	Data      TokenData  `json:"data,omitempty"`
+	EnteredAt *time.Time `json:"enteredAt,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler.
 func (t Token) MarshalJSON() ([]byte, error) {
-	return json.Marshal(tokenJSON{ID: t.id, Data: t.data})
+	tj := tokenJSON{ID: t.id, Data: t.data}
+	if !t.enteredAt.IsZero() {
+		at := t.enteredAt.UTC()
+		tj.EnteredAt = &at
+	}
+	return json.Marshal(tj)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -106,6 +134,9 @@ func (t *Token) UnmarshalJSON(b []byte) error {
 	}
 	t.id = tj.ID
 	t.data = tj.Data
+	if tj.EnteredAt != nil {
+		t.enteredAt = tj.EnteredAt.UTC()
+	}
 	return nil
 }
 

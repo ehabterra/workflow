@@ -1,9 +1,47 @@
 package storage
 
 import (
+	"math"
 	"reflect"
 	"testing"
+	"time"
 )
+
+func TestClampUnixNano(t *testing.T) {
+	// A normal instant round-trips exactly.
+	normal := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if got := clampUnixNano(normal); got != normal.UnixNano() {
+		t.Errorf("clampUnixNano(normal) = %d, want %d", got, normal.UnixNano())
+	}
+	// Beyond the UnixNano ceiling saturates to MaxInt64 instead of wrapping.
+	if got := clampUnixNano(time.Date(2266, 1, 1, 0, 0, 0, 0, time.UTC)); got != math.MaxInt64 {
+		t.Errorf("clampUnixNano(2266) = %d, want MaxInt64", got)
+	}
+	// Below the floor saturates to MinInt64.
+	if got := clampUnixNano(time.Date(1000, 1, 1, 0, 0, 0, 0, time.UTC)); got != math.MinInt64 {
+		t.Errorf("clampUnixNano(1000) = %d, want MinInt64", got)
+	}
+	// dueValueSQLite uses it: a far-future due encodes to the saturated value.
+	far := time.Date(2266, 1, 1, 0, 0, 0, 0, time.UTC)
+	if got := dueValueSQLite(&far); got != int64(math.MaxInt64) {
+		t.Errorf("dueValueSQLite(far) = %v, want MaxInt64", got)
+	}
+	if dueValueSQLite(nil) != nil {
+		t.Error("dueValueSQLite(nil) should be nil")
+	}
+}
+
+func TestDueIndexDDL_Disabled(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.dueColumn = ""
+	if ddl := cfg.dueIndexDDL(); ddl != "" {
+		t.Errorf("dueIndexDDL with empty dueColumn = %q, want empty", ddl)
+	}
+	cfg.dueColumn = "due_at"
+	if ddl := cfg.dueIndexDDL(); ddl == "" {
+		t.Error("dueIndexDDL with a due column should be non-empty")
+	}
+}
 
 func TestFirstField(t *testing.T) {
 	cases := map[string]string{

@@ -18,6 +18,12 @@ type config struct {
 	// configured as custom-field columns. Empty disables it (legacy tables).
 	contextColumn string
 
+	// dueColumn stores the instance's next-due wall-clock time (SQL NULL when no
+	// timer is running), the maintained index behind DueStorage.ListDue and
+	// Manager.FireDue. Empty disables the due index entirely (the backend then
+	// does not advertise DueStorage). See WithDueColumn.
+	dueColumn string
+
 	// customFields maps a context key to a full SQL column definition.
 	// Example: {"document_id": "document_id TEXT", "approver": "approver TEXT"}
 	customFields map[string]string
@@ -30,6 +36,7 @@ func defaultConfig() config {
 		stateColumn:   "state",
 		versionColumn: "version",
 		contextColumn: "context",
+		dueColumn:     "due_at",
 		customFields:  make(map[string]string),
 	}
 }
@@ -69,6 +76,17 @@ func WithVersionColumn(name string) Option {
 // save/load round-trip and every other context key is dropped on save.
 func WithContextColumn(name string) Option {
 	return func(c *config) { c.contextColumn = name }
+}
+
+// WithDueColumn sets the name of the column that stores each instance's next-due
+// time — the maintained index behind DueStorage.ListDue and Manager.FireDue.
+// Default: "due_at".
+//
+// Pass an empty name to disable the due index (e.g. for a pre-existing table you
+// do not want to migrate). The backend then no longer advertises DueStorage, so
+// the Manager keeps working but a fleet timer scan is unavailable for it.
+func WithDueColumn(name string) Option {
+	return func(c *config) { c.dueColumn = name }
 }
 
 // WithCustomFields defines the schema for additional application-specific data.
@@ -129,6 +147,18 @@ func decodeContextJSON(val any) (map[string]any, error) {
 		return nil, fmt.Errorf("failed to unmarshal context: %w", err)
 	}
 	return ctxData, nil
+}
+
+// dueIndexDDL returns the CREATE INDEX statement for the due column, or "" when
+// the due index is disabled. The index makes ListDue a single ranged scan. The
+// statement is dialect-agnostic (identical on SQLite and Postgres), so both
+// backends share this one definition.
+func (c config) dueIndexDDL() string {
+	if c.dueColumn == "" {
+		return ""
+	}
+	return fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s_%s_idx ON %s (%s);",
+		c.table, c.dueColumn, c.table, c.dueColumn)
 }
 
 // firstField returns the first whitespace-delimited token of a column

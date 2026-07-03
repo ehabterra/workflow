@@ -7,9 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ehabterra/workflow"
 )
+
+// Compile-time assertion that PostgresStorage satisfies the full storage
+// contract, including the host-driven-timer (M4) due index.
+var _ workflow.TransactionalDueStorage = (*PostgresStorage)(nil)
 
 // PostgresStorage is a PostgreSQL-backed implementation of workflow.Storage and
 // workflow.VersionedStorage. It mirrors SQLiteStorage but uses PostgreSQL syntax
@@ -51,13 +56,44 @@ func (s *PostgresStorage) GenerateSchema() string {
 	if s.contextColumn != "" {
 		columns = append(columns, fmt.Sprintf("%s JSONB NOT NULL DEFAULT '{}'", s.contextColumn))
 	}
+	if s.dueColumn != "" {
+		// Nullable: NULL means "no timer running", so the instance never matches
+		// ListDue. TIMESTAMPTZ is natively comparable and indexable.
+		columns = append(columns, fmt.Sprintf("%s TIMESTAMPTZ", s.dueColumn))
+	}
 	for _, colDef := range s.customFields {
 		columns = append(columns, colDef)
 	}
 	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s);", s.table, strings.Join(columns, ", "))
 }
 
-// SaveState upserts the workflow's places and custom fields (last write wins).
+// EnsureSchema creates the state table if it does not exist and idempotently
+// applies the migrations this library version needs — currently the M4 due
+// index: it adds the due column to a pre-existing table (ADD COLUMN IF NOT
+// EXISTS) and creates the supporting index. It is safe to call on every process
+// start against both fresh and pre-existing tables, and is the recommended
+// one-call setup for backends that use Manager.FireDue.
+func (s *PostgresStorage) EnsureSchema(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, s.GenerateSchema()); err != nil {
+		return fmt.Errorf("create table: %w", err)
+	}
+	if s.dueColumn == "" {
+		return nil
+	}
+	alter := fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s TIMESTAMPTZ", s.table, s.dueColumn)
+	if _, err := s.db.ExecContext(ctx, alter); err != nil {
+		return fmt.Errorf("add due column: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, s.dueIndexDDL()); err != nil {
+		return fmt.Errorf("create due index: %w", err)
+	}
+	return nil
+}
+
+// SaveState upserts the workflow's places and custom fields (last write wins). It
+// does not maintain the due index (the due column is left untouched); for a timed
+// definition, save through the Manager or SaveVersionedStateWithDue so the index
+// stays consistent.
 func (s *PostgresStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any) error {
 	return s.saveState(ctx, s.db, id, marking, ctxData)
 }
@@ -183,6 +219,32 @@ func (s *PostgresStorage) ListIDs(ctx context.Context, opts workflow.ListOptions
 	return scanIDs(s.db.QueryContext(ctx, query, args...))
 }
 
+// ListDue implements workflow.DueStorage, returning the IDs of instances whose
+// stored next-due time is non-null and at or before `before`, ordered by due
+// time ascending then by ID. A zero limit means no limit.
+func (s *PostgresStorage) ListDue(ctx context.Context, before time.Time, limit int) ([]string, error) {
+	if s.dueColumn == "" {
+		return nil, fmt.Errorf("due index disabled (empty due column): %w", errors.ErrUnsupported)
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IS NOT NULL AND %s <= $1 ORDER BY %s ASC, %s ASC",
+		s.idColumn, s.table, s.dueColumn, s.dueColumn, s.dueColumn, s.idColumn)
+	args := []any{before.UTC()}
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	return scanIDs(s.db.QueryContext(ctx, query, args...))
+}
+
+// dueValuePg encodes a next-due time for the Postgres due column: SQL NULL when
+// no timer runs, otherwise the time itself (stored as UTC TIMESTAMPTZ).
+func dueValuePg(due *time.Time) any {
+	if due == nil {
+		return nil
+	}
+	return due.UTC()
+}
+
 // DeleteState removes a workflow's state.
 func (s *PostgresStorage) DeleteState(ctx context.Context, id string) error {
 	return s.deleteState(ctx, s.db, id)
@@ -213,27 +275,50 @@ func (s *PostgresStorage) LoadVersionedState(ctx context.Context, id string) (wo
 	return marking, ctxData, version, nil
 }
 
-// SaveVersionedState implements workflow.VersionedStorage.
+// SaveVersionedState implements workflow.VersionedStorage. It preserves the due
+// column (untouched on update, NULL on insert) but does not maintain the due
+// index; for a timed definition, use SaveVersionedStateWithDue or go through the
+// Manager so the index stays current.
 func (s *PostgresStorage) SaveVersionedState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion)
+	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
 }
 
 // SaveVersionedStateTx behaves like SaveVersionedState but writes through the
-// provided transaction.
+// provided transaction. Like SaveVersionedState it does not maintain the due
+// index; for a timed definition composed manually into a transaction, use
+// SaveVersionedStateInTxWithDue (or the Manager) so the due index commits with it.
 func (s *PostgresStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
 }
 
 // SaveVersionedStateInTx implements workflow.TransactionalStorage: the versioned
 // save and every side effect run in one transaction, committing only if all
-// succeed. Effects receive the *sql.Tx (as an any).
+// succeed. Effects receive the *sql.Tx (as an any). It does not maintain the due
+// index; for a timed definition use SaveVersionedStateInTxWithDue so the index
+// commits atomically with state and effects.
 func (s *PostgresStorage) SaveVersionedStateInTx(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, effects ...workflow.TxSideEffect) (int64, error) {
 	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
-		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
 	})
 }
 
-func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+// SaveVersionedStateWithDue implements workflow.DueStorage: it saves the
+// versioned state and records the instance's next-due time (nil clears it) in
+// the due-index column.
+func (s *PostgresStorage) SaveVersionedStateWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (int64, error) {
+	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
+}
+
+// SaveVersionedStateInTxWithDue implements workflow.TransactionalDueStorage: the
+// versioned save, the due-index update, and every side effect run in one
+// transaction, committing only if all succeed.
+func (s *PostgresStorage) SaveVersionedStateInTxWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, effects ...workflow.TxSideEffect) (int64, error) {
+	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
+		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion, due, true)
+	})
+}
+
+func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, setDue bool) (int64, error) {
 	stateJSON, err := json.Marshal(marking)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal state: %w", err)
@@ -246,6 +331,12 @@ func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id 
 		}
 		customCols = append([]string{s.contextColumn}, customCols...)
 		customVals = append([]any{ctxJSON}, customVals...)
+	}
+	// Maintain the due index only on the WithDue paths; the plain paths leave the
+	// column untouched (preserved on update, NULL on insert).
+	if setDue && s.dueColumn != "" {
+		customCols = append(customCols, s.dueColumn)
+		customVals = append(customVals, dueValuePg(due))
 	}
 
 	if expectedVersion <= 0 {
