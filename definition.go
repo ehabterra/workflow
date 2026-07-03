@@ -1,7 +1,11 @@
 package workflow
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // Definition represents a workflow definition with places and transitions
@@ -46,6 +50,81 @@ func NewDefinition(places []Place, transitions []Transition) (*Definition, error
 	}, nil
 }
 
+// Fingerprint returns a stable SHA-256 hash of the definition's structure: its
+// places and, for every transition, the name, input places, output places, and
+// guard expression string (as stored in the "guard" metadata). It is order-
+// independent — places and transitions are canonically sorted first — so two
+// definitions built in different orders but describing the same net share a
+// fingerprint. Every component is length-prefixed before hashing, so no choice
+// of place or transition name (including separator-looking characters) can make
+// two structurally different definitions collide.
+//
+// The Manager stamps this on each persisted instance and compares it on load to
+// catch a definition changing under running instances (see ErrDefinitionMismatch).
+// Note: only expression guards recorded in transition metadata are captured;
+// programmatic Go constraints without a "guard" metadata string are not part of
+// the hash.
+func (d *Definition) Fingerprint() string {
+	places := make([]string, len(d.Places))
+	for i, p := range d.Places {
+		places[i] = string(p)
+	}
+	slices.Sort(places)
+
+	// Serialize each transition into an unambiguous record (length-prefixed
+	// fields), then sort the records for order independence.
+	transitions := make([]string, len(d.Transitions))
+	for i := range d.Transitions {
+		t := &d.Transitions[i]
+		from := placeStrings(t.From())
+		to := placeStrings(t.To())
+		slices.Sort(from)
+		slices.Sort(to)
+		guard := ""
+		if g, ok := t.Metadata("guard"); ok {
+			guard, _ = g.(string)
+		}
+		var rec strings.Builder
+		writeLenPrefixed(&rec, t.Name())
+		writeLenPrefixedList(&rec, from)
+		writeLenPrefixedList(&rec, to)
+		writeLenPrefixed(&rec, guard)
+		transitions[i] = rec.String()
+	}
+	slices.Sort(transitions)
+
+	h := sha256.New()
+	var buf strings.Builder
+	writeLenPrefixedList(&buf, places)
+	writeLenPrefixedList(&buf, transitions)
+	h.Write([]byte(buf.String()))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeLenPrefixed writes s preceded by its byte length ("3:abc"), making the
+// concatenation of several values unambiguous regardless of their content.
+func writeLenPrefixed(b *strings.Builder, s string) {
+	fmt.Fprintf(b, "%d:", len(s))
+	b.WriteString(s)
+}
+
+// writeLenPrefixedList writes the element count followed by each element
+// length-prefixed, so lists of different shapes can never serialize equally.
+func writeLenPrefixedList(b *strings.Builder, items []string) {
+	fmt.Fprintf(b, "#%d;", len(items))
+	for _, s := range items {
+		writeLenPrefixed(b, s)
+	}
+}
+
+func placeStrings(places []Place) []string {
+	out := make([]string, len(places))
+	for i, p := range places {
+		out[i] = string(p)
+	}
+	return out
+}
+
 // AllPlaces returns all places (places) in the definition
 func (d *Definition) AllPlaces() []Place {
 	places := make([]Place, len(d.Places))
@@ -72,12 +151,7 @@ func (d *Definition) Transition(name string) *Transition {
 
 // Place checks if a place exists in the definition
 func (d *Definition) Place(place Place) bool {
-	for _, p := range d.Places {
-		if p == place {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.Places, place)
 }
 
 // AddEventListener adds a default event listener for a specific event type

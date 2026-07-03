@@ -167,6 +167,22 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	return marking, ctxData, nil
 }
 
+// ListIDs implements workflow.ListableStorage, returning persisted workflow IDs
+// ordered by ID for stable pagination. A zero opts.Limit means no limit.
+func (s *PostgresStorage) ListIDs(ctx context.Context, opts workflow.ListOptions) ([]string, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", s.idColumn, s.table, s.idColumn)
+	var args []any
+	if opts.Limit > 0 {
+		args = append(args, opts.Limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if opts.Offset > 0 {
+		args = append(args, opts.Offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+	return scanIDs(s.db.QueryContext(ctx, query, args...))
+}
+
 // DeleteState removes a workflow's state.
 func (s *PostgresStorage) DeleteState(ctx context.Context, id string) error {
 	return s.deleteState(ctx, s.db, id)
@@ -206,6 +222,15 @@ func (s *PostgresStorage) SaveVersionedState(ctx context.Context, id string, mar
 // provided transaction.
 func (s *PostgresStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
 	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+}
+
+// SaveVersionedStateInTx implements workflow.TransactionalStorage: the versioned
+// save and every side effect run in one transaction, committing only if all
+// succeed. Effects receive the *sql.Tx (as an any).
+func (s *PostgresStorage) SaveVersionedStateInTx(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, effects ...workflow.TxSideEffect) (int64, error) {
+	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
+		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+	})
 }
 
 func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {

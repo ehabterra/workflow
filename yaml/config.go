@@ -154,8 +154,8 @@ func LoadConfig(filename string) (*Config, error) {
 // Decoding is strict: any key that is not part of the schema causes an error
 // (reported with its line number) rather than being silently ignored. This
 // prevents typos and not-yet-implemented features from being accepted and then
-// quietly dropped. Colored Petri Net tokens are declared with the supported
-// initial_tokens key (see WorkflowConfig.InitialTokens).
+// quietly dropped. Colored Petri Net tokens are declared with the polymorphic
+// initial_marking key (see WorkflowConfig.InitialMarking).
 func LoadConfigFromBytes(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)

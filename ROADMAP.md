@@ -95,7 +95,7 @@ weighted arcs, HCPN, static validation, compensation, REST API.
 8. 🟡 **Doc drift both directions**: README Quick Start/interfaces/YAML snippet don't
    compile or don't load (missing `ctx`, nonexistent `workflow.NewSQLiteStorage`, stale
    `initial_place` key rejected by strict decoding); `doc.go` and the old roadmap said
-   CPN doesn't exist (it's merged); `docs/roadmap/cpn/*` + `banking_cpn.yaml` document a
+   CPN doesn't exist (it's merged); `docs/roadmap/cpn/*` (since deleted) + `banking_cpn.yaml` documented a
    YAML schema the loader **rejects**; "automatically logs every transition" is false
    (history is opt-in); "deadlock-free" is unbacked (no static validation).
 
@@ -125,17 +125,25 @@ format, CPN guide + two runnable examples. Design notes in git history and
 Fix everything the readiness review ranked as a blocker, **before** writing new features.
 Small, high-leverage, mostly S-effort. This is the milestone that makes dogfooding honest.
 
-| # | Task | Effort | Acceptance |
+Shipped in three PRs: **part 1** (#15) = M3.1–M3.2; **part 2** (#16) = M3.3, M3.4, M3.5a,
+M3.6, M3.8; **part 3** = M3.5b, M3.7, M3.9 plus fixes for three defects an adversarial
+review confirmed in part 2 (fingerprint separator collision; migration handler skipped
+for removed-place markings + no reload after migration; Execute retry exhaustion under
+contention — now backoff + jitter + WithMaxRetries; also: cache hits get the same
+definition check as loads).
+
+| # | Task | Status | Acceptance |
 |---|------|--------|-----------|
-| M3.1 | **Full context persistence** — always-on `context` JSON column (TEXT/JSONB); custom-field columns remain as queryable projections of it. | S | `SetContext("k", v)` on any key round-trips through save/load on both backends; conformance kit covers it. |
-| M3.2 | **Concurrency fixes** — copy `wf.context` under lock in `SaveWorkflow`; close the check-then-move gap in whole-marking `Apply*` (re-verify enablement under the write lock before `moveMarking`, mirroring `ApplyTransitionForToken`); add locking to `Definition`/`Manager` listener slices. | M | New `-race` tests: concurrent same-transition fires never double-move; concurrent `SetContext` + `SaveWorkflow` is race-clean. |
-| M3.3 | **Definition fingerprint** — `Definition.Fingerprint()` (SHA-256 over canonical places+transitions+guards); stored per instance; `LoadWorkflow` returns `ErrDefinitionMismatch` unless a migration hook is supplied. Also: validate **every** loaded place, not just `places[0]` (bug fix, independent of fingerprint). | S | Editing a definition then loading an old instance fails loudly with both fingerprints; marking with an undefined place never loads silently. |
-| M3.4 | **Split error sentinels** — `ErrNotEnabled` (marking) vs `ErrGuardRejected` (constraint), both wrapped by `ErrTransitionNotAllowed` so `errors.Is` on the old sentinel still works. | S | Webhook redelivery test distinguishes "already fired" from "forbidden". |
-| M3.5 | **Atomic execute helper** — `Manager.Execute(ctx, id, def, fn)` (load → fn → versioned save, bounded `ErrConflict` retry) and `Manager.ApplyAndSave(...)`: fire + versioned state + history record in **one** `RunInTx` transaction. Document listener side-effect semantics (at-least-once; idempotency is the host's job; outbox pattern recipe). | M | Kill-test: crash between fire and save never leaves state/history disagreeing; webhook handler is ~5 lines. |
-| M3.6 | **Registry hygiene** — opt-out of caching (`WithoutRegistry` / per-call fresh load) + `RemoveWorkflow` after save documented for multi-replica; document staleness semantics. | S | Multi-replica scenario test: replica B sees replica A's save (fresh-load mode). |
-| M3.7 | **Storage hardening** — replace `REPLACE INTO` with proper upsert; make history schema portable (Postgres history backend or dialect-aware schema); unit-test the `*Tx` methods (currently ~0%). | M | Conformance kit + history tests pass on both engines; FK to a state row survives a save. |
-| M3.8 | **Instance listing** — `ListIDs(ctx, opts)` on storage (paged), the missing primitive for "scan the fleet" (and for M4 `ListDue`). | S | Host can enumerate persisted instances without raw SQL. |
-| M3.9 | **Doc-drift hotfixes** (not the full README rewrite) — make every README snippet compile/load (`ctx` args, `storage.NewSQLiteStorage(db)`, `initial_marking`); fix `doc.go` status and `yaml/config.go:158` stale comment; correct "automatically logs" → opt-in helpers; drop/qualify "deadlock-free"; delete or rewrite `docs/roadmap/cpn/*` planning docs, `cpn_example_minimal.yaml`, `cpn_schema.json`, and `banking_cpn.yaml` (they document a schema the strict loader rejects); refresh the two comparison docs' "our side" columns (CPN now ships). | S | A new user can copy-paste every README snippet successfully; no shipped file implies a feature the loader rejects. |
+| M3.1 | **Full context persistence** — always-on `context` JSON column (TEXT/JSONB); custom-field columns remain as queryable projections of it. | ✅ | `SetContext("k", v)` on any key round-trips through save/load on both backends; conformance kit covers it. |
+| M3.2 | **Concurrency fixes** — copy `wf.context` under lock in `SaveWorkflow`; close the check-then-move gap in whole-marking `Apply*` (re-verify enablement under the write lock before `moveMarking`, mirroring `ApplyTransitionForToken`); add locking to `Definition`/`Manager` listener slices. | ✅ | New `-race` tests: concurrent same-transition fires never double-move; concurrent `SetContext` + `SaveWorkflow` is race-clean. |
+| M3.3 | **Definition fingerprint** — `Definition.Fingerprint()` (SHA-256 over canonical places+transitions+guards); stored per instance; `LoadWorkflow` returns `ErrDefinitionMismatch` unless a migration hook is supplied. Also: validate **every** loaded place, not just `places[0]` (bug fix, independent of fingerprint). | ✅ | Editing a definition then loading an old instance fails loudly with both fingerprints; marking with an undefined place never loads silently. |
+| M3.4 | **Split error sentinels** — `ErrNotEnabled` (marking) vs `ErrGuardRejected` (constraint), both wrapped by `ErrTransitionNotAllowed` so `errors.Is` on the old sentinel still works. | ✅ | Webhook redelivery test distinguishes "already fired" from "forbidden". |
+| M3.5a | **Optimistic execute helper** — `Manager.Execute(ctx, id, def, fn)`: load fresh → fn → versioned save with bounded `ErrConflict` retry. | ✅ | Concurrent Executes lose no updates; injected-conflict test retries then succeeds. |
+| M3.5b | **Atomic state+history tx** — fire + versioned state + history record in **one** `RunInTx` transaction (needs a storage-level helper; core `Manager` can't import `history`). Document listener side-effect semantics (at-least-once; idempotency is the host's job; outbox recipe). | ✅ | Kill-test: crash between fire and save never leaves state/history disagreeing. |
+| M3.6 | **Registry hygiene** — opt-out of caching (`WithoutRegistryCache` / per-call fresh load) + `EvictWorkflow` after save for multi-replica; document staleness semantics. | ✅ | Multi-replica scenario test: replica B sees replica A's save (fresh-load mode). |
+| M3.7 | **Storage hardening** — replace `REPLACE INTO` with proper upsert; make history schema portable (Postgres history backend or dialect-aware schema); unit-test the `*Tx` methods (currently ~0%). | ✅ | Conformance kit + history tests pass on both engines; FK to a state row survives a save. |
+| M3.8 | **Instance listing** — `ListIDs(ctx, opts)` on storage (paged, optional `ListableStorage`), the missing primitive for "scan the fleet" (and for M4 `ListDue`). | ✅ | Host can enumerate persisted instances without raw SQL. |
+| M3.9 | **Doc-drift hotfixes** (not the full README rewrite) — make every README snippet compile/load (`ctx` args, `storage.NewSQLiteStorage(db)`, `initial_marking`); fix `doc.go` status and `yaml/config.go:158` stale comment; correct "automatically logs" → opt-in helpers; drop/qualify "deadlock-free"; delete or rewrite `docs/roadmap/cpn/*` planning docs, `cpn_example_minimal.yaml`, `cpn_schema.json`, and `banking_cpn.yaml` (they document a schema the strict loader rejects); refresh the two comparison docs' "our side" columns (CPN now ships). | ✅ | A new user can copy-paste every README snippet successfully; no shipped file implies a feature the loader rejects. |
 
 **Release gate:** the readiness review's top-5 blocker list is empty; `-race` suite green.
 

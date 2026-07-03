@@ -15,7 +15,7 @@
 
 Go Workflow is a flexible engine for orchestrating steps, tasks, and data within your Go applications.
 
-Our engine is rooted in **Petri Net theory**, which is just a fancy way of saying we use a rock-solid mathematical foundation to manage flow. This gives you a huge advantage: when you model a complex process with many parallel paths, you get built-in assurance that your workflow won't end up in a confusing or **deadlocked state**.
+Our engine is rooted in **Petri Net theory**, which is just a fancy way of saying we use a rock-solid mathematical foundation to manage flow. When you model a complex process with many parallel paths, splits and joins are explicit, well-defined operations on a marking — not ad-hoc flags — and the model is in principle amenable to formal analysis. (Note: the library does not yet ship a static checker, so deadlock detection is on the roadmap, not a built-in guarantee.)
 
 We're focused on **portability** and **visualization**, allowing you to change your complex processes easily without touching or recompiling your application code.
 
@@ -31,9 +31,9 @@ Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflo
 
 ### ✅ Built for Reliability (Petri Net Power)
 
-* **Mathematically Sound:** Our Petri Net core helps ensure that even processes with lots of parallel paths and complex merging logic are **deadlock-free** and always reach a correct conclusion.
+* **Mathematically Sound:** Our Petri Net core gives parallel paths and merging logic precise token semantics, which makes complex flows analyzable. A static validator/deadlock checker is planned but not yet shipped, so correctness of a given definition is still up to you today.
 * **Thread-Safe Registry:** The workflow registry uses proper locking to safely handle concurrent access from multiple goroutines.
-* **Audit Trail Ready:** Our pluggable history layer automatically logs every transition, allowing you to track exactly who did what and when.
+* **Audit Trail Ready:** Our pluggable history layer can record every transition, letting you track exactly who did what and when. Recording is opt-in: use the `yaml.ApplyTransitionWithHistory` helper or call the history store from your own event hooks — transitions are not logged automatically.
 
 ### 📊 Easy to Understand (Visualization)
 
@@ -53,23 +53,31 @@ We designed the storage interface to be flexible. You tell us where to put the d
 
 ### Storage Interface
 
-The package provides a flexible, context-aware storage interface for persisting workflow states and custom fields. Only fields declared as custom fields are persisted:
+The package provides a flexible, context-aware storage interface for persisting workflow markings and context data. Every method takes a `context.Context` so callers can apply cancellation and deadlines:
 
 ```go
 type Storage interface {
-    LoadState(id string) (places []Place, context map[string]interface{}, err error)
-    SaveState(id string, places []Place, context map[string]interface{}) error
-    DeleteState(id string) error
+    // LoadState loads the workflow's marking and its context data for the given ID.
+    LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, err error)
+
+    // SaveState saves the workflow's marking and its context data for the given ID.
+    SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
+
+    // DeleteState removes the workflow state for the given ID.
+    DeleteState(ctx context.Context, id string) error
 }
 ```
 
-You can implement your own storage backend by implementing this interface. The package includes a SQLite implementation with options for custom fields:
+You can implement your own storage backend by implementing this interface. The package includes SQLite and PostgreSQL implementations with options for custom fields (both also implement `VersionedStorage` for optimistic concurrency and expose `SaveStateTx`/`LoadStateTx` for transactional use):
 
 ```go
-import "github.com/ehabterra/workflow/storage"
+import (
+    "github.com/ehabterra/workflow"
+    "github.com/ehabterra/workflow/storage"
+)
 
 // Create a SQLite storage with custom fields
-storage, err := storage.NewSQLiteStorage(db,
+store, err := storage.NewSQLiteStorage(db,
     storage.WithTable("workflow_states"),
     storage.WithCustomFields(map[string]string{
         "title": "title TEXT",
@@ -78,16 +86,16 @@ storage, err := storage.NewSQLiteStorage(db,
 )
 if err != nil { panic(err) }
 
-// Generate and initialize schema
-schema := storage.GenerateSchema()
-if err := storage.Initialize(db, schema); err != nil { panic(err) }
+// Generate and initialize the schema
+if err := storage.Initialize(db, store.GenerateSchema()); err != nil { panic(err) }
 
-// Save state with context
-err = storage.SaveState("my-workflow", []workflow.Place{"draft"}, map[string]interface{}{"title": "My Doc", "owner": "alice"})
+// Save the marking together with context data
+marking := workflow.NewMarking([]workflow.Place{"draft"})
+err = store.SaveState(ctx, "my-workflow", marking, map[string]any{"title": "My Doc", "owner": "alice"})
 
-// Load state and context
-places, ctx, err := storage.LoadState("my-workflow")
-fmt.Println(places, ctx["title"], ctx["owner"])
+// Load the marking and context data
+loaded, data, err := store.LoadState(ctx, "my-workflow")
+fmt.Println(loaded.Places(), data["title"], data["owner"])
 ```
 
 ## History Layer
@@ -98,12 +106,14 @@ The history layer is a pluggable audit trail, letting you track and query every 
 
 ```go
 type HistoryStore interface {
-    SaveTransition(record *TransitionRecord) error
-    ListHistory(workflowID string, opts QueryOptions) ([]TransitionRecord, error)
+    SaveTransition(ctx context.Context, record *TransitionRecord) error
+    ListHistory(ctx context.Context, workflowID string, opts QueryOptions) ([]TransitionRecord, error)
     GenerateSchema() string
-    Initialize() error
+    Initialize(ctx context.Context) error
 }
 ```
+
+Note that history is **opt-in**: transitions are not recorded automatically. Call `SaveTransition` yourself (for example from an `EventAfterTransition` listener), or use the `yaml.ApplyTransitionWithHistory` helper, which applies a transition and records it in one call.
 
 ### SQLite History Example
 
@@ -115,10 +125,10 @@ historyStore := history.NewSQLiteHistory(db,
         "ip_address": "ip_address TEXT",
     }),
 )
-historyStore.Initialize()
+if err := historyStore.Initialize(ctx); err != nil { panic(err) }
 
 // Save a transition with custom fields
-historyStore.SaveTransition(&history.TransitionRecord{
+err = historyStore.SaveTransition(ctx, &history.TransitionRecord{
     WorkflowID: "wf1",
     FromState:  "draft",
     ToState:    "review",
@@ -126,13 +136,13 @@ historyStore.SaveTransition(&history.TransitionRecord{
     Notes:      "Submitted for review",
     Actor:      "alice",
     CreatedAt:  time.Now(),
-    CustomFields: map[string]interface{}{
+    CustomFields: map[string]any{
         "ip_address": "127.0.0.1",
     },
 })
 
 // List history with pagination
-records, err := historyStore.ListHistory("wf1", history.QueryOptions{Limit: 10, Offset: 0})
+records, err := historyStore.ListHistory(ctx, "wf1", history.QueryOptions{Limit: 10, Offset: 0})
 for _, rec := range records {
     fmt.Println(rec.FromState, rec.ToState, rec.Notes, rec.CustomFields["ip_address"])
 }
@@ -151,6 +161,9 @@ for _, rec := range records {
 * [x] Workflow manager for lifecycle management
 * [x] Storage interface for persistence
 * [x] SQLite storage implementation
+* [x] PostgreSQL storage implementation
+* [x] Optimistic concurrency (`VersionedStorage`) and transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
+* [x] Colored Petri Nets (CPN): multiple data-carrying tokens per place, per-token firing, and token-aware guards — see [docs/guides/CPN_GUIDE.md](docs/guides/CPN_GUIDE.md)
 * [x] Support for parallel transitions and branching
 * [x] Workflow history and audit trail (in examples)
 * [x] Web UI for workflow management (in examples)
@@ -166,9 +179,9 @@ We're starting with the basics of Petri Nets and adding layers of powerful featu
 
 | Feature Description | The Problem We're Solving | Petri Net Concept |
 | :--- | :--- | :--- |
-| **Smart Tokens (Colored Petri Nets - CPN)** | How do you process a batch of 100 orders within one workflow instance? | **Tokens carry data.** We'll let tokens carry attributes (like an order ID), allowing one process to manage multiple concurrent items. |
+| **Smart Tokens (Colored Petri Nets - CPN)** — ✅ **shipped** | How do you process a batch of 100 orders within one workflow instance? | **Tokens carry data.** Tokens carry attributes (like an order ID), allowing one process to manage multiple concurrent items. See [docs/guides/CPN_GUIDE.md](docs/guides/CPN_GUIDE.md). |
 | **Nested Workflows (HCPN)** | My process has 100 steps—it's too big to manage. | **Modularity.** You can define a complex sub-flow (like "Payment Verification") once and drop it into any main process as a single, clean step. |
-| **Crash-Safe Storage (ACID)** | What if the server dies during a critical step? | **Data Integrity.** We're adding transactional guarantees to ensure state changes are atomic (all or nothing) and durable. |
+| **Crash-Safe Storage (ACID)** — ✅ **shipped** | What if the server dies during a critical step? | **Data Integrity.** Optimistic concurrency (`VersionedStorage`), transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`), and an atomic execute helper (`Manager.Execute` with `WithTxSideEffect`) commit a state change and its history record in one transaction. |
 | **Undo Button (Compensation/Rollback)** | I need a way to reliably "undo" a previous action if a later step fails (e.g., refunding a charge). | **Error Recovery.** We'll track the history of completed tasks precisely, enabling safe, structured rollbacks. |
 | **Advanced Synchronization** | When two parallel paths finish, how do I make the third step wait only for the *first* path, but cancel the second one? | **Complex Merging.** We're implementing advanced logic (like nested AND/OR/XOR conditions and discriminators) for robust handling of parallel flows. |
 
@@ -202,7 +215,7 @@ Below are some of the advanced concepts we're working on. Don't worry if these s
 
 ### Colored Petri Nets (CPN)
 
-**What is a Token?** In Petri nets, a token is a marker that sits in a place (state). A place can have 0, 1, or multiple tokens. Currently, the engine uses a boolean model: a place either exists in the marking or doesn't (no token counting).
+**What is a Token?** In Petri nets, a token is a marker that sits in a place (state). A place can have 0, 1, or multiple tokens. The engine's unified marking supports both the simple boolean style (a place is either marked or not) and full colored tokens (multiple data-carrying tokens per place).
 
 **What is CPN?** Colored Petri Nets allow tokens to carry data attributes (called "color"). This enables:
 
@@ -211,11 +224,12 @@ Below are some of the advanced concepts we're working on. Don't worry if these s
 * **Data-driven decisions**: Transitions can evaluate token attributes to route tokens differently
 * **Resource tracking**: Tokens can carry resource assignments (e.g., which employee is handling this task)
 
-**Current Implementation:**
+**Current Implementation (CPN is shipped):**
 
 * ✅ **Multiple workflow instances**: You CAN have `workflow-1`, `workflow-2`, `workflow-3`, each in "pending" with different contexts
-* ❌ **Multiple tokens per place**: You CANNOT have multiple tokens in the SAME place within ONE workflow instance
-* **Current model**: `Marking` stores a set of places `[qa_testing, security_review]` - no token counting, no per-token data
+* ✅ **Multiple tokens per place**: One workflow instance CAN hold multiple data-carrying tokens in the same place; transitions fire per token, and guards can inspect token attributes
+* ✅ **Token queries**: `Marking` exposes `TokensAt`, `TokenCount`, `AllTokens`, `HasToken` alongside the simple place set
+* See [docs/guides/CPN_GUIDE.md](docs/guides/CPN_GUIDE.md) and the runnable [examples/cpn_batch_processing](examples/cpn_batch_processing) / [examples/cpn_routing](examples/cpn_routing) examples
 
 **CPN Example (within ONE workflow instance):**
 
@@ -328,7 +342,7 @@ You can define your entire process in a simple YAML file with expression-based g
 ```yaml
 workflow:
   name: blog_publishing
-  initial_place: draft
+  initial_marking: draft
   transitions:
     - name: to_review
       from: [draft]
@@ -555,9 +569,9 @@ Here's a simple example showing how to create a workflow, persist it to storage,
 package main
 
 import (
+    "context"
     "database/sql"
     "fmt"
-    "time"
 
     "github.com/ehabterra/workflow"
     "github.com/ehabterra/workflow/storage"
@@ -565,6 +579,8 @@ import (
 )
 
 func main() {
+    ctx := context.Background()
+
     // Open SQLite DB (in-memory for demo)
     db, err := sql.Open("sqlite3", ":memory:")
     if err != nil { panic(err) }
@@ -593,21 +609,21 @@ func main() {
     registry := workflow.NewRegistry()
     manager := workflow.NewManager(registry, store)
 
-    // Create a new workflow with context
-    wf, err := manager.CreateWorkflow("my-workflow", definition, "start")
+    // Create a new workflow with context data
+    wf, err := manager.CreateWorkflow(ctx, "my-workflow", definition, "start")
     if err != nil { panic(err) }
     wf.SetContext("title", "My Example Workflow")
-    if err := manager.SaveWorkflow("my-workflow", wf); err != nil { panic(err) }
+    if err := manager.SaveWorkflow(ctx, "my-workflow", wf); err != nil { panic(err) }
 
     // Apply a transition
     err = wf.Apply([]workflow.Place{"middle"})
     if err != nil { panic(err) }
-    if err := manager.SaveWorkflow("my-workflow", wf); err != nil { panic(err) }
+    if err := manager.SaveWorkflow(ctx, "my-workflow", wf); err != nil { panic(err) }
 
-    // Load workflow and context from storage
-    loadedPlaces, loadedCtx, err := store.LoadState("my-workflow")
+    // Load marking and context data from storage
+    marking, data, err := store.LoadState(ctx, "my-workflow")
     if err != nil { panic(err) }
-    fmt.Printf("Current places: %v, Title: %v\n", loadedPlaces, loadedCtx["title"])
+    fmt.Printf("Current places: %v, Title: %v\n", marking.Places(), data["title"])
 
     // Generate and print the workflow diagram
     diagram := wf.Diagram()
@@ -624,33 +640,45 @@ func main() {
 The workflow manager provides a straightforward interface for creating, loading, and saving workflows. It handles the coordination between the registry (in-memory cache) and storage (database persistence):
 
 ```go
-// Create a registry and storage
-registry := workflow.NewRegistry()
-storage := workflow.NewSQLiteStorage("workflows.db")
+ctx := context.Background()
 
-// Create a workflow manager
-manager := workflow.NewManager(registry, storage)
+// Create a registry and a storage backend
+db, err := sql.Open("sqlite3", "workflows.db")
+if err != nil {
+    panic(err)
+}
+store, err := storage.NewSQLiteStorage(db)
+if err != nil {
+    panic(err)
+}
+if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
+    panic(err)
+}
+registry := workflow.NewRegistry()
+
+// Create a workflow manager (options like WithoutRegistryCache are available)
+manager := workflow.NewManager(registry, store)
 
 // Create a new workflow
-wf, err := manager.CreateWorkflow("my-workflow", definition, "start")
+wf, err := manager.CreateWorkflow(ctx, "my-workflow", definition, "start")
 if err != nil {
     panic(err)
 }
 
 // Get a workflow (loads from storage if not in registry)
-wf, err = manager.GetWorkflow("my-workflow", definition)
+wf, err = manager.GetWorkflow(ctx, "my-workflow", definition)
 if err != nil {
     panic(err)
 }
 
 // Save workflow state
-err = manager.SaveWorkflow("my-workflow", wf)
+err = manager.SaveWorkflow(ctx, "my-workflow", wf)
 if err != nil {
     panic(err)
 }
 
 // Delete a workflow
-err = manager.DeleteWorkflow("my-workflow")
+err = manager.DeleteWorkflow(ctx, "my-workflow")
 if err != nil {
     panic(err)
 }

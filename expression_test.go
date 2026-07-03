@@ -201,7 +201,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			},
 			wantErr:       true,
 			shouldBlock:   true,
-			errorContains: "transition not allowed",
+			errorContains: "rejected by guard",
 		},
 		{
 			name:    "context value access - exists",

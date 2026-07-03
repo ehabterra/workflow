@@ -37,6 +37,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `Manager` persistence method; the SQLite implementations honor cancellation.
 - Community files: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, and
   GitHub issue/PR templates.
+- Full context persistence (M3.1): `Storage.SaveState`/`LoadState` now round-trip the
+  entire workflow context (not just declared custom-field columns) via an always-on
+  JSON `context` column (`JSONB` on PostgreSQL). Configurable with
+  `storage.WithContextColumn`.
+- Specific blocked-transition errors (M3.3): `workflow.ErrNotEnabled` (a required place
+  is unmarked) and `workflow.ErrGuardRejected` (a guard returned false) replace the
+  generic `ErrTransitionNotAllowed` on the apply/can paths. Both still satisfy
+  `errors.Is(err, ErrTransitionNotAllowed)`, so existing checks keep working.
+- Definition safety (M3.3): `Definition.Fingerprint()` returns a stable, collision-free
+  SHA-256 of the net's structure (length-prefixed serialization). The `Manager` stamps
+  it into saved context and, on load, rejects a persisted instance whose definition no
+  longer matches with `workflow.ErrDefinitionMismatch`; `WithDefinitionMigration` lets
+  a host migrate or approve mismatched state instead.
+- Atomic execute helper (M3.5): `Manager.Execute(ctx, id, def, fn, opts...)` loads,
+  mutates, and saves an instance under optimistic concurrency, retrying on `ErrConflict`
+  with jittered backoff (`WithMaxRetries` to tune). `WithTxSideEffect` commits a state
+  change and a side effect (e.g. a history record) in one transaction on backends that
+  implement the new optional `workflow.TransactionalStorage` interface.
+- Paginated instance listing (M3.6): optional `workflow.ListableStorage` interface with
+  `ListIDs(ctx, ListOptions{Limit, Offset})`, implemented by the SQLite and PostgreSQL
+  backends and covered by the conformance suite; `Manager.ListWorkflowIDs` surfaces it.
+- Registry cache control (M3.8): `Manager.EvictWorkflow` and `WithoutRegistryCache` for
+  hosts that need every load to re-read from storage.
+- Dialect-aware SQL history: `history.NewPostgresHistory` alongside
+  `history.NewSQLiteHistory`, both from a shared `SQLHistory` implementation.
 
 ### Changed
 - Minimum Go version is 1.25 (module and CI). It was raised to 1.24 during M0, then to

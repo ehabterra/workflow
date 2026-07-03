@@ -1,3 +1,11 @@
+> ⚠️ **HISTORICAL PLANNING DOCUMENT — DO NOT USE AS A REFERENCE FOR THE SHIPPED API.**
+> The YAML in this example (`banking_cpn.yaml`) uses a **proposed schema**
+> (`cpn_enabled`, `token_schemas`, `initial_place`, ...) that was **never implemented**;
+> the strict YAML loader will **reject it with an error**. The shipped Colored Petri Net
+> mechanism is the polymorphic `initial_marking` key — see
+> [`docs/guides/CPN_GUIDE.md`](../../../guides/CPN_GUIDE.md) and the runnable
+> [`examples/cpn_batch_processing`](../../../../examples/cpn_batch_processing) example.
+
 # Banking System CPN Model (True CPN with Request Tokens)
 
 This example demonstrates a **True Colored Petri Net (CPN) model** for a simple banking system using **explicit request tokens** for maximum concurrency, mathematical rigor, and batch processing capabilities.

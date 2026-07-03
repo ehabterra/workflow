@@ -94,6 +94,47 @@ type VersionedStorage interface {
 	SaveVersionedState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
 }
 
+// ListOptions controls pagination for enumerating persisted workflow IDs.
+// A zero Limit means no limit.
+type ListOptions struct {
+	Limit  int
+	Offset int
+}
+
+// ListableStorage is an optional interface a Storage backend may implement to
+// enumerate the IDs of persisted workflows. It is the primitive a host needs to
+// scan the fleet — for example a cron sweeping instances awaiting a deadline —
+// without dropping to raw SQL. The Manager exposes it via ListWorkflowIDs.
+type ListableStorage interface {
+	Storage
+
+	// ListIDs returns persisted workflow IDs ordered by ID for stable pagination.
+	ListIDs(ctx context.Context, opts ListOptions) ([]string, error)
+}
+
+// TxSideEffect is a write executed atomically with a versioned state save —
+// typically an audit/history record or an outbox row. The tx argument is
+// backend-specific: the SQL backends pass a *sql.Tx. An effect that returns an
+// error aborts the whole transaction, so the state change and the effect either
+// both commit or both roll back.
+type TxSideEffect func(ctx context.Context, tx any) error
+
+// TransactionalStorage is an optional interface a VersionedStorage backend may
+// implement to compose a versioned save with additional writes in one atomic
+// transaction. It is what makes "fire a transition + append its history record"
+// crash-consistent: a process dying between the two can never leave the state
+// and the audit log disagreeing. Manager.Execute uses it when side effects are
+// registered via WithTxSideEffect.
+type TransactionalStorage interface {
+	VersionedStorage
+
+	// SaveVersionedStateInTx behaves like SaveVersionedState but runs the save
+	// and every side effect inside a single transaction, committing only if all
+	// succeed. Effects run in order after the state write; each receives the
+	// backend-specific transaction handle.
+	SaveVersionedStateInTx(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, effects ...TxSideEffect) (newVersion int64, err error)
+}
+
 // NewWorkflow creates a workflow instance starting at initialPlace.
 //
 // Every workflow's marking is a Colored Petri Net marking; a plain workflow just
@@ -292,7 +333,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 	currentPlaces := w.CurrentPlaces()
 	for _, fromPlace := range targetTransition.From() {
 		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 
@@ -307,7 +348,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 		return err
 	}
 	if event.IsBlocking() {
-		return ErrTransitionNotAllowed
+		return ErrGuardRejected
 	}
 
 	return nil
@@ -360,7 +401,7 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 					continue
 				}
 				if event.IsBlocking() {
-					err = ErrTransitionNotAllowed
+					err = ErrGuardRejected
 					continue
 				}
 				return nil
@@ -372,7 +413,7 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 		return err
 	}
 
-	return ErrTransitionNotAllowed
+	return ErrNotEnabled
 }
 
 // Apply applies a transition to the workflow
@@ -408,7 +449,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	currentPlaces := w.CurrentPlaces()
 	for _, fromPlace := range targetTransition.From() {
 		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 
@@ -423,7 +464,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return err
 	}
 	if event.IsBlocking() {
-		return ErrTransitionNotAllowed
+		return ErrGuardRejected
 	}
 
 	// Apply the transition directly (don't use Apply which might find wrong transition)
@@ -452,7 +493,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	// producing a phantom uncolored token in the colored case).
 	for _, p := range from {
 		if !w.marking.HasPlace(p) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 
@@ -542,7 +583,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	// released for the before-listeners.
 	for _, p := range from {
 		if !w.marking.HasPlace(p) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 

@@ -97,12 +97,19 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, mar
 		placeholders[i] = "?"
 	}
 
-	// Using "REPLACE INTO" which is a SQLite-specific convenience.
-	// It's equivalent to an INSERT or, if a row with the same primary key exists, a DELETE followed by an INSERT.
-	query := fmt.Sprintf("REPLACE INTO %s (%s) VALUES (%s);",
+	// A true upsert (not REPLACE INTO, which is DELETE+INSERT under the hood and
+	// therefore fires delete triggers, breaks foreign keys referencing the row,
+	// and resets any column not in the statement — including the version column).
+	setClauses := make([]string, 0, len(columns)-1)
+	for _, col := range columns[1:] {
+		setClauses = append(setClauses, fmt.Sprintf("%s = excluded.%s", col, col))
+	}
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(%s) DO UPDATE SET %s;",
 		s.table,
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "),
+		s.idColumn,
+		strings.Join(setClauses, ", "),
 	)
 
 	_, err = q.ExecContext(ctx, query, values...)
@@ -261,6 +268,21 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 	return marking, context, nil
 }
 
+// ListIDs implements workflow.ListableStorage, returning persisted workflow IDs
+// ordered by ID for stable pagination. A zero opts.Limit means no limit.
+func (s *SQLiteStorage) ListIDs(ctx context.Context, opts workflow.ListOptions) ([]string, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", s.idColumn, s.table, s.idColumn)
+	var args []any
+	if opts.Limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, opts.Limit, opts.Offset)
+	} else if opts.Offset > 0 {
+		query += " LIMIT -1 OFFSET ?" // SQLite requires a LIMIT before OFFSET
+		args = append(args, opts.Offset)
+	}
+	return scanIDs(s.db.QueryContext(ctx, query, args...))
+}
+
 // DeleteState removes a workflow's state from the database.
 func (s *SQLiteStorage) DeleteState(ctx context.Context, id string) error {
 	return s.deleteState(ctx, s.db, id)
@@ -307,6 +329,15 @@ func (s *SQLiteStorage) SaveVersionedState(ctx context.Context, id string, marki
 // committed atomically. See RunInTx.
 func (s *SQLiteStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
 	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+}
+
+// SaveVersionedStateInTx implements workflow.TransactionalStorage: the versioned
+// save and every side effect run in one transaction, committing only if all
+// succeed. Effects receive the *sql.Tx (as an any).
+func (s *SQLiteStorage) SaveVersionedStateInTx(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, effects ...workflow.TxSideEffect) (int64, error) {
+	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
+		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion)
+	})
 }
 
 func (s *SQLiteStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {

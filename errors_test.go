@@ -86,3 +86,55 @@ func TestSentinelErrors(t *testing.T) {
 		}
 	})
 }
+
+// Both concrete block reasons must still satisfy the general sentinel, so
+// callers testing errors.Is(err, ErrTransitionNotAllowed) keep working.
+func TestBlockedErrors_SatisfyGeneralSentinel(t *testing.T) {
+	for _, err := range []error{workflow.ErrNotEnabled, workflow.ErrGuardRejected} {
+		if !errors.Is(err, workflow.ErrTransitionNotAllowed) {
+			t.Errorf("errors.Is(%v, ErrTransitionNotAllowed) = false, want true", err)
+		}
+		if !errors.Is(err, err) {
+			t.Errorf("errors.Is(%v, itself) = false, want true", err)
+		}
+	}
+	if errors.Is(workflow.ErrNotEnabled, workflow.ErrGuardRejected) {
+		t.Error("ErrNotEnabled should not match ErrGuardRejected")
+	}
+}
+
+// A transition whose input place is unmarked reports ErrNotEnabled; a transition
+// enabled by the marking but refused by a guard reports ErrGuardRejected.
+func TestApply_DistinguishesNotEnabledFromGuardRejected(t *testing.T) {
+	guard, err := workflow.NewExpressionConstraint("workflow.Context('ok') == true")
+	if err != nil {
+		t.Fatalf("NewExpressionConstraint: %v", err)
+	}
+	tr := workflow.MustNewTransition("go", []workflow.Place{"a"}, []workflow.Place{"b"})
+	tr.AddConstraint(guard)
+	def, err := workflow.NewDefinition([]workflow.Place{"a", "b"}, []workflow.Transition{*tr})
+	if err != nil {
+		t.Fatalf("NewDefinition: %v", err)
+	}
+
+	// Enabled place, guard rejects -> ErrGuardRejected.
+	wf, _ := workflow.NewWorkflow("wf", def, "a")
+	wf.SetContext("ok", false)
+	err = wf.ApplyTransition("go")
+	if !errors.Is(err, workflow.ErrGuardRejected) {
+		t.Fatalf("guard-blocked ApplyTransition err = %v, want ErrGuardRejected", err)
+	}
+	if !errors.Is(err, workflow.ErrTransitionNotAllowed) {
+		t.Fatalf("ErrGuardRejected must still satisfy ErrTransitionNotAllowed, got %v", err)
+	}
+
+	// Starting past 'a' leaves the transition unenabled -> ErrNotEnabled.
+	wf2, _ := workflow.NewWorkflow("wf2", def, "b")
+	err = wf2.ApplyTransition("go")
+	if !errors.Is(err, workflow.ErrNotEnabled) {
+		t.Fatalf("not-enabled ApplyTransition err = %v, want ErrNotEnabled", err)
+	}
+	if errors.Is(err, workflow.ErrGuardRejected) {
+		t.Fatalf("not-enabled error should not be ErrGuardRejected, got %v", err)
+	}
+}

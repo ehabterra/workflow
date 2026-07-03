@@ -1,20 +1,20 @@
-# Comparison: Our CPN Plan vs Petri Flow
+# Comparison: Our CPN Implementation vs Petri Flow
 
-This document compares our CPN implementation plan with [petri_flow](https://github.com/hooopo/petri_flow), a mature Petri Net Workflow Engine for Ruby/Rails.
+This document compares our CPN implementation with [petri_flow](https://github.com/hooopo/petri_flow), a mature Petri Net Workflow Engine for Ruby/Rails.
 
 ## Executive Summary
 
-**petri_flow** is a production-ready Ruby gem with comprehensive Petri Net features, web UI, and organizational integration. **Our Go workflow engine** is in active development, focusing on CPN implementation with a clean, portable design.
+**petri_flow** is a production-ready Ruby gem with comprehensive Petri Net features, web UI, and organizational integration. **Our Go workflow engine** is in active development, with Colored Petri Nets (data-carrying tokens) implemented and a clean, portable design.
 
 **Key Differences**:
 - **Language**: Ruby (petri_flow) vs Go (ours)
 - **Maturity**: Production-ready (petri_flow) vs Active development (ours)
-- **Focus**: Full-featured workflow engine (petri_flow) vs CPN-focused implementation (ours)
+- **Focus**: Full-featured workflow engine (petri_flow) vs CPN-focused engine library (ours)
 - **Architecture**: Rails-integrated (petri_flow) vs Standalone library (ours)
 
 ## Feature Comparison Matrix
 
-| Feature | petri_flow | Our Plan | Status |
+| Feature | petri_flow | Ours | Status |
 |---------|-----------|----------|--------|
 | **Core Petri Net Features** |
 | Basic workflow definition | ✅ | ✅ | Implemented |
@@ -24,19 +24,19 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 | Timed transitions | ✅ | ⏳ | Planned (Timed Petri Nets) |
 | Automatic transitions | ✅ | ⏳ | Planned |
 | **Colored Petri Nets (CPN)** |
-| Multiple tokens per place | ✅ | ⏳ | Phase 1-2 |
-| Token attributes (color) | ✅ | ⏳ | Phase 1 |
-| Data-driven routing | ✅ | ⏳ | Phase 2 |
-| Token transformation | ✅ | ⏳ | Phase 2 |
+| Multiple tokens per place | ✅ | ✅ | Implemented (unified marking) |
+| Token attributes (color) | ✅ | ✅ | Implemented |
+| Data-driven routing | ✅ | ✅ | Implemented (token-aware guards, per-token firing) |
+| Token transformation | ✅ | ✅ | Implemented (`TransformTokens`) |
 | **Hierarchical CPN (HCPN)** |
-| Sub-workflow support | ✅ | ⏳ | Future (Phase 7+) |
-| Nested workflows | ✅ | ⏳ | Future (Phase 7+) |
+| Sub-workflow support | ✅ | ⏳ | Planned |
+| Nested workflows | ✅ | ⏳ | Planned |
 | **Storage & Persistence** |
 | SQLite support | ✅ | ✅ | Implemented |
 | MySQL support | ✅ | ⏳ | Not planned yet |
-| PostgreSQL support | ✅ | ⏳ | Not planned yet |
-| Token persistence | ✅ | ⏳ | Phase 3 |
-| Long-running process support | ✅ | ⏳ | Phase 3 (planned) |
+| PostgreSQL support | ✅ | ✅ | Implemented |
+| Token persistence | ✅ | ✅ | Implemented (full marking round-trips) |
+| Long-running process support | ✅ | ✅ | Implemented (persistent state + optimistic concurrency) |
 | **Configuration & Definition** |
 | YAML configuration | ❌ | ✅ | Implemented |
 | Web UI for definition | ✅ | ⏳ | Examples only |
@@ -79,12 +79,12 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Production-tested**: Used in real-world applications
 - ✅ **Mature implementation**: Handles edge cases and complex scenarios
 
-#### Our Plan
+#### Ours
 - ✅ **Basic features**: Sequential and parallel transitions implemented
+- ✅ **CPN**: Colored Petri Nets implemented (see below)
 - ⏳ **Advanced features**: Iterative, timed, automatic transitions planned
-- ⏳ **CPN focus**: Prioritizing Colored Petri Nets implementation first
 
-**Insight**: petri_flow has comprehensive basic features. We should ensure our CPN implementation doesn't break existing functionality.
+**Insight**: petri_flow has comprehensive basic features. Our CPN implementation kept the existing boolean-marking functionality intact (it is the single-token special case of the unified marking).
 
 ### 2. Colored Petri Nets (CPN)
 
@@ -93,18 +93,14 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Production-ready**: Used in real workflows
 - ✅ **Token data**: Tokens carry attributes (color)
 
-#### Our Plan
-- ⏳ **Phase 1-2**: Core token model and transition token selection (2-6 weeks)
-- ⏳ **Phase 3**: Storage layer extension (2-3 weeks)
-- ⏳ **Phase 4**: YAML configuration support (2 weeks)
-- ⏳ **Phase 5**: Advanced features (3-4 weeks)
+#### Ours
+- ✅ **Unified marking**: Multiple data-carrying tokens per place; boolean workflows are the single-token special case
+- ✅ **Per-token firing**: `ApplyTransitionForToken` moves an individual token; guards can inspect token attributes
+- ✅ **Token queries and transformation**: `FindTokens`, `CountTokens`, `AggregateTokens`, `TransformTokens`
+- ✅ **Persistence**: The full marking (including token data) round-trips through storage
+- ✅ **YAML**: Colored tokens are seeded with the polymorphic `initial_marking` key
 
-**Key Difference**: petri_flow has CPN implemented. Our plan is comprehensive but not yet implemented.
-
-**Recommendation**: Study petri_flow's CPN implementation patterns, especially:
-- How they handle token selection
-- Token correlation logic
-- Token transformation patterns
+See [CPN_GUIDE.md](../guides/CPN_GUIDE.md) for the full guide.
 
 ### 3. Hierarchical CPN (HCPN)
 
@@ -112,10 +108,10 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Sub-workflow support**: Implemented and production-ready
 - ✅ **Nested workflows**: Can call sub-workflows from parent workflows
 
-#### Our Plan
-- ⏳ **Future Phase 7+**: HCPN planned but not yet designed
-- ✅ **HCPN-ready architecture**: Interfaces reserved for future implementation
-- ✅ **No breaking changes**: CPN implementation won't block HCPN
+#### Ours
+- ⏳ **Planned**: HCPN/sub-workflows are not yet designed or implemented
+- ✅ **HCPN-ready architecture**: The unified marking and token model don't block HCPN
+- ✅ **No breaking changes expected**: The shipped CPN layer was added without breaking the boolean model
 
 **Insight**: petri_flow's sub-workflow implementation could inform our HCPN design.
 
@@ -126,13 +122,12 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Token persistence**: Tokens stored in database
 - ✅ **Long-running processes**: Handles workflows that run for days/weeks
 
-#### Our Plan
+#### Ours
 - ✅ **SQLite**: Implemented
-- ⏳ **MySQL/PostgreSQL**: Not planned yet (interface allows it)
-- ⏳ **Token persistence**: Phase 3 (2-3 weeks)
-- ✅ **Long-running process design**: Documented in implementation plan
-
-**Recommendation**: Consider adding MySQL/PostgreSQL support after CPN implementation.
+- ✅ **PostgreSQL**: Implemented
+- ⏳ **MySQL**: Not planned yet (the interface allows it)
+- ✅ **Token persistence**: Implemented — the full marking, including token data, round-trips through storage
+- ✅ **Long-running processes**: Persistent state plus optimistic concurrency (`VersionedStorage`) and transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
 
 ### 5. Configuration & Definition
 
@@ -142,8 +137,8 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Graph visualization**: Graphviz-based diagrams
 - ✅ **Case/token migration graph**: Visualize token movement
 
-#### Our Plan
-- ✅ **YAML configuration**: Implemented and comprehensive
+#### Ours
+- ✅ **YAML configuration**: Implemented and comprehensive (strict loader, polymorphic `initial_marking`)
 - ⏳ **Web UI**: Examples only, not production-ready
 - ✅ **Mermaid diagrams**: Generate diagrams from definitions
 - ❌ **Token migration graph**: Not planned
@@ -158,9 +153,9 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Powerful guard expressions**: Custom guard language
 - ✅ **Production-tested**: Handles complex guard logic
 
-#### Our Plan
+#### Ours
 - ✅ **Expression guards**: Using expr-lang/expr (powerful and flexible)
-- ✅ **Token-aware guards**: Planned for Phase 2
+- ✅ **Token-aware guards**: Implemented — guard events carry the colored tokens at the transition's input places
 - ✅ **Workflow context**: Guards can access workflow-level data
 
 **Advantage**: expr-lang/expr is a mature, well-documented expression language.
@@ -172,8 +167,8 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Assignment management**: Powerful assignment system
 - ✅ **ActsAsParty**: Flexible party system for organizational structure
 
-#### Our Plan
-- ⏳ **Role-based access**: Planned but not implemented
+#### Ours
+- ⏳ **Role-based access**: Planned but not implemented (guards can check `hasRole` today)
 - ❌ **Organizational structure**: Not planned
 - ❌ **Assignment management**: Not planned
 
@@ -188,7 +183,7 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ✅ **Replaceable forms**: Can use custom form systems
 - ✅ **Web UI**: Complete web interface for workflow management
 
-#### Our Plan
+#### Ours
 - ❌ **Forms**: Not planned (focus on engine, not UI)
 - ⏳ **Web UI**: Examples only, not production-ready
 - ✅ **Standalone library**: Focus on engine, not UI
@@ -203,7 +198,7 @@ This document compares our CPN implementation plan with [petri_flow](https://git
 - ❌ **Message correlation**: Not mentioned
 - ❌ **Compensation**: Not mentioned
 
-#### Our Plan
+#### Ours
 - ✅ **Workflow history**: Implemented
 - ✅ **Event system**: Implemented
 - ⏳ **Message correlation**: Planned
@@ -232,9 +227,10 @@ Rails Application
 ### Our Architecture
 ```
 Go Application
-├── Workflow Engine (Go library)
+├── Workflow Engine (Go library, colored-token marking)
 ├── Storage Interface (pluggable)
 │   ├── SQLite (implemented)
+│   ├── PostgreSQL (implemented)
 │   └── Custom implementations
 ├── YAML Configuration
 ├── History Store (pluggable)
@@ -257,14 +253,14 @@ Go Application
 4. **Web UI**: Complete management interface
 5. **Sub-Workflows**: HCPN implemented and working
 
-### 2. What Our Plan Does Well
+### 2. What Ours Does Well
 
-1. **YAML Configuration**: More portable and version-control friendly
-2. **Standalone Library**: Can be used in any Go application
-3. **Interface-Based Design**: Pluggable storage and history
-4. **Modern Expression Language**: expr-lang/expr is powerful and well-maintained
-5. **HCPN-Ready Architecture**: Designed for future HCPN without breaking changes
-6. **Long-Running Process Design**: Explicitly designed for durability
+1. **CPN Shipped**: Data-carrying tokens, per-token firing, token-aware guards, token queries/transformation
+2. **YAML Configuration**: More portable and version-control friendly
+3. **Standalone Library**: Can be used in any Go application
+4. **Interface-Based Design**: Pluggable storage (SQLite, PostgreSQL) and history
+5. **Modern Expression Language**: expr-lang/expr is powerful and well-maintained
+6. **Durability**: Persistent state with optimistic concurrency and transactional building blocks
 
 ### 3. What We Can Learn from petri_flow
 
@@ -282,35 +278,24 @@ Go Application
 
 ## Recommendations
 
-### Short-Term (CPN Implementation)
+### Short-Term
 
-1. **Study petri_flow's CPN patterns**:
-   - Token selection algorithms
-   - Token correlation logic
-   - Token transformation patterns
+1. **Deepen CPN ergonomics** (core CPN is shipped):
+   - Study petri_flow's token correlation logic for multi-place token matching
+   - Richer token selection strategies
 
-2. **Ensure backward compatibility**:
-   - Don't break existing boolean marking workflows
-   - Maintain interface compatibility
+2. **Improve examples**:
+   - Production-ready web UI example
+   - REST API example
 
-3. **Focus on core features**:
-   - Token model (Phase 1)
-   - Transition token selection (Phase 2)
-   - Storage persistence (Phase 3)
-
-### Medium-Term (After CPN)
+### Medium-Term
 
 1. **Add database support**:
-   - MySQL storage implementation
-   - PostgreSQL storage implementation
+   - MySQL storage implementation (SQLite and PostgreSQL already ship)
 
 2. **Enhance visualization**:
    - Token migration graphs
    - Real-time token visualization
-
-3. **Improve examples**:
-   - Production-ready web UI example
-   - REST API example
 
 ### Long-Term (Future Features)
 
@@ -330,21 +315,21 @@ Go Application
 
 ## Conclusion
 
-**petri_flow** is a mature, production-ready workflow engine with comprehensive features. **Our Go workflow engine** is in active development with a focus on CPN implementation and a clean, portable design.
+**petri_flow** is a mature, production-ready workflow engine with comprehensive features. **Our Go workflow engine** is in active development, with CPN implemented and a clean, portable design.
 
 **Key Takeaways**:
-1. **petri_flow has CPN implemented** - we can learn from their patterns
+1. **Both engines have CPN implemented** - we can still learn from petri_flow's correlation patterns
 2. **Our YAML approach is more portable** - better for version control and deployment
 3. **Our standalone library design** - more flexible for different use cases
-4. **Our HCPN-ready architecture** - designed for future growth
-5. **Our long-running process focus** - explicitly designed for durability
+4. **Our HCPN-ready architecture** - designed for future growth (HCPN itself is not yet implemented)
+5. **Our long-running process support** - persistent state with optimistic concurrency
 
-**Recommendation**: Study petri_flow's implementation patterns, especially for CPN and HCPN, while maintaining our design principles (portability, interface-based, standalone library).
+**Recommendation**: Study petri_flow's implementation patterns, especially for token correlation and HCPN, while maintaining our design principles (portability, interface-based, standalone library).
 
 ## References
 
 - [petri_flow GitHub](https://github.com/hooopo/petri_flow)
 - [petri_flow Documentation](https://hooopo.gitbook.io/petri-flow/)
-- [Our CPN Implementation Plan](CPN_IMPLEMENTATION_PLAN.md)
-- [Our README](README.md)
+- [Our CPN Guide](../guides/CPN_GUIDE.md)
+- [Our README](../../README.md)
 
