@@ -167,7 +167,7 @@ func TestExpressionConstraint_Validate(t *testing.T) {
 			from = transition.From()
 			to = transition.To()
 		}
-		return workflow.NewGuardEvent(context.Background(), transition, from, to, wf)
+		return workflow.NewGuardEvent(context.Background(), transition, from, to, nil, wf)
 	}
 
 	tests := []struct {
@@ -728,7 +728,7 @@ func TestExpressionConstraint_Validate_CustomEnv(t *testing.T) {
 	}
 
 	tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
-	event := workflow.NewGuardEvent(context.Background(), tr, tr.From(), tr.To(), wf)
+	event := workflow.NewGuardEvent(context.Background(), tr, tr.From(), tr.To(), nil, wf)
 
 	err = constraint.Validate(event)
 	if err != nil {

@@ -1,7 +1,7 @@
 # Example YAML workflow configuration
 workflow:
   name: blog_publishing
-  initial_place: draft
+  initial_marking: draft
   
   # Workflow-level metadata (injected into context)
   metadata:

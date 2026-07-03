@@ -11,7 +11,7 @@ func TestLoadConfigFromBytes(t *testing.T) {
 	validYAML := `
 workflow:
   name: test_workflow
-  initial_place: start
+  initial_marking: start
   transitions:
     - name: to_end
       from: [start]
@@ -39,7 +39,7 @@ workflow:
 	// Test with missing workflow name (validation error)
 	missingNameYAML := `
 workflow:
-  initial_place: start
+  initial_marking: start
   transitions:
     - name: to_end
       from: [start]

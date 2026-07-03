@@ -42,7 +42,7 @@ The workflow is defined in `workflow.yaml`, which includes:
 ```yaml
 workflow:
   name: website_content_approval
-  initial_place: draft
+  initial_marking: draft
   places:
     - name: draft
     - name: review

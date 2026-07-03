@@ -635,7 +635,7 @@ func TestWorkflow_Diagram(t *testing.T) {
     %% Current places
     class start currentPlace
 
-    %% Initial place
+    %% Initial place(s)
     [*] --> start
 `,
 		},
@@ -662,7 +662,7 @@ func TestWorkflow_Diagram(t *testing.T) {
     %% Current places
     class start currentPlace
 
-    %% Initial place
+    %% Initial place(s)
     [*] --> start
 `,
 		},
@@ -696,7 +696,7 @@ func TestWorkflow_Diagram(t *testing.T) {
     %% Current places
     class start currentPlace
 
-    %% Initial place
+    %% Initial place(s)
     [*] --> start
 `,
 		},

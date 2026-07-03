@@ -1,0 +1,25 @@
+workflow:
+  name: order_approval
+  # Colored Petri Net: each order is a token carrying its own amount. The initial
+  # marking (map form) seeds the batch of orders at "pending".
+  initial_marking:
+    pending:
+      - {order_id: "A-1", amount: 500}
+      - {order_id: "A-2", amount: 1500}
+      - {order_id: "A-3", amount: 250}
+      - {order_id: "A-4", amount: 9000}
+  places:
+    - name: pending
+    - name: approved
+    - name: review
+  transitions:
+    # Guard-based routing: each order advances along the transition whose guard
+    # its own data satisfies. `token` is the order being fired.
+    - name: auto_approve
+      from: [pending]
+      to: [approved]
+      guard: "token.amount <= 1000"
+    - name: manual_review
+      from: [pending]
+      to: [review]
+      guard: "token.amount > 1000"

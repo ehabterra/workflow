@@ -17,7 +17,7 @@ The workflow package now supports loading workflow definitions from YAML configu
 ```yaml
 workflow:
   name: blog_publishing
-  initial_place: draft
+  initial_marking: draft
   
   metadata:
     title: "Blog Publishing Workflow"
@@ -94,7 +94,7 @@ func main() {
 ```yaml
 workflow:
   name: string              # Required: Workflow name
-  initial_place: string     # Required: Starting place
+  initial_marking: <place | [places] | {place: [tokens]}>  # Required: starting marking
   metadata:                 # Optional: Workflow-level metadata (injected into context)
     key: value
   places:                   # Optional: Explicit place definitions

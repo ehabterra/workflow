@@ -133,8 +133,22 @@ func (l *Loader) LoadWorkflow(config *Config, workflowID string) (*workflow.Work
 		return nil, err
 	}
 
-	// Create workflow with initial place
-	wf, err := workflow.NewWorkflow(workflowID, definition, workflow.Place(config.Workflow.InitialPlace))
+	// Build the initial marking from initial_marking: a place with no declared
+	// tokens gets an uncolored presence token; a place with tokens is seeded with
+	// exactly those colored tokens.
+	initial := workflow.NewMarking(nil)
+	for place, tokenList := range config.Workflow.InitialMarking.Places {
+		p := workflow.Place(place)
+		if len(tokenList) == 0 {
+			_ = initial.AddPlace(p)
+			continue
+		}
+		for _, d := range tokenList {
+			initial.AddToken(p, workflow.NewToken(workflow.TokenData(d)))
+		}
+	}
+
+	wf, err := workflow.NewWorkflowFromMarking(workflowID, definition, initial)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow: %w", err)
 	}

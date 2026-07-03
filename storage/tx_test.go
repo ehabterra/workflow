@@ -49,7 +49,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 
 	// --- Success path: both writes commit together. ---
 	err = storage.RunInTx(ctx, db, func(tx *sql.Tx) error {
-		if err := store.SaveStateTx(ctx, tx, "wf1", []workflow.Place{"review"}, nil); err != nil {
+		if err := store.SaveStateTx(ctx, tx, "wf1", workflow.NewMarking([]workflow.Place{"review"}), nil); err != nil {
 			return err
 		}
 		return hist.SaveTransitionTx(ctx, tx, rec)
@@ -58,10 +58,11 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 		t.Fatalf("RunInTx (success): %v", err)
 	}
 
-	places, _, err := store.LoadState(ctx, "wf1")
+	m, _, err := store.LoadState(ctx, "wf1")
 	if err != nil {
 		t.Fatalf("LoadState after commit: %v", err)
 	}
+	places := m.Places()
 	if len(places) != 1 || places[0] != "review" {
 		t.Fatalf("state after commit = %v, want [review]", places)
 	}
@@ -77,7 +78,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 	wantErr := errors.New("boom: simulated crash mid-transition")
 	err = storage.RunInTx(ctx, db, func(tx *sql.Tx) error {
 		// This state change moves wf1 to "done"...
-		if err := store.SaveStateTx(ctx, tx, "wf1", []workflow.Place{"done"}, nil); err != nil {
+		if err := store.SaveStateTx(ctx, tx, "wf1", workflow.NewMarking([]workflow.Place{"done"}), nil); err != nil {
 			return err
 		}
 		// ...but the transition record fails to persist, aborting the whole tx.
@@ -88,10 +89,11 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 	}
 
 	// State must be unchanged: still "review", not "done".
-	places, _, err = store.LoadState(ctx, "wf1")
+	m, _, err = store.LoadState(ctx, "wf1")
 	if err != nil {
 		t.Fatalf("LoadState after rollback: %v", err)
 	}
+	places = m.Places()
 	if len(places) != 1 || places[0] != "review" {
 		t.Fatalf("state after rollback = %v, want it unchanged at [review]", places)
 	}
@@ -144,7 +146,7 @@ func TestRunInTx_RollsBackOnPanic(t *testing.T) {
 	}()
 
 	_ = storage.RunInTx(ctx, db, func(tx *sql.Tx) error {
-		if err := store.SaveStateTx(ctx, tx, "wfP", []workflow.Place{"x"}, nil); err != nil {
+		if err := store.SaveStateTx(ctx, tx, "wfP", workflow.NewMarking([]workflow.Place{"x"}), nil); err != nil {
 			return err
 		}
 		panic("simulated crash")

@@ -10,12 +10,12 @@ import (
 
 // Workflow represents a workflow instance
 type Workflow struct {
-	name         string
-	definition   *Definition
-	initialPlace Place
-	marking      Marking
-	listeners    map[EventType][]any
-	context      map[string]any
+	name          string
+	definition    *Definition
+	initialPlaces []Place
+	marking       Marking
+	listeners     map[EventType][]any
+	context       map[string]any
 
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
@@ -54,11 +54,13 @@ func (w *Workflow) setVersion(v int64) {
 // deadlines; implementations are expected to honor it (e.g. by using the
 // database/sql *Context methods).
 type Storage interface {
-	// LoadState loads the workflow's places and its context data for the given ID.
-	LoadState(ctx context.Context, id string) (places []Place, context map[string]any, err error)
+	// LoadState loads the workflow's marking and its context data for the given ID.
+	LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, err error)
 
-	// SaveState saves the workflow's places and its context data for the given ID.
-	SaveState(ctx context.Context, id string, places []Place, context map[string]any) error
+	// SaveState saves the workflow's marking and its context data for the given ID.
+	// The full marking is persisted, so data-carrying (colored) tokens round-trip;
+	// simple boolean workflows serialize to the compact place-array form.
+	SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
 
 	// DeleteState removes the workflow state for the given ID.
 	DeleteState(ctx context.Context, id string) error
@@ -76,18 +78,22 @@ type Storage interface {
 type VersionedStorage interface {
 	Storage
 
-	// LoadVersionedState loads the workflow's places, context data, and current
+	// LoadVersionedState loads the workflow's marking, context data, and current
 	// version. A brand-new (never saved) workflow has version 0.
-	LoadVersionedState(ctx context.Context, id string) (places []Place, context map[string]any, version int64, err error)
+	LoadVersionedState(ctx context.Context, id string) (marking Marking, context map[string]any, version int64, err error)
 
 	// SaveVersionedState saves the workflow only if the stored version equals
 	// expectedVersion, returning the new (incremented) version on success. Pass
 	// expectedVersion 0 to create a new workflow. A mismatch — because another
 	// writer saved first, or the row already exists — returns ErrConflict.
-	SaveVersionedState(ctx context.Context, id string, places []Place, context map[string]any, expectedVersion int64) (newVersion int64, err error)
+	SaveVersionedState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
 }
 
-// NewWorkflow constructor
+// NewWorkflow creates a workflow instance starting at initialPlace.
+//
+// Every workflow's marking is a Colored Petri Net marking; a plain workflow just
+// uses uncolored tokens (boolean presence). Reach for the token methods
+// (CreateToken, GetTokens, ...) only when you need data-carrying tokens.
 func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Workflow, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)
@@ -101,18 +107,53 @@ func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Work
 		return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, initialPlace)
 	}
 
-	marking := NewMarking([]Place{initialPlace})
+	return newWorkflow(name, definition, NewMarking([]Place{initialPlace})), nil
+}
 
+// NewWorkflowFromMarking creates a workflow instance whose starting state is the
+// given marking. Use it when the initial state has multiple places or
+// data-carrying (colored) tokens; NewWorkflow is the single-place shorthand.
+//
+// The marking is adopted as-is (its tokens are preserved), and every place it
+// occupies must be defined in the workflow.
+func NewWorkflowFromMarking(name string, definition *Definition, initial Marking) (*Workflow, error) {
+	if name == "" {
+		return nil, fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkflow)
+	}
+	if definition == nil {
+		return nil, fmt.Errorf("%w: definition cannot be nil", ErrInvalidDefinition)
+	}
+	if initial == nil {
+		return nil, fmt.Errorf("%w: initial marking cannot be nil", ErrInvalidMarking)
+	}
+
+	places := initial.Places()
+	if len(places) == 0 {
+		return nil, fmt.Errorf("%w: initial marking has no places", ErrInvalidMarking)
+	}
+	for _, p := range places {
+		if !definition.Place(p) {
+			return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, p)
+		}
+	}
+
+	return newWorkflow(name, definition, initial), nil
+}
+
+// newWorkflow builds a Workflow from a marking, which is the single source of
+// truth for the initial state: the initial places are derived from it rather than
+// passed separately (so the two can never drift apart).
+func newWorkflow(name string, definition *Definition, marking Marking) *Workflow {
 	return &Workflow{
 		name:            name,
 		definition:      definition,
-		initialPlace:    initialPlace,
+		initialPlaces:   marking.Places(),
 		marking:         marking,
 		listeners:       make(map[EventType][]any),
 		context:         make(map[string]any),
 		manager:         nil,
 		listenerHandles: make(map[uint64]int),
-	}, nil
+	}
 }
 
 // Name returns the workflow name
@@ -336,7 +377,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(targetTransition.From()), w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -387,7 +428,7 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 			}
 			if matches {
 				// Create guard event for validation
-				event := NewGuardEvent(ctx, &t, w.marking.Places(), to, w)
+				event := NewGuardEvent(ctx, &t, w.marking.Places(), to, w.coloredTokensAt(t.From()), w)
 
 				// First, validate transition constraints
 				if err = t.validate(event); err != nil {
@@ -452,7 +493,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(targetTransition.From()), w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -472,31 +513,25 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	from := targetTransition.From()
 	to := targetTransition.To()
 
-	// Fire before transition event (unlock before calling listeners)
+	// Fire before transition event (unlock before calling listeners). Gather the
+	// colored tokens being moved now, while they are still at the input places, so
+	// both events can expose them.
 	w.mu.Unlock()
-	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, w)
+	moved := w.coloredTokensAt(from)
+	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, moved, w)
 	if err := w.fireEvent(beforeEvent); err != nil {
 		w.mu.Lock()
 		return err
 	}
 	w.mu.Lock()
 
-	// Remove the 'from' places from marking
-	currentPlaces = w.marking.Places()
-	newPlaces := make([]Place, 0, len(currentPlaces))
-	for _, place := range currentPlaces {
-		if !slices.Contains(from, place) {
-			newPlaces = append(newPlaces, place)
-		}
-	}
-
-	// Add the target places to marking
-	newPlaces = append(newPlaces, to...)
-	w.marking.SetPlaces(newPlaces)
+	// Move tokens from the input places to the output places, preserving colored
+	// token data and leaving unrelated places untouched.
+	w.moveMarking(from, to)
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
-	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, w)
+	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, moved, w)
 	if err := w.fireEvent(afterEvent); err != nil {
 		w.mu.Lock()
 		return err
@@ -560,30 +595,24 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 		return ErrInvalidTransition
 	}
 
-	// Fire before transition event (unlock before calling listeners)
+	// Fire before transition event (unlock before calling listeners). Gather the
+	// colored tokens being moved now, while they are still at the input places.
 	w.mu.Unlock()
-	event := NewEvent(ctx, EventBeforeTransition, transition, from, targetPlaces, w)
+	moved := w.coloredTokensAt(from)
+	event := NewEvent(ctx, EventBeforeTransition, transition, from, targetPlaces, moved, w)
 	if err := w.fireEvent(event); err != nil {
 		w.mu.Lock()
 		return err
 	}
 	w.mu.Lock()
 
-	// Remove the 'from' places from marking
-	newPlaces := make([]Place, 0, len(currentPlaces))
-	for _, place := range currentPlaces {
-		if !slices.Contains(from, place) {
-			newPlaces = append(newPlaces, place)
-		}
-	}
-
-	// Add the target places to marking
-	newPlaces = append(newPlaces, targetPlaces...)
-	w.marking.SetPlaces(newPlaces)
+	// Move tokens from the input places to the output places, preserving colored
+	// token data and leaving unrelated places untouched.
+	w.moveMarking(from, targetPlaces)
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
-	event = NewEvent(ctx, EventAfterTransition, transition, from, targetPlaces, w)
+	event = NewEvent(ctx, EventAfterTransition, transition, from, targetPlaces, moved, w)
 	if err := w.fireEvent(event); err != nil {
 		w.mu.Lock()
 		return err
@@ -651,9 +680,24 @@ func (w *Workflow) SetMarking(marking Marking) error {
 	return nil
 }
 
-// InitialPlace returns the initial place of the workflow
+// InitialPlace returns the workflow's first initial place. When the workflow
+// started from a marking with multiple initial places it returns the first
+// (sorted); use InitialPlaces for the full set.
 func (w *Workflow) InitialPlace() Place {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.initialPlace
+	if len(w.initialPlaces) == 0 {
+		return ""
+	}
+	return w.initialPlaces[0]
+}
+
+// InitialPlaces returns a copy of the places the workflow's initial marking
+// occupied.
+func (w *Workflow) InitialPlaces() []Place {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := make([]Place, len(w.initialPlaces))
+	copy(out, w.initialPlaces)
+	return out
 }

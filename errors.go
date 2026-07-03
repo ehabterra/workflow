@@ -49,4 +49,11 @@ var (
 	// the stored version no longer matches the expected version — i.e. another writer
 	// updated the workflow first (optimistic-concurrency conflict).
 	ErrConflict = errors.New("version conflict")
+
+	// ErrInvalidToken is returned when a token is malformed (for example it has an
+	// empty ID).
+	ErrInvalidToken = errors.New("invalid token")
+
+	// ErrTokenNotFound is returned when a token cannot be found in a place.
+	ErrTokenNotFound = errors.New("token not found")
 )

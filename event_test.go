@@ -39,7 +39,7 @@ func TestBaseEvent_Context(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
-			event := workflow.NewEvent(tt.ctx, workflow.EventBeforeTransition, tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil)
+			event := workflow.NewEvent(tt.ctx, workflow.EventBeforeTransition, tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil, nil)
 
 			result := event.Context()
 			if (result == nil) != tt.wantNil {
@@ -89,7 +89,7 @@ func TestGuardEvent_SetBlocking(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
-			event := workflow.NewGuardEvent(context.Background(), tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil)
+			event := workflow.NewGuardEvent(context.Background(), tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil, nil)
 
 			// Set initial blocking state
 			event.SetBlocking(tt.initialBlocking)
@@ -108,7 +108,7 @@ func TestGuardEvent_SetBlocking(t *testing.T) {
 
 func TestGuardEvent_IsBlocking(t *testing.T) {
 	tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
-	event := workflow.NewGuardEvent(context.Background(), tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil)
+	event := workflow.NewGuardEvent(context.Background(), tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil, nil)
 
 	// Default should be false
 	if event.IsBlocking() != false {
@@ -181,7 +181,7 @@ func TestNewEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event := workflow.NewEvent(context.Background(), tt.eventType, tt.transition, tt.from, tt.to, tt.workflow)
+			event := workflow.NewEvent(context.Background(), tt.eventType, tt.transition, tt.from, tt.to, nil, tt.workflow)
 
 			if event.Type() != tt.eventType {
 				t.Errorf("Type() = %v, want %v", event.Type(), tt.eventType)
@@ -208,7 +208,7 @@ func TestNewEvent(t *testing.T) {
 
 func TestNewGuardEvent(t *testing.T) {
 	tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
-	event := workflow.NewGuardEvent(context.Background(), tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil)
+	event := workflow.NewGuardEvent(context.Background(), tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil, nil)
 
 	if event.Type() != workflow.EventGuard {
 		t.Errorf("Type() = %v, want %v", event.Type(), workflow.EventGuard)

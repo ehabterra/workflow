@@ -2,7 +2,7 @@
 # This workflow manages the lifecycle of website content from draft to published
 workflow:
   name: website_content_approval
-  initial_place: draft
+  initial_marking: draft
   
   # Workflow-level metadata
   metadata:

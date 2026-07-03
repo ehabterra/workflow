@@ -7,7 +7,7 @@
 
 workflow:
   name: advanced_project_management
-  initial_place: planning
+  initial_marking: planning
   
   # Workflow-level metadata (available in workflow context)
   metadata:

@@ -3,10 +3,20 @@ package workflow_test
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/ehabterra/workflow"
 )
+
+// sortPlaces returns a sorted copy of the given places so assertions can be
+// made order-independent (Marking.Places() returns places sorted alphabetically).
+func sortPlaces(places []workflow.Place) []workflow.Place {
+	out := make([]workflow.Place, len(places))
+	copy(out, places)
+	slices.Sort(out)
+	return out
+}
 
 func TestNewMarking(t *testing.T) {
 	tests := []struct {
@@ -46,8 +56,8 @@ func TestDefaultMarking_places(t *testing.T) {
 	initialplaces := []workflow.Place{"start", "middle"}
 	marking := workflow.NewMarking(initialplaces)
 	got := marking.Places()
-	if !reflect.DeepEqual(got, initialplaces) {
-		t.Errorf("places() = %v, want %v", got, initialplaces)
+	if !reflect.DeepEqual(got, sortPlaces(initialplaces)) {
+		t.Errorf("places() = %v, want %v", got, sortPlaces(initialplaces))
 	}
 }
 
@@ -124,8 +134,8 @@ func TestDefaultMarking_MarshalJSON(t *testing.T) {
 	}
 
 	got := newMarking.Places()
-	if !reflect.DeepEqual(got, initialplaces) {
-		t.Errorf("places() = %v, want %v", got, initialplaces)
+	if !reflect.DeepEqual(got, sortPlaces(initialplaces)) {
+		t.Errorf("places() = %v, want %v", got, sortPlaces(initialplaces))
 	}
 }
 
@@ -294,8 +304,8 @@ func TestMarking_JSON(t *testing.T) {
 
 			// Compare places
 			got := newMarking.Places()
-			if !reflect.DeepEqual(got, tt.places) {
-				t.Errorf("JSON roundtrip = %v, want %v", got, tt.places)
+			if !reflect.DeepEqual(got, sortPlaces(tt.places)) {
+				t.Errorf("JSON roundtrip = %v, want %v", got, sortPlaces(tt.places))
 			}
 		})
 	}

@@ -298,7 +298,7 @@ The workflow demonstrates parallel processing:
 ```yaml
 workflow:
   name: advanced_project_management
-  initial_place: planning
+  initial_marking: planning
   metadata:
     # Workflow-level metadata
   places:

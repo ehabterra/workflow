@@ -90,7 +90,7 @@ func TestMigrationWorkflow(t *testing.T) {
 		t.Fatalf("Failed to load state: %v", err)
 	}
 
-	if len(loadedPlaces) != 1 || loadedPlaces[0] != "start" {
+	if p := loadedPlaces.Places(); len(p) != 1 || p[0] != "start" {
 		t.Errorf("Expected places [start], got %v", loadedPlaces)
 	}
 
@@ -128,7 +128,7 @@ func TestMigrationWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load state after transition: %v", err)
 	}
-	if len(loadedPlaces) != 1 || loadedPlaces[0] != "end" {
+	if p := loadedPlaces.Places(); len(p) != 1 || p[0] != "end" {
 		t.Errorf("Expected places [end] after transition, got %v", loadedPlaces)
 	}
 }
@@ -222,6 +222,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 		CREATE TABLE workflow_states (
 			id TEXT PRIMARY KEY,
 			state TEXT NOT NULL,
+			version INTEGER NOT NULL DEFAULT 0,
 			title TEXT,
 			content TEXT
 		)
@@ -292,7 +293,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 		t.Fatalf("Failed to load old workflow: %v", err)
 	}
 
-	if len(loadedPlaces) != 1 || loadedPlaces[0] != "start" {
+	if p := loadedPlaces.Places(); len(p) != 1 || p[0] != "start" {
 		t.Errorf("Expected places [start], got %v", loadedPlaces)
 	}
 

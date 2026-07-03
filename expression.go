@@ -87,6 +87,12 @@ func (c *ExpressionConstraint) Validate(event Event) error {
 }
 
 // defaultEnvBuilder creates the default evaluation environment from the event.
+//
+// The workflow context is copied in first, then a set of reserved names is added
+// for use in guard expressions: workflow, transition, transition_<key>, from, to,
+// token, tokens, and the helpers hasRole, hasPermission, in. These reserved names
+// shadow any workflow-context key of the same name, so avoid using them as context
+// keys.
 func defaultEnvBuilder(event Event) map[string]any {
 	env := make(map[string]any)
 
@@ -119,6 +125,20 @@ func defaultEnvBuilder(event Event) map[string]any {
 	// Add place information
 	env["from"] = event.From()
 	env["to"] = event.To()
+
+	// Add token data so guards can route on it. For per-token firing there is a
+	// single token, exposed as `token` (e.g. token.amount > 1000); all involved
+	// tokens' data is available as `tokens`.
+	if toks := event.Tokens(); len(toks) > 0 {
+		datas := make([]TokenData, len(toks))
+		for i, t := range toks {
+			datas[i] = t.Data()
+		}
+		env["tokens"] = datas
+		if len(toks) == 1 {
+			env["token"] = datas[0]
+		}
+	}
 
 	// Add helper functions
 	env["hasRole"] = func(role string) bool {

@@ -16,11 +16,60 @@ type Config struct {
 
 // WorkflowConfig defines the workflow structure.
 type WorkflowConfig struct {
-	Name         string             `yaml:"name"`
-	InitialPlace string             `yaml:"initial_place"`
-	Metadata     map[string]any     `yaml:"metadata,omitempty"`
-	Places       []PlaceConfig      `yaml:"places,omitempty"`
-	Transitions  []TransitionConfig `yaml:"transitions"`
+	Name           string               `yaml:"name"`
+	InitialMarking InitialMarkingConfig `yaml:"initial_marking"`
+	Metadata       map[string]any       `yaml:"metadata,omitempty"`
+	Places         []PlaceConfig        `yaml:"places,omitempty"`
+	Transitions    []TransitionConfig   `yaml:"transitions"`
+}
+
+// InitialMarkingConfig declares a workflow's starting marking. It accepts three
+// YAML forms, so the simple case stays a one-liner and the Colored Petri Net case
+// is a single coherent construct:
+//
+//	initial_marking: draft                 # one place, an uncolored presence token
+//	initial_marking: [draft, needs_legal]  # several presence places
+//	initial_marking:                       # data-carrying (colored) tokens per place
+//	  pending:
+//	    - {order_id: "001", amount: 100}
+//	    - {order_id: "002", amount: 250}
+//
+// A place with a nil/empty token list gets a single uncolored presence token
+// (the boolean case); a place with tokens is seeded with exactly those tokens.
+type InitialMarkingConfig struct {
+	// Places maps each initial place to its colored tokens (nil = presence token).
+	Places map[string][]map[string]any
+}
+
+// UnmarshalYAML accepts a scalar place name, a sequence of place names, or a
+// mapping of place name to token list.
+func (im *InitialMarkingConfig) UnmarshalYAML(value *yaml.Node) error {
+	im.Places = make(map[string][]map[string]any)
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var name string
+		if err := value.Decode(&name); err != nil {
+			return err
+		}
+		if name != "" { // a bare/null value leaves Places empty; Validate reports it
+			im.Places[name] = nil
+		}
+	case yaml.SequenceNode:
+		var names []string
+		if err := value.Decode(&names); err != nil {
+			return err
+		}
+		for _, n := range names {
+			im.Places[n] = nil
+		}
+	case yaml.MappingNode:
+		if err := value.Decode(&im.Places); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("initial_marking must be a place name, a list of place names, or a map of place to tokens")
+	}
+	return nil
 }
 
 // PlaceConfig defines a place with optional metadata.
@@ -104,8 +153,9 @@ func LoadConfig(filename string) (*Config, error) {
 //
 // Decoding is strict: any key that is not part of the schema causes an error
 // (reported with its line number) rather than being silently ignored. This
-// prevents typos and not-yet-implemented features (for example the planned
-// CPN token keys) from being accepted and then quietly dropped.
+// prevents typos and not-yet-implemented features from being accepted and then
+// quietly dropped. Colored Petri Net tokens are declared with the supported
+// initial_tokens key (see WorkflowConfig.InitialTokens).
 func LoadConfigFromBytes(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -128,8 +178,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("workflow name is required")
 	}
 
-	if c.Workflow.InitialPlace == "" {
-		return fmt.Errorf("initial_place is required")
+	if len(c.Workflow.InitialMarking.Places) == 0 {
+		return fmt.Errorf("initial_marking is required")
 	}
 
 	if len(c.Workflow.Transitions) == 0 {
@@ -156,9 +206,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate initial place exists
-	if !placeSet[c.Workflow.InitialPlace] {
-		return fmt.Errorf("initial_place '%s' is not defined in places", c.Workflow.InitialPlace)
+	// Validate every initial_marking place is defined.
+	for place := range c.Workflow.InitialMarking.Places {
+		if !placeSet[place] {
+			return fmt.Errorf("initial_marking references undefined place '%s'", place)
+		}
 	}
 
 	// Validate transitions reference valid places

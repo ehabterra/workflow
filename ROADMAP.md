@@ -88,21 +88,21 @@ All tasks done: transactional state+history saves, optimistic concurrency, a sec
 
 ---
 
-## M2 — Colored Petri Nets / Smart Tokens (🔴, headline feature) — target: **v0.6.0**
+## M2 — Colored Petri Nets / Smart Tokens (🔴, headline feature) — target: **v0.6.0** — ✅ **COMPLETE (2026-07-02)**
 
-Foundational for weighted transitions, advanced sync, and HCPN. Follow `CPN_IMPLEMENTATION_PLAN.md` but ship incrementally.
+**Design decision (2026-07-02):** rather than a separate "CPN mode" bolted onto boolean markings, the model was **unified** — a boolean/elementary net is the trivial case of a CPN (places hold uncolored tokens). One `Marking`, one `Workflow`; the token methods are always present and cost is pay-for-what-you-use. This eliminated the dual-constructor / optional-`CPNMarking` / `ErrNotCPN` machinery. Since the project is pre-1.0, backward compatibility of the API was intentionally not preserved, but the *persisted wire format* is backward compatible (adaptive: old place arrays still load, no data migration).
 
-| # | Task | Effort | Acceptance |
-|---|------|--------|-----------|
-| M2.1 | **Token model** (`token.go`): `Token`, `TokenID`, `TokenData`, equality, validation. | M | Unit-tested; 100+ tokens creatable in one place. |
-| M2.2 | **CPN marking** — extend `Marking` (`TokensAt`, `AddToken`, `RemoveToken`, `TokenCount`), backward compatible with boolean marking. | M | All existing boolean tests pass unchanged; CPN mode opt-in. |
-| M2.3 | **Token-aware transitions** — selection strategies (`first`/`all`/`filter`/`custom`), consumption, per-token guards. | L | A transition routes tokens by attribute (the README `route_by_amount` example runs). |
-| M2.4 | **Token persistence** — JSON token column; save/load; migration from boolean. | M | Round-trip 100 tokens < 50ms; old rows still load. |
-| M2.5 | **CPN in YAML** — real `cpn_enabled`, `token_schemas`, `token_selection`, `token_routing` parsing (retire M0.2 stubs). | L | `examples/banking_system/banking_cpn.yaml` actually executes as designed. |
-| M2.6 | **Token transformation & queries** — transform expr, `FindTokens`, `CountTokens`, aggregate (sum/avg/min/max). | M | Batch-processing example with aggregation constraint works. |
-| M2.7 | **CPN docs + example** — `docs/CPN_GUIDE.md`, migration guide, `examples/cpn_batch_processing/`. | M | New user can build a CPN workflow from docs alone. |
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| M2.1 | **Token model** (`token.go`): `Token`, `TokenID`, `TokenData`, equality, validation. | ✅ | Value type, copy-on-access data, adaptive JSON. |
+| M2.2 | **Unified marking** — one `Marking` with presence + token views (`TokensAt`/`AddToken`/`RemoveToken`/`TokenCount`/`AllTokens`); token ops on `Workflow`. | ✅ | Boolean = uncolored tokens; no opt-in mode. All boolean tests pass. |
+| M2.3 | **Token-aware transitions** — `moveMarking` preserves colored tokens through firing; `ApplyTransitionForToken`; `SelectTokens`. | ✅ | Fixed the whole-marking-reset bug that wiped tokens at unrelated places. |
+| M2.4 | **Token persistence** — full marking persisted (SQLite + Postgres); adaptive format. | ✅ | Old place-array rows still load (no migration). Conformance kit has a colored-token round-trip. Pulled forward into the M2.2 commit. |
+| M2.5 | **CPN in YAML** — polymorphic `initial_marking` (scalar / list / map) declares the starting marking incl. colored tokens; `ClearPlace`. | ✅ | Replaced `initial_place` + `initial_tokens` with one polymorphic `initial_marking` key, mirroring the unified marking model (scalar = presence shorthand, map = colored tokens). Retired the aspirational `cpn_enabled`/`token_schemas` stubs; strict decoding still rejects unknown keys. |
+| M2.6 | **Token transformation & queries** — `FindTokens`, `CountTokens`, `AggregateTokens` (count/sum/min/max/avg), `TransformTokens`. | ✅ | Go-func predicates/transforms (flexible, testable). |
+| M2.7 | **CPN docs + example** — `docs/guides/CPN_GUIDE.md`, `examples/cpn_batch_processing/` (runnable). | ✅ | Example runs end-to-end; guide covers model, API, YAML, persistence, migration. |
 
-**Release gate:** every claim in README §"Colored Petri Nets (CPN)" is executable and tested ≥90%.
+**Token-aware guards & events (added 2026-07-03):** `Event`/`GuardEvent` now carry the tokens involved in a firing (`Event.Tokens()`), and the guard expression environment exposes `token`/`tokens`. This makes **attribute-routing declarative** — a transition guard like `token.amount <= 1000` gates per-token firing (the README `route_by_amount` shape). `NewEvent`/`NewGuardEvent` gained a `tokens []Token` parameter (breaking, pre-1.0). Also hardened the constructors: `newWorkflow` derives `initialPlaces` from the marking (single source of truth, no drift).
 
 ---
 

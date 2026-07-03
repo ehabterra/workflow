@@ -29,6 +29,11 @@ import (
 // against isolated state.
 type Factory func(t *testing.T) workflow.Storage
 
+// mk builds a boolean marking with a single (uncolored) token at each place.
+func mk(places ...workflow.Place) workflow.Marking {
+	return workflow.NewMarking(places)
+}
+
 // Run executes the full Storage conformance suite against newStore. If the store
 // returned by newStore also implements workflow.VersionedStorage, the versioning
 // conformance suite is run too.
@@ -38,14 +43,14 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("SaveLoadRoundTrip", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", []workflow.Place{"review"}, nil); err != nil {
+		if err := store.SaveState(ctx, "wf", mk("review"), nil); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
-		places, _, err := store.LoadState(ctx, "wf")
+		m, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
-		if len(places) != 1 || places[0] != "review" {
+		if places := m.Places(); len(places) != 1 || places[0] != "review" {
 			t.Fatalf("places = %v, want [review]", places)
 		}
 	})
@@ -61,17 +66,17 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("Overwrite", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", []workflow.Place{"a"}, nil); err != nil {
+		if err := store.SaveState(ctx, "wf", mk("a"), nil); err != nil {
 			t.Fatalf("first SaveState: %v", err)
 		}
-		if err := store.SaveState(ctx, "wf", []workflow.Place{"b"}, nil); err != nil {
+		if err := store.SaveState(ctx, "wf", mk("b"), nil); err != nil {
 			t.Fatalf("second SaveState: %v", err)
 		}
-		places, _, err := store.LoadState(ctx, "wf")
+		m, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
-		if len(places) != 1 || places[0] != "b" {
+		if places := m.Places(); len(places) != 1 || places[0] != "b" {
 			t.Fatalf("places = %v, want [b] (overwrite)", places)
 		}
 	})
@@ -79,7 +84,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("Delete", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", []workflow.Place{"a"}, nil); err != nil {
+		if err := store.SaveState(ctx, "wf", mk("a"), nil); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
 		if err := store.DeleteState(ctx, "wf"); err != nil {
@@ -93,16 +98,46 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("MultiplePlaces", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		want := []workflow.Place{"qa", "security"}
-		if err := store.SaveState(ctx, "wf", want, nil); err != nil {
+		if err := store.SaveState(ctx, "wf", mk("qa", "security"), nil); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
-		places, _, err := store.LoadState(ctx, "wf")
+		m, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
-		if len(places) != len(want) {
-			t.Fatalf("places = %v, want %v", places, want)
+		if places := m.Places(); len(places) != 2 {
+			t.Fatalf("places = %v, want 2 places", places)
+		}
+	})
+
+	t.Run("ColoredTokensRoundTrip", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		m := workflow.NewMarking(nil)
+		m.AddToken("pending", workflow.NewTokenWithID("t1", workflow.TokenData{"order": "A", "amount": float64(100)}))
+		m.AddToken("pending", workflow.NewTokenWithID("t2", workflow.TokenData{"order": "B", "amount": float64(250)}))
+		if err := store.SaveState(ctx, "batch", m, nil); err != nil {
+			t.Fatalf("SaveState: %v", err)
+		}
+
+		loaded, _, err := store.LoadState(ctx, "batch")
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if got := loaded.TokenCount("pending"); got != 2 {
+			t.Fatalf("TokenCount(pending) = %d, want 2", got)
+		}
+		if !loaded.HasToken("pending", "t1") || !loaded.HasToken("pending", "t2") {
+			t.Fatalf("loaded marking lost token identities: %+v", loaded.AllTokens())
+		}
+		// Verify a token's data survived the round-trip.
+		for _, tok := range loaded.TokensAt("pending") {
+			if tok.ID() == "t2" {
+				if v, _ := tok.Get("amount"); v != float64(250) {
+					t.Fatalf("token t2 amount = %v, want 250", v)
+				}
+			}
 		}
 	})
 
@@ -126,7 +161,7 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/CreateStartsAtOne", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		v, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"a"}, nil, 0)
+		v, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0)
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -138,7 +173,7 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/LoadReturnsVersion", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"a"}, nil, 0); err != nil {
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		_, _, v, err := vs.LoadVersionedState(ctx, "wf")
@@ -153,10 +188,10 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/CreateExistingConflicts", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"a"}, nil, 0); err != nil {
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if _, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"x"}, nil, 0); !errors.Is(err, workflow.ErrConflict) {
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("x"), nil, 0); !errors.Is(err, workflow.ErrConflict) {
 			t.Fatalf("recreate err = %v, want ErrConflict", err)
 		}
 	})
@@ -164,13 +199,13 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/StaleUpdateConflicts", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"a"}, nil, 0); err != nil {
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if _, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"b"}, nil, 1); err != nil {
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("b"), nil, 1); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		if _, err := vs.SaveVersionedState(ctx, "wf", []workflow.Place{"c"}, nil, 1); !errors.Is(err, workflow.ErrConflict) {
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("c"), nil, 1); !errors.Is(err, workflow.ErrConflict) {
 			t.Fatalf("stale update err = %v, want ErrConflict", err)
 		}
 	})
