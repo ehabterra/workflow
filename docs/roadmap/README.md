@@ -11,15 +11,17 @@
 
 ## Contents
 
-### `cpn/` — Colored Petri Nets / Smart Tokens (planned, milestone **M2**)
-- `CPN_YAML_SCHEMA.md` — proposed YAML schema for token-carrying workflows.
-- `CPN_YAML_QUICK_REFERENCE.md` — quick reference for the proposed CPN YAML keys.
-- `cpn_schema.json` — JSON Schema for the proposed CPN YAML.
-- `cpn_example_minimal.yaml` — minimal example of the proposed syntax.
+> **Note:** Colored Petri Nets (Smart Tokens) have since **shipped** — the planning
+> documents that used to live in `cpn/` are deleted. The implemented mechanism is the
+> polymorphic `initial_marking` key; see [`docs/guides/CPN_GUIDE.md`](../guides/CPN_GUIDE.md)
+> and the runnable [`examples/cpn_batch_processing`](../../examples/cpn_batch_processing)
+> example.
 
-### `examples/banking_system/` — CPN example (planned, milestone **M2**)
-A worked banking example built around `cpn_enabled: true` and token schemas. It documents
-the intended modelling approach; it will become a runnable example once M2 lands.
+### `examples/banking_system/` — historical CPN planning example
+A worked banking example built around the **proposed, never-implemented**
+`cpn_enabled`/`token_schemas` schema. It is kept as a historical planning document; its
+YAML will not load. For the shipped CPN mechanism see
+[`docs/guides/CPN_GUIDE.md`](../guides/CPN_GUIDE.md).
 
 ## Why these are here and not in `yaml/` or `examples/`
 

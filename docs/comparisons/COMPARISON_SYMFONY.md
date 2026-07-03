@@ -1,10 +1,10 @@
-# Comparison: Our CPN Plan vs Symfony Workflow Component
+# Comparison: Our CPN Implementation vs Symfony Workflow Component
 
-This document compares our CPN implementation plan with [Symfony's Workflow Component](https://github.com/symfony/symfony/tree/8.0/src/Symfony/Component/Workflow), which inspired our initial design.
+This document compares our CPN implementation with [Symfony's Workflow Component](https://github.com/symfony/symfony/tree/8.0/src/Symfony/Component/Workflow), which inspired our initial design.
 
 ## Executive Summary
 
-**Symfony Workflow** is a mature, production-ready PHP component for managing state machines and workflows. **Our Go workflow engine** is inspired by Symfony but built on Petri Net foundations with CPN capabilities.
+**Symfony Workflow** is a mature, production-ready PHP component for managing state machines and workflows. **Our Go workflow engine** is inspired by Symfony but built on Petri Net foundations with implemented CPN capabilities (data-carrying tokens).
 
 **Key Differences**:
 - **Language**: PHP (Symfony) vs Go (ours)
@@ -14,7 +14,7 @@ This document compares our CPN implementation plan with [Symfony's Workflow Comp
 
 ## Feature Comparison Matrix
 
-| Feature | Symfony Workflow | Our Plan | Status | Notes |
+| Feature | Symfony Workflow | Ours | Status | Notes |
 |---------|----------------|----------|--------|-------|
 | **Core Workflow Features** |
 | State machine support | ✅ | ✅ | Implemented | We use Petri Net (more powerful) |
@@ -39,7 +39,7 @@ This document compares our CPN implementation plan with [Symfony's Workflow Comp
 | **Marking Store** |
 | Single state marking | ✅ | ✅ | Implemented | Boolean marking |
 | Multiple state marking | ✅ | ✅ | Implemented | Multiple places |
-| Custom marking store | ✅ | ⏳ | Phase 1 | CPN marking |
+| Custom marking store | ✅ | ✅ | Implemented | Unified colored-token `Marking` |
 | **Visualization** |
 | Workflow visualization | ✅ | ✅ | Implemented | Mermaid diagrams |
 | Graph generation | ✅ | ✅ | Implemented | Mermaid support |
@@ -47,11 +47,13 @@ This document compares our CPN implementation plan with [Symfony's Workflow Comp
 | State persistence | ⚠️ | ✅ | Implemented | Symfony: manual, Ours: built-in |
 | Custom storage | ⚠️ | ✅ | Implemented | Interface-based |
 | SQLite support | ❌ | ✅ | Implemented | We have it |
+| PostgreSQL support | ❌ | ✅ | Implemented | We have it |
+| Token persistence | ❌ | ✅ | Implemented | Full marking round-trips |
 | **Advanced Features** |
-| Colored Petri Nets (CPN) | ❌ | ⏳ | Phase 1-6 | Our key differentiator |
-| Multiple tokens per place | ❌ | ⏳ | Phase 1-2 | CPN feature |
-| Token attributes | ❌ | ⏳ | Phase 1 | CPN feature |
-| Data-driven routing | ❌ | ⏳ | Phase 2 | CPN feature |
+| Colored Petri Nets (CPN) | ❌ | ✅ | Implemented | Our key differentiator |
+| Multiple tokens per place | ❌ | ✅ | Implemented | CPN feature |
+| Token attributes | ❌ | ✅ | Implemented | CPN feature |
+| Data-driven routing | ❌ | ✅ | Implemented | Token-aware guards, per-token firing |
 | Sub-workflows (HCPN) | ❌ | ⏳ | Future | Planned |
 | Parallel transitions | ✅ | ✅ | Implemented | Both support |
 | **Workflow Types** |
@@ -78,9 +80,9 @@ This document compares our CPN implementation plan with [Symfony's Workflow Comp
 - **Transitions**: Defined between states
 - **Integration**: Tightly integrated with Symfony framework
 
-#### Our Plan
+#### Ours
 - **Foundation**: Petri Net (mathematically more powerful)
-- **Marking**: Places (can have multiple tokens - CPN)
+- **Marking**: Places holding tokens — including multiple data-carrying (colored) tokens per place
 - **Transitions**: Defined between places
 - **Integration**: Standalone library (framework-agnostic)
 
@@ -111,11 +113,11 @@ framework:
                     guard: "subject.getWordCount() <= 500"
 ```
 
-#### Our Plan
+#### Ours
 ```yaml
 workflow:
   name: blog_publishing
-  initial_place: draft
+  initial_marking: draft
   transitions:
     - name: to_review
       from: [draft]
@@ -138,7 +140,7 @@ workflow:
 - **Event Listeners**: Can modify behavior
 - **Example**: `guard: "subject.getWordCount() <= 500"`
 
-#### Our Plan
+#### Ours
 - **Expression Language**: expr-lang/expr (Go)
 - **Guards**: Can block transitions
 - **Event Listeners**: Can modify behavior
@@ -156,13 +158,13 @@ workflow:
 - **Marking Store**: Interface for custom storage
 - **Property-based**: Stores state in object property
 
-#### Our Plan
-- **Boolean Marking**: Place exists or doesn't (current)
+#### Ours
+- **Unified Marking**: One marking supports both boolean (place marked or not) and colored semantics
 - **Multiple Places**: Can be in multiple places simultaneously
-- **CPN Marking**: Multiple tokens per place (Phase 1)
-- **Storage Interface**: Pluggable storage backend
+- **CPN Marking**: Multiple data-carrying tokens per place — implemented
+- **Storage Interface**: Pluggable storage backend (full marking round-trips)
 
-**Key Difference**: Symfony's "multiple states" is similar to our "multiple places", but we're adding CPN (multiple tokens per place) which Symfony doesn't have.
+**Key Difference**: Symfony's "multiple states" is similar to our "multiple places", but we also have CPN (multiple tokens per place) which Symfony doesn't have.
 
 ### 5. Event System
 
@@ -176,7 +178,7 @@ $workflow->getEventDispatcher()->addListener(
 );
 ```
 
-#### Our Plan
+#### Ours
 ```go
 wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error {
     // Handle event
@@ -195,9 +197,9 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 - **Doctrine Integration**: Optional Doctrine ORM integration
 - **No Built-in Storage**: Relies on framework/ORM
 
-#### Our Plan
-- **Built-in Storage**: Storage interface with SQLite implementation
-- **Automatic Persistence**: Manager can auto-save
+#### Ours
+- **Built-in Storage**: Storage interface with SQLite and PostgreSQL implementations
+- **Automatic Persistence**: Manager can auto-save; optimistic concurrency via `VersionedStorage`
 - **Pluggable**: Can implement custom storage backends
 
 **Advantage (Ours)**: Built-in persistence, not framework-dependent.
@@ -210,21 +212,21 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 - ❌ **No Token Attributes**: Tokens don't carry data
 - ❌ **No Sub-workflows**: Doesn't support nested workflows
 
-#### Our Plan
-- ⏳ **CPN**: Planned (Phase 1-6)
-- ⏳ **Multiple Tokens**: Planned (Phase 1-2)
-- ⏳ **Token Attributes**: Planned (Phase 1)
+#### Ours
+- ✅ **CPN**: Implemented (unified colored-token marking)
+- ✅ **Multiple Tokens**: Implemented (multiple data-carrying tokens per place)
+- ✅ **Token Attributes**: Implemented (tokens carry data; guards can inspect it)
 - ⏳ **Sub-workflows**: Planned (Future)
 
-**Key Advantage**: We're building CPN capabilities that Symfony doesn't have.
+**Key Advantage**: We ship CPN capabilities that Symfony doesn't have.
 
-## What's Missing from Our Plan (Compared to Symfony)
+## What's Missing from Ours (Compared to Symfony)
 
 ### 1. Workflow Validation ✅ (Planned)
 
 **Symfony**: Has workflow validation to ensure definitions are correct.
 
-**Our Plan**: 
+**Ours**: 
 - ⏳ **Workflow Checker**: Planned in roadmap
 - ⏳ **Pre-execution validation**: Planned
 - ⏳ **Deadlock detection**: Planned
@@ -235,7 +237,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Supports metadata on places and transitions.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Metadata support**: Implemented in YAML
 - ✅ **Place metadata**: Supported
 - ✅ **Transition metadata**: Supported
@@ -246,29 +248,29 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Can dump workflow definition to various formats.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Mermaid diagrams**: Implemented
 - ⏳ **YAML export**: Planned (round-trip)
 - ⏳ **PNML export**: Planned
 
 **Status**: Partially implemented, export planned.
 
-### 4. Marking Store Interface ✅ (Planned)
+### 4. Marking Store Interface ✅ (Implemented)
 
 **Symfony**: Has `MarkingStoreInterface` for custom marking storage.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Storage interface**: Implemented
-- ⏳ **CPN Marking**: Planned (Phase 1)
-- ⏳ **Custom marking stores**: Planned
+- ✅ **CPN Marking**: Implemented (unified colored-token `Marking`)
+- ✅ **Custom marking stores**: `Marking` is an interface; `SetMarking` accepts custom implementations
 
-**Status**: Interface exists, CPN marking planned.
+**Status**: Implemented.
 
 ### 5. Workflow Registry ✅ (Implemented)
 
 **Symfony**: `WorkflowRegistry` manages multiple workflows.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Registry**: Implemented
 - ✅ **Manager**: Implemented
 - ✅ **Multiple workflows**: Supported
@@ -279,7 +281,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Integrates with Symfony EventDispatcher.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Event system**: Implemented (standalone)
 - ❌ **Framework integration**: Not needed (standalone library)
 
@@ -289,7 +291,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Supports both "state_machine" and "workflow" types.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Workflow type**: Implemented (multiple places)
 - ⚠️ **State machine type**: Not explicitly supported (but can be modeled)
 
@@ -301,7 +303,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Workflows are applied to "subjects" (entities).
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Workflow instances**: Standalone (not tied to entities)
 - ✅ **Context-based**: Uses context instead of subject properties
 
@@ -313,7 +315,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Events include workflow name.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Event system**: Implemented
 - ✅ **Workflow context**: Available in events
 
@@ -323,7 +325,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Symfony**: Transitions can have metadata.
 
-**Our Plan**: 
+**Ours**: 
 - ✅ **Transition metadata**: Implemented in YAML
 - ✅ **Custom fields**: Supported
 
@@ -331,18 +333,18 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 ## What We Have That Symfony Doesn't
 
-### 1. Colored Petri Nets (CPN) ⏳
+### 1. Colored Petri Nets (CPN) ✅
 - Multiple tokens per place
 - Token attributes (color)
-- Data-driven routing
-- Token transformation
+- Data-driven routing (token-aware guards, per-token firing)
+- Token transformation (`TransformTokens`)
 
-**Status**: Planned (Phase 1-6)
+**Status**: Implemented — see [CPN_GUIDE.md](../guides/CPN_GUIDE.md)
 
 ### 2. Built-in Storage ✅
 - Storage interface
-- SQLite implementation
-- Automatic persistence
+- SQLite and PostgreSQL implementations
+- Automatic persistence with optimistic concurrency (`VersionedStorage`)
 - Custom fields support
 
 **Status**: Implemented
@@ -370,12 +372,12 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 **Status**: Implemented
 
-### 6. Long-Running Process Design ⏳
+### 6. Long-Running Process Support ✅
 - Explicit persistence design
-- Resumability planning
-- State versioning
+- Resumable instances (load state, continue)
+- State versioning (optimistic concurrency)
 
-**Status**: Designed, implementation planned
+**Status**: Implemented (transactional atomic-execute helper in progress)
 
 ## Recommendations
 
@@ -450,8 +452,8 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 **Symfony Workflow** is a mature, well-designed component that inspired our initial design. **Our Go workflow engine** builds on that inspiration but adds:
 
 1. **Petri Net Foundation**: More powerful than state machines
-2. **CPN Capabilities**: Multiple tokens, data-driven routing (planned)
-3. **Built-in Persistence**: Storage and history included
+2. **CPN Capabilities**: Multiple tokens, data-driven routing (implemented)
+3. **Built-in Persistence**: Storage (SQLite, PostgreSQL) and history included
 4. **Standalone Design**: Framework-agnostic library
 
 **Missing Features** (compared to Symfony):
@@ -462,13 +464,13 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 **Recommendation**: 
 1. Add workflow validation (already planned)
 2. Consider explicit state machine type support
-3. Continue with CPN implementation (our key differentiator)
+3. Keep deepening the shipped CPN layer (our key differentiator)
 4. Study Symfony's validation and event patterns
 
 ## References
 
 - [Symfony Workflow Component](https://github.com/symfony/symfony/tree/8.0/src/Symfony/Component/Workflow)
 - [Symfony Workflow Documentation](https://symfony.com/doc/current/workflow.html)
-- [Our CPN Implementation Plan](CPN_IMPLEMENTATION_PLAN.md)
-- [Our README](README.md)
+- [Our CPN Guide](../guides/CPN_GUIDE.md)
+- [Our README](../../README.md)
 

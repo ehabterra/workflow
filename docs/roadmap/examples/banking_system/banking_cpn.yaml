@@ -1,5 +1,17 @@
+# ============================================================================
+# WARNING: HISTORICAL PLANNING DOCUMENT — THIS FILE WILL NOT LOAD.
+#
+# This YAML uses a PROPOSED schema (cpn_enabled, token_schemas, initial_place,
+# ...) that was NEVER IMPLEMENTED. The strict YAML loader rejects unknown keys,
+# so attempting to load this file produces an error by design.
+#
+# The SHIPPED Colored Petri Net mechanism is the polymorphic `initial_marking`
+# key. See docs/guides/CPN_GUIDE.md and examples/cpn_batch_processing for the
+# real, working syntax.
+# ============================================================================
+#
 # Banking System CPN Model (True CPN with Request Tokens)
-# 
+#
 # Requirements:
 # - 1000 accounts (numbered 1-1000)
 # - Operations: deposit, withdraw
