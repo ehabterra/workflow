@@ -60,6 +60,12 @@ type Storage interface {
 	// SaveState saves the workflow's marking and its context data for the given ID.
 	// The full marking is persisted, so data-carrying (colored) tokens round-trip;
 	// simple boolean workflows serialize to the compact place-array form.
+	//
+	// Implementations must persist the ENTIRE context map, so every key set via
+	// SetContext survives a save/load round-trip (JSON-encoded values may come
+	// back with adjusted types, e.g. numbers as float64). Silently persisting
+	// only a subset of keys is a contract violation; the storagetest conformance
+	// suite checks this.
 	SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
 
 	// DeleteState removes the workflow state for the given ID.

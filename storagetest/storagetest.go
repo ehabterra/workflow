@@ -19,6 +19,7 @@ package storagetest
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ehabterra/workflow"
@@ -137,6 +138,34 @@ func Run(t *testing.T, newStore Factory) {
 				if v, _ := tok.Get("amount"); v != float64(250) {
 					t.Fatalf("token t2 amount = %v, want 250", v)
 				}
+			}
+		}
+	})
+
+	t.Run("FullContextRoundTrip", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		// Arbitrary keys — none pre-declared as custom-field columns — must
+		// survive the round-trip. JSON-encoded values may change type in the
+		// usual encoding/json ways (numbers come back as float64).
+		saved := map[string]any{
+			"requester": "alice",
+			"urgent":    true,
+			"amount":    float64(1250.5),
+			"tags":      []any{"travel", "q3"},
+			"approver":  map[string]any{"dept": "finance", "level": float64(2)},
+		}
+		if err := store.SaveState(ctx, "wf", mk("submitted"), saved); err != nil {
+			t.Fatalf("SaveState: %v", err)
+		}
+		_, got, err := store.LoadState(ctx, "wf")
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		for key, want := range saved {
+			if !reflect.DeepEqual(got[key], want) {
+				t.Errorf("context[%q] = %#v (%T), want %#v (%T)", key, got[key], got[key], want, want)
 			}
 		}
 	})
