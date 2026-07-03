@@ -164,6 +164,7 @@ for _, rec := range records {
 * [x] PostgreSQL storage implementation
 * [x] Optimistic concurrency (`VersionedStorage`) and transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
 * [x] Colored Petri Nets (CPN): multiple data-carrying tokens per place, per-token firing, and token-aware guards — see [docs/guides/CPN_GUIDE.md](docs/guides/CPN_GUIDE.md)
+* [x] Host-driven timers: declare durations (`after: 72h`), the host owns the clock — timeouts and escalation with no internal scheduler — see [docs/guides/TIMERS_GUIDE.md](docs/guides/TIMERS_GUIDE.md)
 * [x] Support for parallel transitions and branching
 * [x] Workflow history and audit trail (in examples)
 * [x] Web UI for workflow management (in examples)
@@ -189,7 +190,7 @@ We're starting with the basics of Petri Nets and adding layers of powerful featu
 
 | Feature Description | The Problem We're Solving | Petri Net Concept |
 | :--- | :--- | :--- |
-| **Timeouts and Scheduled Steps (TPN/DPN)** | I need a task to wait exactly 30 minutes before starting, or to timeout after 24 hours. | **Time Awareness.** Adding support for time constraints and scheduling to transitions. |
+| **Timeouts and Scheduled Steps (TPN/DPN)** — ✅ **shipped** | I need a task to wait exactly 30 minutes before starting, or to timeout after 24 hours. | **Time Awareness.** Transitions declare durations (`after: 72h`); the host owns the clock (`ListDue` + `FireDue` cron), so there is no internal scheduler. See [docs/guides/TIMERS_GUIDE.md](docs/guides/TIMERS_GUIDE.md). |
 | **Workflow Checker (Validation System)** | How do I know my new YAML definition won't cause a bug? | **Pre-Execution Guarantees.** We'll use Petri Net math to check the flow for common issues like deadlocks *before* you deploy it. |
 | **Talk to Other Workflows (Message Correlation)** | I need Workflow A to wait for a signal from a completely separate Workflow B. | **Inter-Process Communication.** Building a reliable way for instances to communicate and find each other using shared data keys. |
 
@@ -314,7 +315,7 @@ Main Workflow: "Order Processing"
 
 **Duration Petri Nets (DPN)**: Use deterministic time values for transitions (e.g., "exactly 30 minutes"). Transitions require a fixed duration before completion.
 
-**BPMN-Inspired Concept**: Inspired by BPMN Timer Events, which introduce delays or scheduled execution. Implementation uses job queues (RabbitMQ/Asynq/NATS JetStream) for restart-safe scheduling.
+**BPMN-Inspired Concept**: Inspired by BPMN Timer Events, which introduce delays or scheduled execution. **Shipped as host-driven timers**: a transition declares a duration (`after: 72h` in YAML, or `SetTimeoutAfter`), tokens record when they entered a place, and `Workflow.Due(now)` is a pure function of the marking and the host's clock. There is no internal scheduler — a host cron scans the fleet with `Manager.ListDue` and advances due instances with `Manager.FireDue`, which makes it restart-safe by construction (state in the database, clock in the host). See [docs/guides/TIMERS_GUIDE.md](docs/guides/TIMERS_GUIDE.md).
 
 ### Business Process Reliability Features
 

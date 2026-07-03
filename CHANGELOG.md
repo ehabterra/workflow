@@ -62,6 +62,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hosts that need every load to re-read from storage.
 - Dialect-aware SQL history: `history.NewPostgresHistory` alongside
   `history.NewSQLiteHistory`, both from a shared `SQLHistory` implementation.
+- Host-driven timers (M4): the library *models* time while the host owns the clock —
+  no goroutines, no internal scheduler. Tokens record when they entered a place
+  (`enteredAt`, serialized in the token JSON and defaulting sanely for old rows);
+  `Transition.SetTimeoutAfter(d)` / YAML `after: 72h` mark a transition time-driven;
+  and `Workflow.Due(now)` / `Workflow.NextDue()` expose deadlines as pure functions of
+  the marking and an explicit `now` (testable with a fixed clock, no sleeping).
+- Fleet timer scan (M4.4): new optional `workflow.DueStorage` and
+  `workflow.TransactionalDueStorage` interfaces maintain a per-instance next-due index
+  (`SaveVersionedStateWithDue`) and scan it with `ListDue(ctx, before, limit)`. The
+  SQLite and Postgres backends implement them (new nullable `due_at` column plus an
+  index) and are covered by the conformance suite; `store.EnsureSchema(ctx)` creates the
+  column and index and idempotently migrates a pre-existing table. `Manager.ListDue`
+  finds the overdue instances and `Manager.FireDue(ctx, id, def, now)` advances one —
+  pinning the workflow clock to `now`, firing every due transition (skipping any whose
+  guard rejects it), and saving under the same optimistic-concurrency retry loop as
+  `Execute`. The Manager maintains the due index on every save path, so a host cron of
+  ~10 lines implements "escalate if not approved in 3 days" across a persisted fleet,
+  restart-safe by construction (state in the database, clock in the host).
+- Timer docs + example (M4.5): new `docs/guides/TIMERS_GUIDE.md` explaining the
+  host-driven time model (the no-internal-scheduler boundary, the API tour, the
+  `ListDue`/`FireDue` fleet recipe, guard interaction, AND-join deadline semantics,
+  tick-frequency guidance, and multi-host concurrency), plus a runnable
+  `examples/timer_escalation` module: a `after: 72h` approval workflow, a fleet of
+  SQLite-persisted instances at different ages, and a ~10-line cron tick advanced over
+  a fixed clock so it runs instantly and deterministically.
+- Timer hardening (M4 review): several correctness fixes to the host-driven timer
+  model before release:
+  - `NewWorkflowFromMarking` now *adopts* a persisted marking: tokens that already
+    carry an entry time keep it (a reloaded instance's running timers are restored
+    rather than reset to construction time); only tokens without one are stamped.
+  - `CreateToken`/`CreateTokens` now stamp entry times for timed definitions, so a
+    place seeded directly (not via firing) starts its deadline correctly.
+  - The transition timeout has a single source of truth: `SetTimeoutAfter` no longer
+    mirrors the duration into `after` metadata (`TimeoutAfter()` is authoritative),
+    and the Mermaid diagram derives the timer label from `TimeoutAfter()` directly.
+  - `Manager.FireDue` no longer bumps the version on a pure no-op: a due-but-guard-
+    blocked instance whose stored due index is already correct is left untouched,
+    while a stale index (no live timer, or a future deadline) is saved so it
+    self-heals.
+  - `Manager.Execute` now rejects a `WithTxSideEffect` call for a timed definition on
+    a backend that is a `DueStorage` but not a `TransactionalDueStorage` (which would
+    silently corrupt the due index), mirroring the existing loud error for missing
+    transactional support.
+  - The SQLite due column clamps out-of-range instants (after ~year 2262) to
+    `math.MaxInt64` instead of letting `UnixNano` wrap negative, so a far-future
+    deadline can never look overdue.
+  - Boolean-presence firing into an already-occupied place stays idempotent under
+    timed definitions (no phantom duplicate token).
 
 ### Changed
 - Minimum Go version is 1.25 (module and CI). It was raised to 1.24 during M0, then to
@@ -84,3 +132,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ALTER TABLE workflow_states ADD COLUMN version INTEGER NOT NULL DEFAULT 0;`
   (use your configured table name). New databases created via `GenerateSchema` include
   it automatically.
+- The SQL state tables now include a nullable `due_at` column (the M4 timer index). The
+  SQLite and Postgres backends advertise `DueStorage`, so `Manager` save paths write it;
+  a table created by a previous version that lacks the column will fail on save until
+  migrated. Call `store.EnsureSchema(ctx)` on startup — it adds the column and index
+  idempotently on both fresh and pre-existing tables — or migrate by hand:
+  `ALTER TABLE workflow_states ADD COLUMN due_at INTEGER;` (SQLite) /
+  `ALTER TABLE workflow_states ADD COLUMN due_at TIMESTAMPTZ;` (Postgres), plus
+  `CREATE INDEX workflow_states_due_at_idx ON workflow_states (due_at);`. Disable the
+  index entirely with `storage.WithDueColumn("")` if you cannot migrate. New databases
+  created via `GenerateSchema` include the column automatically.

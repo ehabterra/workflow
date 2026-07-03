@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -24,8 +25,10 @@ func TestSQLiteConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSQLiteStorage: %v", err)
 		}
-		if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
-			t.Fatalf("Initialize: %v", err)
+		// EnsureSchema (rather than Initialize) so the conformance suite also runs
+		// against the M4 due column and its index.
+		if err := store.EnsureSchema(context.Background()); err != nil {
+			t.Fatalf("EnsureSchema: %v", err)
 		}
 		return store
 	})

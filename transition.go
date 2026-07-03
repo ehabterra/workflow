@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"time"
 )
 
 // Transition represents a transition between places in the workflow
@@ -11,6 +12,15 @@ type Transition struct {
 	to          []Place
 	metadata    map[string]any
 	constraints []Constraint
+
+	// timeout, when positive, marks this transition as time-driven: it becomes
+	// "due" once its input tokens have waited this long (see the Due API and
+	// Manager.FireDue). It is a duration, not a wall-clock deadline — the deadline
+	// is computed per instance from the token's entry time — so the same
+	// definition drives every instance's timer. It is the single source of truth
+	// for the timeout; a zero value means the transition is not timed. The library
+	// never fires it on its own; a host schedules the check.
+	timeout time.Duration
 }
 
 // Constraint represents a validation constraint for a transition
@@ -78,6 +88,34 @@ func (t *Transition) To() []Place {
 	toCopy := make([]Place, len(t.to))
 	copy(toCopy, t.to)
 	return toCopy
+}
+
+// SetTimeoutAfter marks the transition as time-driven: it becomes due once its
+// input tokens have waited for d (measured from when they entered their place).
+// The duration is stored on the transition itself as the single source of truth
+// (diagrams and tooling read it back via TimeoutAfter). A non-positive d clears
+// the timeout.
+//
+// The engine never fires a due transition by itself — a host drives the clock
+// (see Workflow.Due, Workflow.NextDue, and Manager.FireDue).
+//
+// Like the rest of a Definition, a transition's timeout is expected to be
+// configured before any Workflow is created from the definition; mutating it
+// afterward is not safe against concurrent Workflow.Due/NextDue reads on
+// workflows that share the definition.
+func (t *Transition) SetTimeoutAfter(d time.Duration) {
+	if d <= 0 {
+		t.timeout = 0
+		return
+	}
+	t.timeout = d
+}
+
+// TimeoutAfter returns the transition's timeout duration and whether one is set
+// (a positive timeout). The timeout field is authoritative; there is no metadata
+// mirror.
+func (t *Transition) TimeoutAfter() (time.Duration, bool) {
+	return t.timeout, t.timeout > 0
 }
 
 // AddConstraint adds a constraint to the transition

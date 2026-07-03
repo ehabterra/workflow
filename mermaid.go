@@ -84,9 +84,15 @@ func (w *Workflow) Diagram() string {
 			}
 		}
 
-		// Use transition name as the label only - guard will be shown in tooltip
+		// Use transition name as the label; a timed transition surfaces its
+		// duration inline (derived directly from TimeoutAfter — the single source
+		// of truth), and the guard is exposed via tooltip data attributes.
 		escapedName := escapeMermaidLabel(trans.Name())
-		displayLabel := escapedName
+		labelInner := escapedName
+		if d, ok := trans.TimeoutAfter(); ok {
+			labelInner = escapedName + " after " + escapeMermaidLabel(d.String())
+		}
+		displayLabel := labelInner
 
 		// Add data attributes for tooltip if guard exists
 		if guard != "" {
@@ -98,12 +104,12 @@ func (w *Workflow) Diagram() string {
 				escapedSimplifiedAttr := escapeMermaidLabel(simplified)
 				// Add data attributes to the label for tooltip
 				displayLabel = fmt.Sprintf(`<span class="transition-label" data-transition-name="%s" data-guard="%s" data-guard-simplified="%s">%s</span>`,
-					escapedNameAttr, escapedGuardAttr, escapedSimplifiedAttr, escapedName)
+					escapedNameAttr, escapedGuardAttr, escapedSimplifiedAttr, labelInner)
 			}
 		} else {
 			// Even without guard, add data attribute for transition name
 			escapedNameAttr := html.EscapeString(trans.Name())
-			displayLabel = fmt.Sprintf(`<span class="transition-label" data-transition-name="%s">%s</span>`, escapedNameAttr, escapedName)
+			displayLabel = fmt.Sprintf(`<span class="transition-label" data-transition-name="%s">%s</span>`, escapedNameAttr, labelInner)
 		}
 
 		// Handle multiple to places

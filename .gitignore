@@ -9,4 +9,5 @@ coverage.out
 # Compiled example binaries (built by `go build ./...` inside example modules)
 /examples/advanced_workflow/advanced_workflow
 /examples/migration_example/migration_example
+/examples/timer_escalation/timer_escalation
 /examples/website_workflow/website_workflow

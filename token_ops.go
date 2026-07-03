@@ -1,6 +1,9 @@
 package workflow
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Token operations on a Workflow.
 //
@@ -20,6 +23,12 @@ func (w *Workflow) CreateToken(place Place, data TokenData) (Token, error) {
 		return Token{}, fmt.Errorf("%w: %s", ErrInvalidPlace, place)
 	}
 	tok := NewToken(data)
+	// Stamp the entry time when the definition has timed transitions, so a token
+	// seeded directly into a timed place starts its deadline like one produced by
+	// firing would. Without this the place would look unstamped and never be due.
+	if definitionHasTimers(w.definition) {
+		tok = tok.withEnteredAt(w.now())
+	}
 	w.marking.AddToken(place, tok)
 	return tok, nil
 }
@@ -33,9 +42,17 @@ func (w *Workflow) CreateTokens(place Place, datas []TokenData) ([]Token, error)
 	if !w.definition.Place(place) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidPlace, place)
 	}
+	hasTimers := definitionHasTimers(w.definition)
+	var enteredAt time.Time
+	if hasTimers {
+		enteredAt = w.now()
+	}
 	tokens := make([]Token, 0, len(datas))
 	for _, d := range datas {
 		tok := NewToken(d)
+		if hasTimers {
+			tok = tok.withEnteredAt(enteredAt)
+		}
 		w.marking.AddToken(place, tok)
 		tokens = append(tokens, tok)
 	}

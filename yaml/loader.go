@@ -2,6 +2,7 @@ package yaml
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ehabterra/workflow"
 )
@@ -90,6 +91,18 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 			transition.AddConstraint(exprConstraint)
 			// Store guard string in metadata for diagram generation
 			transition.SetMetadata("guard", transConfig.Guard)
+		}
+
+		// Add timeout if provided ("after: 72h" — host-driven timers, roadmap M4)
+		if transConfig.After != "" {
+			d, err := time.ParseDuration(transConfig.After)
+			if err != nil {
+				return nil, fmt.Errorf("transition '%s': invalid after duration %q: %w", transConfig.Name, transConfig.After, err)
+			}
+			if d <= 0 {
+				return nil, fmt.Errorf("transition '%s': after duration must be positive, got %q", transConfig.Name, transConfig.After)
+			}
+			transition.SetTimeoutAfter(d)
 		}
 
 		// Add transition metadata

@@ -246,15 +246,51 @@ func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) err
 	// SetContext calls while it marshals.
 	marking, ctxData := wf.snapshotState()
 	ctxData = contextForSave(ctxData, wf.Definition())
-	if vs, ok := m.storage.(VersionedStorage); ok {
-		newVersion, err := vs.SaveVersionedState(ctx, id, marking, ctxData, wf.Version())
-		if err != nil {
-			return err
-		}
+	due := m.dueForSave(wf.Definition(), marking)
+	newVersion, versioned, err := m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
+	if err != nil {
+		return err
+	}
+	if versioned {
 		wf.setVersion(newVersion)
+	}
+	return nil
+}
+
+// dueForSave computes an instance's next-due wall-clock time from the same
+// marking snapshot that is about to be persisted, returning nil when no timer is
+// running. Deriving it from the persisted snapshot (rather than the live
+// workflow) keeps the stored due index consistent with the stored marking.
+//
+// It returns nil immediately when the backend does not maintain a due index (not
+// a DueStorage), avoiding a wasted deadline scan on every save for backends that
+// would ignore the result anyway.
+func (m *Manager) dueForSave(definition *Definition, marking Marking) *time.Time {
+	if _, ok := m.storage.(DueStorage); !ok {
 		return nil
 	}
-	return m.storage.SaveState(ctx, id, marking, ctxData)
+	if t, ok := nextDue(definition, marking); ok {
+		return &t
+	}
+	return nil
+}
+
+// persistState saves a marking and context, selecting the highest capability the
+// backend supports and always maintaining the due index when the backend is a
+// DueStorage — so the index can never go stale, whatever save path a caller
+// takes. It returns the new version and whether the backend is versioned (an
+// unversioned backend reports version 0).
+func (m *Manager) persistState(ctx context.Context, id string, marking Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (newVersion int64, versioned bool, err error) {
+	switch s := m.storage.(type) {
+	case DueStorage:
+		v, err := s.SaveVersionedStateWithDue(ctx, id, marking, ctxData, expectedVersion, due)
+		return v, true, err
+	case VersionedStorage:
+		v, err := s.SaveVersionedState(ctx, id, marking, ctxData, expectedVersion)
+		return v, true, err
+	default:
+		return 0, false, s.SaveState(ctx, id, marking, ctxData)
+	}
 }
 
 // ExecuteOption configures a single Manager.Execute call.
@@ -333,10 +369,22 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 	// Atomic side effects need transactional support; fail loudly rather than
 	// silently dropping the atomicity guarantee.
 	var ts TransactionalStorage
+	var tds TransactionalDueStorage
 	if len(cfg.effects) > 0 {
 		var ok bool
 		if ts, ok = m.storage.(TransactionalStorage); !ok {
 			return fmt.Errorf("WithTxSideEffect requires a TransactionalStorage backend: %w", errors.ErrUnsupported)
+		}
+		// A backend that maintains a due index but cannot update it inside the
+		// state+effect transaction would leave the index silently corrupt for a
+		// timed definition (state and effect commit, but the due column is not
+		// touched). Fail loudly rather than drift — mirroring the missing-
+		// TransactionalStorage error above.
+		if _, isDue := m.storage.(DueStorage); isDue {
+			if tds, ok = m.storage.(TransactionalDueStorage); !ok && definitionHasTimers(definition) {
+				return fmt.Errorf("WithTxSideEffect on a DueStorage backend with a timed definition requires a TransactionalDueStorage backend "+
+					"(implement SaveVersionedStateInTxWithDue so the due index commits atomically with state and effects): %w", errors.ErrUnsupported)
+			}
 		}
 	}
 
@@ -367,16 +415,21 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		}
 		marking, ctxData := wf.snapshotState()
 		ctxData = contextForSave(ctxData, definition)
+		due := m.dueForSave(definition, marking)
 
 		switch {
 		case ts != nil:
-			_, err = ts.SaveVersionedStateInTx(ctx, id, marking, ctxData, wf.Version(), cfg.effects...)
-		default:
-			if vs, ok := m.storage.(VersionedStorage); ok {
-				_, err = vs.SaveVersionedState(ctx, id, marking, ctxData, wf.Version())
+			// Keep the due index current even on the transactional path (state +
+			// side effect commit together) when the backend supports it. A partial
+			// due backend (DueStorage but not TransactionalDueStorage) with a timed
+			// definition was already rejected before the loop.
+			if tds != nil {
+				_, err = tds.SaveVersionedStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, cfg.effects...)
 			} else {
-				err = m.storage.SaveState(ctx, id, marking, ctxData)
+				_, err = ts.SaveVersionedStateInTx(ctx, id, marking, ctxData, wf.Version(), cfg.effects...)
 			}
+		default:
+			_, _, err = m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
 		}
 		if err != nil {
 			if errors.Is(err, ErrConflict) {
@@ -411,17 +464,18 @@ func (m *Manager) CreateWorkflow(ctx context.Context, id string, definition *Def
 	wf.SetManager(m)
 
 	// Save initial state. With a versioned backend this inserts at version 1 and
-	// fails with ErrConflict if a workflow with this id already exists.
+	// fails with ErrConflict if a workflow with this id already exists. A
+	// timer-bearing workflow's initial marking is already stamped, so its first
+	// deadline is indexed from creation.
 	marking, ctxData := wf.snapshotState()
 	ctxData = contextForSave(ctxData, definition)
-	if vs, ok := m.storage.(VersionedStorage); ok {
-		newVersion, err := vs.SaveVersionedState(ctx, id, marking, ctxData, 0)
-		if err != nil {
-			return nil, fmt.Errorf("failed to save initial state: %w", err)
-		}
-		wf.setVersion(newVersion)
-	} else if err := m.storage.SaveState(ctx, id, marking, ctxData); err != nil {
+	due := m.dueForSave(definition, marking)
+	newVersion, versioned, err := m.persistState(ctx, id, marking, ctxData, 0, due)
+	if err != nil {
 		return nil, fmt.Errorf("failed to save initial state: %w", err)
+	}
+	if versioned {
+		wf.setVersion(newVersion)
 	}
 
 	if m.useCache {
@@ -460,6 +514,109 @@ func (m *Manager) ListWorkflowIDs(ctx context.Context, opts ListOptions) ([]stri
 		return nil, fmt.Errorf("storage backend does not implement ListableStorage: %w", errors.ErrUnsupported)
 	}
 	return ls.ListIDs(ctx, opts)
+}
+
+// ListDue returns the IDs of persisted instances whose next-due time is at or
+// before `before`, ordered by due time ascending — the instances a host cron
+// should advance with FireDue. A zero limit means no limit; drain a batch with
+// FireDue before rescanning, or page by raising `before`.
+//
+// It requires a DueStorage backend (the SQLite and Postgres backends qualify)
+// and returns an error wrapping errors.ErrUnsupported otherwise. This is the
+// scan half of the host-driven timer model: pass the host's own clock as
+// `before` (typically time.Now) so the whole fleet's deadlines are evaluated
+// against one authoritative clock.
+func (m *Manager) ListDue(ctx context.Context, before time.Time, limit int) ([]string, error) {
+	ds, ok := m.storage.(DueStorage)
+	if !ok {
+		return nil, fmt.Errorf("storage backend does not implement DueStorage: %w", errors.ErrUnsupported)
+	}
+	return ds.ListDue(ctx, before, limit)
+}
+
+// maxFireDueSteps bounds how many transitions a single FireDue advances — a
+// safety valve against a pathological self-re-enabling timer. Because
+// SetTimeoutAfter only records positive timeouts, a fired transition's next
+// deadline is strictly later than now, so a real definition terminates a firing
+// pass long before this bound.
+const maxFireDueSteps = 10000
+
+// errFireDueNoSave is an internal sentinel the FireDue fn returns to tell Execute
+// "nothing changed worth persisting" — Execute aborts the attempt without saving
+// (and without retrying, since it is not ErrConflict), and FireDue translates it
+// back to a successful no-op. It is never returned to callers.
+var errFireDueNoSave = errors.New("firedue: no save needed")
+
+// FireDue advances a persisted instance by firing every transition whose timer
+// has elapsed as of now, returning the names of the transitions that actually
+// fired, in firing order.
+//
+// It is the per-instance half of the host-driven timer model (M4): a host cron
+// finds due instances with Manager.ListDue and calls FireDue on each, so a
+// fleet-wide "escalate if not approved in 3 days" needs no internal scheduler.
+// The state lives in the database and the clock lives in the host, which makes
+// the whole mechanism restart-safe by construction.
+//
+// FireDue loads the instance fresh and pins the workflow clock to now, so tokens
+// produced by the firing are stamped with the host's evaluation time and every
+// downstream deadline is measured from it (deterministic and testable with a
+// fixed clock). It then fires due transitions one at a time, re-evaluating the
+// due set after each firing because firing changes the marking; a due transition
+// whose guard rejects it — or that an earlier firing in the same pass has since
+// disabled — is skipped rather than treated as an error, so only an unexpected
+// error aborts.
+//
+// The save runs under the same optimistic-concurrency retry loop as Execute, so
+// several hosts scanning the same fleet cannot clobber each other. FireDue is
+// idempotent: once nothing is overdue it fires nothing, and after a firing that
+// leaves no running timer the instance drops out of ListDue.
+//
+// Extra ExecuteOptions (e.g. WithMaxRetries, WithTxSideEffect) are forwarded to
+// the underlying Execute.
+func (m *Manager) FireDue(ctx context.Context, id string, definition *Definition, now time.Time, opts ...ExecuteOption) ([]string, error) {
+	var fired []string
+	err := m.Execute(ctx, id, definition, func(wf *Workflow) error {
+		fired = nil // Execute may re-run fn on a conflict retry; start clean.
+		wf.setClock(func() time.Time { return now })
+		for range maxFireDueSteps {
+			// Fire the first due transition that is actually allowed, then
+			// re-evaluate (firing changed the marking). When no due transition
+			// fires — the set is empty, or every member is guard-blocked or was
+			// disabled earlier in this pass — the pass is done.
+			progressed := false
+			for _, t := range wf.Due(now) {
+				err := wf.ApplyTransitionWithContext(ctx, t.Name())
+				if err != nil {
+					if errors.Is(err, ErrTransitionNotAllowed) {
+						continue // blocked/disabled: skip, not an error.
+					}
+					return err
+				}
+				fired = append(fired, t.Name())
+				progressed = true
+				break
+			}
+			if !progressed {
+				break
+			}
+		}
+		if len(fired) == 0 {
+			// Nothing fired. Skip the save (no pointless version bump) only when
+			// the stored due index already agrees with the live marking — i.e. the
+			// instance is legitimately due-but-blocked: a timer is still running and
+			// its deadline is at or before now. If instead no timer is running, or
+			// the next deadline is in the future, the stored index is stale relative
+			// to the marking (e.g. a bypass save), so persist to let it self-heal.
+			if next, ok := wf.NextDue(); ok && !next.After(now) {
+				return errFireDueNoSave
+			}
+		}
+		return nil
+	}, opts...)
+	if err != nil && !errors.Is(err, errFireDueNoSave) {
+		return nil, err
+	}
+	return fired, nil
 }
 
 // AddEventListener adds a dynamic event listener for a specific event type

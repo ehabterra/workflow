@@ -84,6 +84,7 @@ type TransitionConfig struct {
 	From         []string       `yaml:"from"`
 	To           []string       `yaml:"to"`
 	Guard        string         `yaml:"guard,omitempty"`         // Expression string
+	After        string         `yaml:"after,omitempty"`         // Timeout duration, e.g. "72h" (Go time.ParseDuration)
 	Metadata     map[string]any `yaml:"metadata,omitempty"`      // Transition metadata
 	Notes        string         `yaml:"notes,omitempty"`         // Default notes for history
 	Actor        string         `yaml:"actor,omitempty"`         // Default actor for history

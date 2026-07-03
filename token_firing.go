@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 )
 
 // TokenPredicate reports whether a token should be selected. A nil predicate
@@ -55,20 +56,44 @@ func (w *Workflow) moveMarking(from, to []Place) {
 	w.produce(to, carried)
 }
 
-// produce places carried tokens at each output place (see moveMarking). Callers
-// must hold w.mu.
+// produce places carried tokens at each output place (see moveMarking). When the
+// definition has timed transitions, every produced token is stamped with the
+// workflow clock so the Due API can measure how long it has waited. Callers must
+// hold w.mu.
 func (w *Workflow) produce(to []Place, carried []Token) {
+	hasTimers := definitionHasTimers(w.definition)
+	var enteredAt time.Time
+	if hasTimers {
+		enteredAt = w.now()
+	}
+	stamp := func(tok Token) Token {
+		if hasTimers {
+			return tok.withEnteredAt(enteredAt)
+		}
+		return tok
+	}
+
 	singleOutput := len(to) == 1
 	for _, t := range to {
 		if len(carried) == 0 {
-			_ = w.marking.AddPlace(t) // boolean presence
+			if hasTimers {
+				// A stamped boolean-presence token so a timer can run on it — but
+				// only when the place is currently unoccupied, mirroring AddPlace's
+				// no-op-when-occupied semantics so firing stays idempotent for
+				// boolean presence (an AND-join into an occupied place adds nothing).
+				if !w.marking.HasPlace(t) {
+					w.marking.AddToken(t, Token{}.withEnteredAt(enteredAt))
+				}
+			} else {
+				_ = w.marking.AddPlace(t) // boolean presence (no-op if occupied)
+			}
 			continue
 		}
 		for _, tok := range carried {
 			if singleOutput {
-				w.marking.AddToken(t, tok)
+				w.marking.AddToken(t, stamp(tok))
 			} else {
-				w.marking.AddToken(t, NewToken(tok.Data())) // copy with a fresh ID
+				w.marking.AddToken(t, stamp(NewToken(tok.Data()))) // copy with a fresh ID
 			}
 		}
 	}

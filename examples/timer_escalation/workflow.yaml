@@ -1,0 +1,18 @@
+workflow:
+  name: approval
+  # A request rests in `submitted` until a human approves it. If nobody acts
+  # within three days, the timed `escalate` transition becomes *due* and a host
+  # cron fires it — no goroutine, no internal scheduler.
+  initial_marking: submitted
+  places:
+    - name: submitted
+    - name: approved
+    - name: escalated
+  transitions:
+    - name: approve
+      from: [submitted]
+      to: [approved]
+    - name: escalate
+      from: [submitted]
+      to: [escalated]
+      after: 72h   # host-driven timer (roadmap M4): due 72h after the token entered `submitted`

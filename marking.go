@@ -160,7 +160,7 @@ func (m *marking) isSimple() bool {
 		if len(toks) != 1 {
 			return false
 		}
-		if toks[0].id != "" || len(toks[0].data) != 0 {
+		if toks[0].id != "" || len(toks[0].data) != 0 || !toks[0].enteredAt.IsZero() {
 			return false
 		}
 	}

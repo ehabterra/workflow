@@ -139,11 +139,13 @@ func (d *Definition) AllTransitions() []Transition {
 	return transitions
 }
 
-// Transition returns a transition by name
+// Transition returns a pointer to the transition with the given name, or nil if
+// none matches. It points into the definition's own slice, so mutations through
+// it (e.g. SetTimeoutAfter, SetMetadata) actually apply to the definition.
 func (d *Definition) Transition(name string) *Transition {
-	for _, t := range d.Transitions {
-		if t.Name() == name {
-			return &t
+	for i := range d.Transitions {
+		if d.Transitions[i].Name() == name {
+			return &d.Transitions[i]
 		}
 	}
 	return nil
