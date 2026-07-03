@@ -87,6 +87,12 @@ func (c *ExpressionConstraint) Validate(event Event) error {
 }
 
 // defaultEnvBuilder creates the default evaluation environment from the event.
+//
+// The workflow context is copied in first, then a set of reserved names is added
+// for use in guard expressions: workflow, transition, transition_<key>, from, to,
+// token, tokens, and the helpers hasRole, hasPermission, in. These reserved names
+// shadow any workflow-context key of the same name, so avoid using them as context
+// keys.
 func defaultEnvBuilder(event Event) map[string]any {
 	env := make(map[string]any)
 
