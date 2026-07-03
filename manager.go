@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 )
 
 // Manager handles workflow instances and their persistence
@@ -11,12 +10,10 @@ type Manager struct {
 	registry *Registry
 	storage  Storage
 
-	// Dynamic listeners for all managed workflows
-	Listeners map[EventType][]any
-
-	// Handle tracking for reliable listener removal
-	listenerHandles map[uint64]int // handle ID -> index in slice
-	nextHandleID    uint64         // atomic counter for unique handle IDs
+	// listeners holds the dynamic listeners for all managed workflows. It is
+	// concurrency-safe: listeners may be added or removed while managed
+	// workflows fire transitions on other goroutines.
+	listeners listenerSet
 }
 
 // NewManager creates a new workflow manager
@@ -84,15 +81,19 @@ func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Defin
 // current version: if another writer saved first, it returns ErrConflict and the
 // workflow's version is left unchanged so the caller can reload and retry.
 func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) error {
+	// Snapshot marking and context under the workflow's lock: handing the live
+	// state to the storage layer would race concurrent transitions and
+	// SetContext calls while it marshals.
+	marking, ctxData := wf.snapshotState()
 	if vs, ok := m.storage.(VersionedStorage); ok {
-		newVersion, err := vs.SaveVersionedState(ctx, id, wf.Marking(), wf.context, wf.Version())
+		newVersion, err := vs.SaveVersionedState(ctx, id, marking, ctxData, wf.Version())
 		if err != nil {
 			return err
 		}
 		wf.setVersion(newVersion)
 		return nil
 	}
-	return m.storage.SaveState(ctx, id, wf.Marking(), wf.context)
+	return m.storage.SaveState(ctx, id, marking, ctxData)
 }
 
 // GetWorkflow gets a workflow instance from the registry or loads it from storage
@@ -117,13 +118,14 @@ func (m *Manager) CreateWorkflow(ctx context.Context, id string, definition *Def
 
 	// Save initial state. With a versioned backend this inserts at version 1 and
 	// fails with ErrConflict if a workflow with this id already exists.
+	marking, ctxData := wf.snapshotState()
 	if vs, ok := m.storage.(VersionedStorage); ok {
-		newVersion, err := vs.SaveVersionedState(ctx, id, wf.Marking(), wf.context, 0)
+		newVersion, err := vs.SaveVersionedState(ctx, id, marking, ctxData, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to save initial state: %w", err)
 		}
 		wf.setVersion(newVersion)
-	} else if err := m.storage.SaveState(ctx, id, wf.Marking(), wf.context); err != nil {
+	} else if err := m.storage.SaveState(ctx, id, marking, ctxData); err != nil {
 		return nil, fmt.Errorf("failed to save initial state: %w", err)
 	}
 
@@ -146,78 +148,25 @@ func (m *Manager) DeleteWorkflow(ctx context.Context, id string) error {
 // AddEventListener adds a dynamic event listener for a specific event type
 // It returns a handle that can be used to remove the listener later
 func (m *Manager) AddEventListener(eventType EventType, listener EventListener) *ListenerHandle {
-	if m.Listeners == nil {
-		m.Listeners = make(map[EventType][]any)
-	}
-	if m.listenerHandles == nil {
-		m.listenerHandles = make(map[uint64]int)
-	}
-
-	handleID := atomic.AddUint64(&m.nextHandleID, 1)
-	index := len(m.Listeners[eventType])
-	m.Listeners[eventType] = append(m.Listeners[eventType], listener)
-	m.listenerHandles[handleID] = index
-
-	return &ListenerHandle{
-		id:        handleID,
-		eventType: eventType,
-		owner:     m,
-	}
+	return m.listeners.add(eventType, listener, m)
 }
 
 // AddGuardEventListener adds a dynamic guard event listener
 // It returns a handle that can be used to remove the listener later
 func (m *Manager) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
-	if m.Listeners == nil {
-		m.Listeners = make(map[EventType][]any)
-	}
-	if m.listenerHandles == nil {
-		m.listenerHandles = make(map[uint64]int)
-	}
-
-	handleID := atomic.AddUint64(&m.nextHandleID, 1)
-	index := len(m.Listeners[EventGuard])
-	m.Listeners[EventGuard] = append(m.Listeners[EventGuard], listener)
-	m.listenerHandles[handleID] = index
-
-	return &ListenerHandle{
-		id:        handleID,
-		eventType: EventGuard,
-		owner:     m,
-	}
+	return m.listeners.add(EventGuard, listener, m)
 }
 
 // RemoveListener removes a listener using its handle
 // This is the recommended way to remove listeners as it's reliable and efficient
 func (m *Manager) RemoveListener(handle *ListenerHandle) {
-	if m.Listeners == nil || m.listenerHandles == nil || handle == nil {
+	if handle == nil || handle.owner != m {
 		return
 	}
+	m.listeners.remove(handle)
+}
 
-	// Verify the handle belongs to this manager
-	if handle.owner != m {
-		return
-	}
-
-	index, ok := m.listenerHandles[handle.id]
-	if !ok {
-		return // Handle not found
-	}
-
-	listeners := m.Listeners[handle.eventType]
-	if index >= len(listeners) {
-		return // Index out of bounds
-	}
-
-	// Remove from slice
-	m.Listeners[handle.eventType] = append(listeners[:index], listeners[index+1:]...)
-
-	// Update indices for handles after the removed one
-	for id, idx := range m.listenerHandles {
-		if idx > index {
-			m.listenerHandles[id] = idx - 1
-		}
-	}
-
-	delete(m.listenerHandles, handle.id)
+// ListenerCount returns the number of listeners registered for eventType.
+func (m *Manager) ListenerCount(eventType EventType) int {
+	return m.listeners.count(eventType)
 }
