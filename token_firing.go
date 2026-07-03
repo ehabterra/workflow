@@ -14,6 +14,24 @@ type TokenPredicate func(Token) bool
 // uncolored presence token ({} — empty ID, no data) used for boolean workflows.
 func isColored(t Token) bool { return t.ID() != "" || len(t.data) > 0 }
 
+// coloredTokensAt returns the colored (data-carrying) tokens across the given
+// places, used to populate events. It takes a read lock, so callers must NOT
+// already hold w.mu.
+func (w *Workflow) coloredTokensAt(places []Place) []Token {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	var out []Token
+	for _, p := range places {
+		for _, tok := range w.marking.TokensAt(p) {
+			if isColored(tok) {
+				out = append(out, tok)
+			}
+		}
+	}
+	return out
+}
+
 // moveMarking consumes the tokens at the from places and produces them at the to
 // places, leaving every other place untouched. This is the token-aware
 // replacement for a whole-marking reset: it preserves colored tokens (and their
@@ -117,9 +135,9 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	}
 	inputPlace := from[0]
 
-	// The token must be present in the input place.
+	// Snapshot the token so guards and listeners can inspect it (per-token routing).
 	w.mu.RLock()
-	hasToken := w.marking.HasToken(inputPlace, tokenID)
+	tok, hasToken := w.tokenAt(inputPlace, tokenID)
 	currentPlaces := w.marking.Places()
 	w.mu.RUnlock()
 	if !hasToken {
@@ -130,9 +148,11 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 			return ErrTransitionNotAllowed
 		}
 	}
+	eventTokens := []Token{tok}
 
-	// Validate guard constraints and listeners (same as ApplyTransition).
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, to, w)
+	// Validate guard constraints and listeners (same as ApplyTransition). The
+	// guard can route on the token's data (e.g. token.amount > 1000).
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, to, eventTokens, w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -144,7 +164,7 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	}
 
 	// Fire before-transition listeners.
-	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, w)
+	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, eventTokens, w)
 	if err := w.fireEvent(beforeEvent); err != nil {
 		return err
 	}
@@ -164,7 +184,7 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	w.mu.Unlock()
 
 	// Fire after-transition listeners.
-	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, w)
+	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, eventTokens, w)
 	return w.fireEvent(afterEvent)
 }
 

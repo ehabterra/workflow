@@ -86,6 +86,41 @@ for _, t := range highValue {
 }
 ```
 
+## Token-aware guards and events
+
+Guards and event listeners can see the token(s) being moved. During per-token
+firing the token's data is exposed to guard expressions as `token`, so a
+transition can route or gate on the token itself:
+
+```yaml
+transitions:
+  - name: auto_approve
+    from: [pending]
+    to: [approved]
+    guard: "token.amount <= 1000"   # only small orders auto-approve
+```
+
+```go
+// token.amount <= 1000 → advances; otherwise ErrTransitionNotAllowed
+err := wf.ApplyTransitionForToken(ctx, "auto_approve", tok.ID())
+```
+
+Event listeners receive the involved tokens via `event.Tokens()` — one for
+per-token firing, or all the moved colored tokens for a whole-marking firing —
+which is what a history/audit listener records:
+
+```go
+wf.AddEventListener(workflow.EventAfterTransition, func(e workflow.Event) error {
+    for _, t := range e.Tokens() {
+        log.Printf("moved token %s: %v", t.ID(), t.Data())
+    }
+    return nil
+})
+```
+
+In the guard environment, a single token is `token` (a data map, so
+`token.amount` works) and all involved tokens are `tokens`.
+
 ## Queries, aggregation, transformation
 
 These operate on colored tokens (uncolored presence tokens are skipped):

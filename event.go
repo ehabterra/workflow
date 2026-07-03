@@ -22,6 +22,10 @@ type Event interface {
 	Transition() *Transition
 	From() []Place
 	To() []Place
+	// Tokens returns the tokens involved in this firing: exactly one for per-token
+	// firing (ApplyTransitionForToken), the consumed colored tokens for a
+	// whole-marking firing, or empty for a purely boolean firing.
+	Tokens() []Token
 	Workflow() *Workflow
 	Context() context.Context
 }
@@ -32,18 +36,21 @@ type BaseEvent struct {
 	transition *Transition
 	from       []Place
 	to         []Place
+	tokens     []Token
 	workflow   *Workflow
 
 	ctx context.Context
 }
 
-// NewEvent creates a new BaseEvent instance
-func NewEvent(ctx context.Context, eventType EventType, transition *Transition, from []Place, to []Place, workflow *Workflow) *BaseEvent {
+// NewEvent creates a new BaseEvent instance. tokens are the tokens involved in
+// the firing (may be nil for a boolean firing).
+func NewEvent(ctx context.Context, eventType EventType, transition *Transition, from []Place, to []Place, tokens []Token, workflow *Workflow) *BaseEvent {
 	return &BaseEvent{
 		eventType:  eventType,
 		transition: transition,
 		from:       from,
 		to:         to,
+		tokens:     tokens,
 		workflow:   workflow,
 		ctx:        ctx,
 	}
@@ -67,6 +74,11 @@ func (e *BaseEvent) From() []Place {
 // To returns the target places of the transition
 func (e *BaseEvent) To() []Place {
 	return e.to
+}
+
+// Tokens returns the tokens involved in this firing.
+func (e *BaseEvent) Tokens() []Token {
+	return e.tokens
 }
 
 // Workflow returns the workflow instance
@@ -93,14 +105,17 @@ type ListenerHandle struct {
 	owner     any // Pointer to the owner (Definition, Manager, or Workflow) for type safety
 }
 
-// NewGuardEvent creates a new Guard Event instance
-func NewGuardEvent(ctx context.Context, transition *Transition, from []Place, to []Place, workflow *Workflow) *GuardEvent {
+// NewGuardEvent creates a new Guard Event instance. tokens are the tokens
+// involved in the firing (may be nil for a boolean firing); for per-token firing
+// this is the single token being advanced, which the guard can inspect.
+func NewGuardEvent(ctx context.Context, transition *Transition, from []Place, to []Place, tokens []Token, workflow *Workflow) *GuardEvent {
 	return &GuardEvent{
 		BaseEvent: BaseEvent{
 			eventType:  EventGuard,
 			transition: transition,
 			from:       from,
 			to:         to,
+			tokens:     tokens,
 			workflow:   workflow,
 			ctx:        ctx,
 		},

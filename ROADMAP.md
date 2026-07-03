@@ -102,7 +102,7 @@ All tasks done: transactional state+history saves, optimistic concurrency, a sec
 | M2.6 | **Token transformation & queries** — `FindTokens`, `CountTokens`, `AggregateTokens` (count/sum/min/max/avg), `TransformTokens`. | ✅ | Go-func predicates/transforms (flexible, testable). |
 | M2.7 | **CPN docs + example** — `docs/guides/CPN_GUIDE.md`, `examples/cpn_batch_processing/` (runnable). | ✅ | Example runs end-to-end; guide covers model, API, YAML, persistence, migration. |
 
-**Deferred (optional, revisit if needed):** attribute-routing via a declarative per-transition expression (the README `route_by_amount` shape) — currently expressed in code via `SelectTokens` + `ApplyTransitionForToken`; a declarative form can layer on in M3/M6 alongside expr-based transforms.
+**Token-aware guards & events (added 2026-07-03):** `Event`/`GuardEvent` now carry the tokens involved in a firing (`Event.Tokens()`), and the guard expression environment exposes `token`/`tokens`. This makes **attribute-routing declarative** — a transition guard like `token.amount <= 1000` gates per-token firing (the README `route_by_amount` shape). `NewEvent`/`NewGuardEvent` gained a `tokens []Token` parameter (breaking, pre-1.0). Also hardened the constructors: `newWorkflow` derives `initialPlaces` from the marking (single source of truth, no drift).
 
 ---
 

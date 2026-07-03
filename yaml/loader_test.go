@@ -210,7 +210,7 @@ func TestNewLoaderWithEnv(t *testing.T) {
 
 	// Test that the env builder is used
 	tr := workflow.MustNewTransition("test", []workflow.Place{"start"}, []workflow.Place{"end"})
-	event := workflow.NewEvent(context.Background(), workflow.EventBeforeTransition, tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil)
+	event := workflow.NewEvent(context.Background(), workflow.EventBeforeTransition, tr, []workflow.Place{"start"}, []workflow.Place{"end"}, nil, nil)
 
 	env := loader.EnvBuilder(event)
 	if env["custom"] != "value" {

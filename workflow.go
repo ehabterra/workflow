@@ -107,7 +107,7 @@ func NewWorkflow(name string, definition *Definition, initialPlace Place) (*Work
 		return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, initialPlace)
 	}
 
-	return newWorkflow(name, definition, []Place{initialPlace}, NewMarking([]Place{initialPlace})), nil
+	return newWorkflow(name, definition, NewMarking([]Place{initialPlace})), nil
 }
 
 // NewWorkflowFromMarking creates a workflow instance whose starting state is the
@@ -137,14 +137,17 @@ func NewWorkflowFromMarking(name string, definition *Definition, initial Marking
 		}
 	}
 
-	return newWorkflow(name, definition, places, initial), nil
+	return newWorkflow(name, definition, initial), nil
 }
 
-func newWorkflow(name string, definition *Definition, initialPlaces []Place, marking Marking) *Workflow {
+// newWorkflow builds a Workflow from a marking, which is the single source of
+// truth for the initial state: the initial places are derived from it rather than
+// passed separately (so the two can never drift apart).
+func newWorkflow(name string, definition *Definition, marking Marking) *Workflow {
 	return &Workflow{
 		name:            name,
 		definition:      definition,
-		initialPlaces:   initialPlaces,
+		initialPlaces:   marking.Places(),
 		marking:         marking,
 		listeners:       make(map[EventType][]any),
 		context:         make(map[string]any),
@@ -374,7 +377,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(targetTransition.From()), w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -425,7 +428,7 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 			}
 			if matches {
 				// Create guard event for validation
-				event := NewGuardEvent(ctx, &t, w.marking.Places(), to, w)
+				event := NewGuardEvent(ctx, &t, w.marking.Places(), to, w.coloredTokensAt(t.From()), w)
 
 				// First, validate transition constraints
 				if err = t.validate(event); err != nil {
@@ -490,7 +493,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(targetTransition.From()), w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -510,9 +513,12 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	from := targetTransition.From()
 	to := targetTransition.To()
 
-	// Fire before transition event (unlock before calling listeners)
+	// Fire before transition event (unlock before calling listeners). Gather the
+	// colored tokens being moved now, while they are still at the input places, so
+	// both events can expose them.
 	w.mu.Unlock()
-	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, w)
+	moved := w.coloredTokensAt(from)
+	beforeEvent := NewEvent(ctx, EventBeforeTransition, targetTransition, from, to, moved, w)
 	if err := w.fireEvent(beforeEvent); err != nil {
 		w.mu.Lock()
 		return err
@@ -525,7 +531,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
-	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, w)
+	afterEvent := NewEvent(ctx, EventAfterTransition, targetTransition, from, to, moved, w)
 	if err := w.fireEvent(afterEvent); err != nil {
 		w.mu.Lock()
 		return err
@@ -589,9 +595,11 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 		return ErrInvalidTransition
 	}
 
-	// Fire before transition event (unlock before calling listeners)
+	// Fire before transition event (unlock before calling listeners). Gather the
+	// colored tokens being moved now, while they are still at the input places.
 	w.mu.Unlock()
-	event := NewEvent(ctx, EventBeforeTransition, transition, from, targetPlaces, w)
+	moved := w.coloredTokensAt(from)
+	event := NewEvent(ctx, EventBeforeTransition, transition, from, targetPlaces, moved, w)
 	if err := w.fireEvent(event); err != nil {
 		w.mu.Lock()
 		return err
@@ -604,7 +612,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
-	event = NewEvent(ctx, EventAfterTransition, transition, from, targetPlaces, w)
+	event = NewEvent(ctx, EventAfterTransition, transition, from, targetPlaces, moved, w)
 	if err := w.fireEvent(event); err != nil {
 		w.mu.Lock()
 		return err
