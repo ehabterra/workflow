@@ -170,6 +170,51 @@ func Run(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("ListIDs", func(t *testing.T) {
+		store := newStore(t)
+		ls, ok := store.(workflow.ListableStorage)
+		if !ok {
+			t.Skip("backend does not implement ListableStorage")
+		}
+		ctx := context.Background()
+
+		if ids, err := ls.ListIDs(ctx, workflow.ListOptions{}); err != nil {
+			t.Fatalf("ListIDs(empty): %v", err)
+		} else if len(ids) != 0 {
+			t.Fatalf("ListIDs on empty store = %v, want none", ids)
+		}
+
+		for _, id := range []string{"c", "a", "b"} {
+			if err := store.SaveState(ctx, id, mk("s"), nil); err != nil {
+				t.Fatalf("SaveState(%s): %v", id, err)
+			}
+		}
+
+		all, err := ls.ListIDs(ctx, workflow.ListOptions{})
+		if err != nil {
+			t.Fatalf("ListIDs(all): %v", err)
+		}
+		if want := []string{"a", "b", "c"}; !reflect.DeepEqual(all, want) {
+			t.Fatalf("ListIDs = %v, want %v (sorted)", all, want)
+		}
+
+		page, err := ls.ListIDs(ctx, workflow.ListOptions{Limit: 2})
+		if err != nil {
+			t.Fatalf("ListIDs(limit 2): %v", err)
+		}
+		if want := []string{"a", "b"}; !reflect.DeepEqual(page, want) {
+			t.Fatalf("ListIDs(limit 2) = %v, want %v", page, want)
+		}
+
+		page2, err := ls.ListIDs(ctx, workflow.ListOptions{Limit: 2, Offset: 2})
+		if err != nil {
+			t.Fatalf("ListIDs(limit 2, offset 2): %v", err)
+		}
+		if want := []string{"c"}; !reflect.DeepEqual(page2, want) {
+			t.Fatalf("ListIDs(offset 2) = %v, want %v", page2, want)
+		}
+	})
+
 	// Versioning conformance, only if the backend supports it.
 	if _, ok := newStore(t).(workflow.VersionedStorage); ok {
 		runVersioned(t, newStore)

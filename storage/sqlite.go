@@ -261,6 +261,21 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 	return marking, context, nil
 }
 
+// ListIDs implements workflow.ListableStorage, returning persisted workflow IDs
+// ordered by ID for stable pagination. A zero opts.Limit means no limit.
+func (s *SQLiteStorage) ListIDs(ctx context.Context, opts workflow.ListOptions) ([]string, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", s.idColumn, s.table, s.idColumn)
+	var args []any
+	if opts.Limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, opts.Limit, opts.Offset)
+	} else if opts.Offset > 0 {
+		query += " LIMIT -1 OFFSET ?" // SQLite requires a LIMIT before OFFSET
+		args = append(args, opts.Offset)
+	}
+	return scanIDs(s.db.QueryContext(ctx, query, args...))
+}
+
 // DeleteState removes a workflow's state from the database.
 func (s *SQLiteStorage) DeleteState(ctx context.Context, id string) error {
 	return s.deleteState(ctx, s.db, id)

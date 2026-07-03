@@ -145,7 +145,7 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	}
 	for _, fromPlace := range from {
 		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 	eventTokens := []Token{tok}
@@ -160,7 +160,7 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 		return err
 	}
 	if event.IsBlocking() {
-		return ErrTransitionNotAllowed
+		return ErrGuardRejected
 	}
 
 	// Fire before-transition listeners.

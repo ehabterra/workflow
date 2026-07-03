@@ -16,6 +16,29 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// scanIDs collects the single-column string results of an ID query, closing the
+// rows. It centralizes the boilerplate shared by the SQLite and Postgres
+// ListIDs implementations.
+func scanIDs(rows *sql.Rows, queryErr error) ([]string, error) {
+	if queryErr != nil {
+		return nil, fmt.Errorf("list ids: %w", queryErr)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ids: %w", err)
+	}
+	return ids, nil
+}
+
 // RunInTx runs fn inside a database transaction. It commits if fn returns nil and
 // rolls back if fn returns an error or panics (the panic is re-raised after the
 // rollback). It lets callers persist workflow state and append history atomically,

@@ -94,6 +94,24 @@ type VersionedStorage interface {
 	SaveVersionedState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
 }
 
+// ListOptions controls pagination for enumerating persisted workflow IDs.
+// A zero Limit means no limit.
+type ListOptions struct {
+	Limit  int
+	Offset int
+}
+
+// ListableStorage is an optional interface a Storage backend may implement to
+// enumerate the IDs of persisted workflows. It is the primitive a host needs to
+// scan the fleet — for example a cron sweeping instances awaiting a deadline —
+// without dropping to raw SQL. The Manager exposes it via ListWorkflowIDs.
+type ListableStorage interface {
+	Storage
+
+	// ListIDs returns persisted workflow IDs ordered by ID for stable pagination.
+	ListIDs(ctx context.Context, opts ListOptions) ([]string, error)
+}
+
 // NewWorkflow creates a workflow instance starting at initialPlace.
 //
 // Every workflow's marking is a Colored Petri Net marking; a plain workflow just
@@ -292,7 +310,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 	currentPlaces := w.CurrentPlaces()
 	for _, fromPlace := range targetTransition.From() {
 		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 
@@ -307,7 +325,7 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 		return err
 	}
 	if event.IsBlocking() {
-		return ErrTransitionNotAllowed
+		return ErrGuardRejected
 	}
 
 	return nil
@@ -360,7 +378,7 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 					continue
 				}
 				if event.IsBlocking() {
-					err = ErrTransitionNotAllowed
+					err = ErrGuardRejected
 					continue
 				}
 				return nil
@@ -372,7 +390,7 @@ func (w *Workflow) CanWithContext(ctx context.Context, to []Place) error {
 		return err
 	}
 
-	return ErrTransitionNotAllowed
+	return ErrNotEnabled
 }
 
 // Apply applies a transition to the workflow
@@ -408,7 +426,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	currentPlaces := w.CurrentPlaces()
 	for _, fromPlace := range targetTransition.From() {
 		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 
@@ -423,7 +441,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return err
 	}
 	if event.IsBlocking() {
-		return ErrTransitionNotAllowed
+		return ErrGuardRejected
 	}
 
 	// Apply the transition directly (don't use Apply which might find wrong transition)
@@ -452,7 +470,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	// producing a phantom uncolored token in the colored case).
 	for _, p := range from {
 		if !w.marking.HasPlace(p) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 
@@ -542,7 +560,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	// released for the before-listeners.
 	for _, p := range from {
 		if !w.marking.HasPlace(p) {
-			return ErrTransitionNotAllowed
+			return ErrNotEnabled
 		}
 	}
 

@@ -167,6 +167,22 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	return marking, ctxData, nil
 }
 
+// ListIDs implements workflow.ListableStorage, returning persisted workflow IDs
+// ordered by ID for stable pagination. A zero opts.Limit means no limit.
+func (s *PostgresStorage) ListIDs(ctx context.Context, opts workflow.ListOptions) ([]string, error) {
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", s.idColumn, s.table, s.idColumn)
+	var args []any
+	if opts.Limit > 0 {
+		args = append(args, opts.Limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if opts.Offset > 0 {
+		args = append(args, opts.Offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+	return scanIDs(s.db.QueryContext(ctx, query, args...))
+}
+
 // DeleteState removes a workflow's state.
 func (s *PostgresStorage) DeleteState(ctx context.Context, id string) error {
 	return s.deleteState(ctx, s.db, id)

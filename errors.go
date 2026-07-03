@@ -8,7 +8,25 @@ import "errors"
 var (
 	// ErrTransitionNotAllowed is returned when a transition exists but its guards
 	// or the current marking do not permit it to fire.
+	//
+	// It is the general condition; the two concrete reasons — ErrNotEnabled and
+	// ErrGuardRejected — both satisfy errors.Is(err, ErrTransitionNotAllowed), so
+	// existing callers that test the general sentinel keep working while new
+	// callers can distinguish the cause.
 	ErrTransitionNotAllowed = errors.New("transition not allowed")
+
+	// ErrNotEnabled is returned when a transition cannot fire because the current
+	// marking does not enable it — one or more of its input places is unmarked.
+	// This is the "try again later / already advanced" case: for example, a
+	// webhook redelivery that re-fires a transition an earlier delivery already
+	// took. It satisfies errors.Is(err, ErrTransitionNotAllowed).
+	ErrNotEnabled = &blockedError{msg: "transition not enabled in current marking"}
+
+	// ErrGuardRejected is returned when a transition is enabled by the marking but
+	// a guard constraint or a blocking guard listener refused it — the "forbidden
+	// / conditions not met" case (e.g. insufficient permissions, amount over a
+	// limit). It satisfies errors.Is(err, ErrTransitionNotAllowed).
+	ErrGuardRejected = &blockedError{msg: "transition rejected by guard"}
 
 	// ErrTransitionNotFound is returned when no transition matches the requested
 	// name or target places.
@@ -56,4 +74,22 @@ var (
 
 	// ErrTokenNotFound is returned when a token cannot be found in a place.
 	ErrTokenNotFound = errors.New("token not found")
+
+	// ErrDefinitionMismatch is returned by the Manager when a persisted instance
+	// was created against a different workflow definition than the one supplied to
+	// load it (the stored definition fingerprint differs). It guards against
+	// silently running an old marking against an incompatible definition. Supply a
+	// migration handler (WithDefinitionMigration) to load such instances anyway.
+	ErrDefinitionMismatch = errors.New("workflow definition mismatch")
 )
+
+// blockedError is a sentinel that also reports itself as ErrTransitionNotAllowed,
+// so a specific reason (ErrNotEnabled / ErrGuardRejected) can be matched
+// precisely while errors.Is(err, ErrTransitionNotAllowed) still holds.
+type blockedError struct{ msg string }
+
+func (e *blockedError) Error() string { return e.msg }
+
+// Is reports a match for the concrete sentinel (handled by errors.Is via ==) or
+// for the general ErrTransitionNotAllowed condition.
+func (e *blockedError) Is(target error) bool { return target == ErrTransitionNotAllowed }

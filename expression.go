@@ -80,7 +80,7 @@ func (c *ExpressionConstraint) Validate(event Event) error {
 	}
 
 	if !allowed {
-		return ErrTransitionNotAllowed
+		return ErrGuardRejected
 	}
 
 	return nil
