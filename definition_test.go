@@ -292,30 +292,27 @@ func TestDefinition_AddEventListener(t *testing.T) {
 	listener1 := func(event workflow.Event) error { return nil }
 	def.AddEventListener(workflow.EventBeforeTransition, listener1)
 
-	if def.Listeners == nil {
-		t.Error("AddEventListener() did not initialize Listeners map")
-	}
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 1 {
-		t.Errorf("AddEventListener() listener count = %d, want 1", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 1 {
+		t.Errorf("AddEventListener() listener count = %d, want 1", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Test adding multiple listeners
 	listener2 := func(event workflow.Event) error { return nil }
 	def.AddEventListener(workflow.EventBeforeTransition, listener2)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 2 {
-		t.Errorf("AddEventListener() listener count = %d, want 2", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 2 {
+		t.Errorf("AddEventListener() listener count = %d, want 2", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Test adding listener for different event type
 	listener3 := func(event workflow.Event) error { return nil }
 	def.AddEventListener(workflow.EventAfterTransition, listener3)
 
-	if len(def.Listeners[workflow.EventAfterTransition]) != 1 {
-		t.Errorf("AddEventListener() listener count for EventAfterTransition = %d, want 1", len(def.Listeners[workflow.EventAfterTransition]))
+	if def.ListenerCount(workflow.EventAfterTransition) != 1 {
+		t.Errorf("AddEventListener() listener count for EventAfterTransition = %d, want 1", def.ListenerCount(workflow.EventAfterTransition))
 	}
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 2 {
-		t.Errorf("AddEventListener() listener count for EventBeforeTransition = %d, want 2", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 2 {
+		t.Errorf("AddEventListener() listener count for EventBeforeTransition = %d, want 2", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 }
 
@@ -329,19 +326,16 @@ func TestDefinition_AddGuardEventListener(t *testing.T) {
 	guardListener1 := func(event *workflow.GuardEvent) error { return nil }
 	def.AddGuardEventListener(guardListener1)
 
-	if def.Listeners == nil {
-		t.Error("AddGuardEventListener() did not initialize Listeners map")
-	}
-	if len(def.Listeners[workflow.EventGuard]) != 1 {
-		t.Errorf("AddGuardEventListener() listener count = %d, want 1", len(def.Listeners[workflow.EventGuard]))
+	if def.ListenerCount(workflow.EventGuard) != 1 {
+		t.Errorf("AddGuardEventListener() listener count = %d, want 1", def.ListenerCount(workflow.EventGuard))
 	}
 
 	// Test adding multiple guard listeners
 	guardListener2 := func(event *workflow.GuardEvent) error { return nil }
 	def.AddGuardEventListener(guardListener2)
 
-	if len(def.Listeners[workflow.EventGuard]) != 2 {
-		t.Errorf("AddGuardEventListener() listener count = %d, want 2", len(def.Listeners[workflow.EventGuard]))
+	if def.ListenerCount(workflow.EventGuard) != 2 {
+		t.Errorf("AddGuardEventListener() listener count = %d, want 2", def.ListenerCount(workflow.EventGuard))
 	}
 }
 
@@ -356,29 +350,29 @@ func TestDefinition_RemoveListener(t *testing.T) {
 	handle2 := def.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
 	handle3 := def.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) error { return nil })
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 3 {
-		t.Fatalf("Expected 3 listeners, got %d", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 3 {
+		t.Fatalf("Expected 3 listeners, got %d", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Remove middle listener using handle
 	def.RemoveListener(handle2)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 2 {
-		t.Errorf("RemoveListener() listener count = %d, want 2", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 2 {
+		t.Errorf("RemoveListener() listener count = %d, want 2", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Remove last listener
 	def.RemoveListener(handle3)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 1 {
-		t.Errorf("RemoveListener() listener count = %d, want 1", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 1 {
+		t.Errorf("RemoveListener() listener count = %d, want 1", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Remove first listener
 	def.RemoveListener(handle1)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 0 {
-		t.Errorf("RemoveListener() listener count = %d, want 0", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 0 {
+		t.Errorf("RemoveListener() listener count = %d, want 0", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Test removing with nil handle (should not panic)
@@ -408,29 +402,29 @@ func TestDefinition_RemoveEventListener(t *testing.T) {
 	handle2 := def.AddEventListener(workflow.EventBeforeTransition, listener2)
 	handle3 := def.AddEventListener(workflow.EventBeforeTransition, listener3)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 3 {
-		t.Fatalf("Expected 3 listeners, got %d", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 3 {
+		t.Fatalf("Expected 3 listeners, got %d", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Remove middle listener using handle
 	def.RemoveListener(handle2)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 2 {
-		t.Errorf("RemoveListener() listener count = %d, want 2", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 2 {
+		t.Errorf("RemoveListener() listener count = %d, want 2", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Remove last listener
 	def.RemoveListener(handle3)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 1 {
-		t.Errorf("RemoveListener() listener count = %d, want 1", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 1 {
+		t.Errorf("RemoveListener() listener count = %d, want 1", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Remove first listener
 	def.RemoveListener(handle1)
 
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 0 {
-		t.Errorf("RemoveListener() listener count = %d, want 0", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 0 {
+		t.Errorf("RemoveListener() listener count = %d, want 0", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Test removing with nil handle (should not panic)
@@ -459,8 +453,8 @@ func TestDefinition_RemoveListener_EdgeCases(t *testing.T) {
 
 	// Try to remove handle2 (from def2) from def1 - should not remove anything
 	def.RemoveListener(handle2)
-	if len(def.Listeners[workflow.EventBeforeTransition]) != 1 {
-		t.Errorf("RemoveListener() with wrong owner should not remove listener, got %d", len(def.Listeners[workflow.EventBeforeTransition]))
+	if def.ListenerCount(workflow.EventBeforeTransition) != 1 {
+		t.Errorf("RemoveListener() with wrong owner should not remove listener, got %d", def.ListenerCount(workflow.EventBeforeTransition))
 	}
 
 	// Clean up

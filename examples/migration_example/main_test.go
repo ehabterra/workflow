@@ -223,6 +223,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 			id TEXT PRIMARY KEY,
 			state TEXT NOT NULL,
 			version INTEGER NOT NULL DEFAULT 0,
+			context TEXT NOT NULL DEFAULT '{}',
 			title TEXT,
 			content TEXT
 		)

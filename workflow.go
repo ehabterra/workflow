@@ -3,9 +3,9 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 )
 
 // Workflow represents a workflow instance
@@ -14,8 +14,11 @@ type Workflow struct {
 	definition    *Definition
 	initialPlaces []Place
 	marking       Marking
-	listeners     map[EventType][]any
 	context       map[string]any
+
+	// listeners holds this instance's listeners. It carries its own lock, so
+	// listeners can be added or removed while transitions fire.
+	listeners listenerSet
 
 	manager *Manager // pointer to manager, may be nil
 	mu      sync.RWMutex
@@ -24,10 +27,6 @@ type Workflow struct {
 	// a VersionedStorage backend. It is 0 for a workflow that has never been
 	// persisted, and ignored by non-versioned backends.
 	version int64
-
-	// Handle tracking for reliable listener removal
-	listenerHandles map[uint64]int // handle ID -> index in slice
-	nextHandleID    uint64         // atomic counter for unique handle IDs
 }
 
 // Version returns the workflow's current optimistic-concurrency version. It is 0
@@ -60,6 +59,12 @@ type Storage interface {
 	// SaveState saves the workflow's marking and its context data for the given ID.
 	// The full marking is persisted, so data-carrying (colored) tokens round-trip;
 	// simple boolean workflows serialize to the compact place-array form.
+	//
+	// Implementations must persist the ENTIRE context map, so every key set via
+	// SetContext survives a save/load round-trip (JSON-encoded values may come
+	// back with adjusted types, e.g. numbers as float64). Silently persisting
+	// only a subset of keys is a contract violation; the storagetest conformance
+	// suite checks this.
 	SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
 
 	// DeleteState removes the workflow state for the given ID.
@@ -145,14 +150,12 @@ func NewWorkflowFromMarking(name string, definition *Definition, initial Marking
 // passed separately (so the two can never drift apart).
 func newWorkflow(name string, definition *Definition, marking Marking) *Workflow {
 	return &Workflow{
-		name:            name,
-		definition:      definition,
-		initialPlaces:   marking.Places(),
-		marking:         marking,
-		listeners:       make(map[EventType][]any),
-		context:         make(map[string]any),
-		manager:         nil,
-		listenerHandles: make(map[uint64]int),
+		name:          name,
+		definition:    definition,
+		initialPlaces: marking.Places(),
+		marking:       marking,
+		context:       make(map[string]any),
+		manager:       nil,
 	}
 }
 
@@ -166,76 +169,28 @@ func (w *Workflow) Name() string {
 // AddEventListener adds an event listener for a specific event type
 // It returns a handle that can be used to remove the listener later
 func (w *Workflow) AddEventListener(eventType EventType, listener EventListener) *ListenerHandle {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	handleID := atomic.AddUint64(&w.nextHandleID, 1)
-	index := len(w.listeners[eventType])
-	w.listeners[eventType] = append(w.listeners[eventType], listener)
-	w.listenerHandles[handleID] = index
-
-	return &ListenerHandle{
-		id:        handleID,
-		eventType: eventType,
-		owner:     w,
-	}
+	return w.listeners.add(eventType, listener, w)
 }
 
 // AddGuardEventListener adds a guard event listener
 // It returns a handle that can be used to remove the listener later
 func (w *Workflow) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	eventType := EventGuard
-	handleID := atomic.AddUint64(&w.nextHandleID, 1)
-	index := len(w.listeners[eventType])
-	w.listeners[eventType] = append(w.listeners[eventType], listener)
-	w.listenerHandles[handleID] = index
-
-	return &ListenerHandle{
-		id:        handleID,
-		eventType: eventType,
-		owner:     w,
-	}
+	return w.listeners.add(EventGuard, listener, w)
 }
 
 // RemoveListener removes a listener using its handle
 // This is the recommended way to remove listeners as it's reliable and efficient
 func (w *Workflow) RemoveListener(handle *ListenerHandle) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.listenerHandles == nil || handle == nil {
+	if handle == nil || handle.owner != w {
 		return
 	}
+	w.listeners.remove(handle)
+}
 
-	// Verify the handle belongs to this workflow
-	if handle.owner != w {
-		return
-	}
-
-	index, ok := w.listenerHandles[handle.id]
-	if !ok {
-		return // Handle not found
-	}
-
-	listeners := w.listeners[handle.eventType]
-	if index >= len(listeners) {
-		return // Index out of bounds
-	}
-
-	// Remove from slice
-	w.listeners[handle.eventType] = append(listeners[:index], listeners[index+1:]...)
-
-	// Update indices for handles after the removed one
-	for id, idx := range w.listenerHandles {
-		if idx > index {
-			w.listenerHandles[id] = idx - 1
-		}
-	}
-
-	delete(w.listenerHandles, handle.id)
+// ListenerCount returns the number of listeners registered on this instance for
+// eventType (definition- and manager-level listeners are not counted).
+func (w *Workflow) ListenerCount(eventType EventType) int {
+	return w.listeners.count(eventType)
 }
 
 // SetContext sets a value in the workflow context
@@ -257,11 +212,16 @@ func (w *Workflow) Context(key string) (any, bool) {
 func (w *Workflow) AllContext() map[string]any {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	result := make(map[string]any)
-	for k, v := range w.context {
-		result[k] = v
-	}
-	return result
+	return maps.Clone(w.context)
+}
+
+// snapshotState returns a deep copy of the marking and a copy of the context
+// map, both taken under the read lock, so persistence never marshals live
+// state that a concurrent transition or SetContext could mutate mid-encode.
+func (w *Workflow) snapshotState() (Marking, map[string]any) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return cloneMarking(w.marking), maps.Clone(w.context)
 }
 
 // SetManager sets the manager pointer for this workflow
@@ -271,72 +231,32 @@ func (w *Workflow) SetManager(m *Manager) {
 	w.manager = m
 }
 
-// fireEvent fires listeners from definition, manager, and instance (in that order)
+// fireEvent fires listeners from definition, manager, and instance (in that
+// order). Listener slices are snapshotted by the concurrency-safe listenerSet,
+// and no workflow lock is held while calling user listeners, so listeners may
+// re-enter the workflow and may be added/removed concurrently.
 func (w *Workflow) fireEvent(event Event) error {
-	// Do not hold lock while calling user listeners to avoid deadlocks
 	eventType := event.Type()
 
+	w.mu.RLock()
+	definition := w.definition
+	manager := w.manager
+	w.mu.RUnlock()
+
 	// 1. Definition listeners
-	if w.definition != nil && w.definition.Listeners != nil {
-		for _, l := range w.definition.Listeners[eventType] {
-			switch eventType {
-			case EventGuard:
-				if gl, ok := l.(GuardEventListener); ok {
-					if err := gl(event.(*GuardEvent)); err != nil {
-						return err
-					}
-				}
-			default:
-				if el, ok := l.(EventListener); ok {
-					if err := el(event); err != nil {
-						return err
-					}
-				}
-			}
+	if definition != nil {
+		if err := dispatchListeners(definition.listeners.snapshot(eventType), event); err != nil {
+			return err
 		}
 	}
 	// 2. Manager listeners
-	w.mu.RLock()
-	manager := w.manager
-	w.mu.RUnlock()
-	if manager != nil && manager.Listeners != nil {
-		for _, l := range manager.Listeners[eventType] {
-			switch eventType {
-			case EventGuard:
-				if gl, ok := l.(GuardEventListener); ok {
-					if err := gl(event.(*GuardEvent)); err != nil {
-						return err
-					}
-				}
-			default:
-				if el, ok := l.(EventListener); ok {
-					if err := el(event); err != nil {
-						return err
-					}
-				}
-			}
+	if manager != nil {
+		if err := dispatchListeners(manager.listeners.snapshot(eventType), event); err != nil {
+			return err
 		}
 	}
-	w.mu.RLock()
-	listeners := w.listeners[eventType]
-	w.mu.RUnlock()
-	for _, l := range listeners {
-		switch eventType {
-		case EventGuard:
-			if gl, ok := l.(GuardEventListener); ok {
-				if err := gl(event.(*GuardEvent)); err != nil {
-					return err
-				}
-			}
-		default:
-			if el, ok := l.(EventListener); ok {
-				if err := el(event); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	// 3. Instance listeners
+	return dispatchListeners(w.listeners.snapshot(eventType), event)
 }
 
 // Can check if transition to target places is possible
@@ -525,6 +445,17 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	}
 	w.mu.Lock()
 
+	// Re-verify enablement under the write lock: the lock was released to run
+	// guards and before-listeners, and a concurrent firing may have consumed the
+	// input places in the meantime. Without this, two racing calls could both
+	// pass the earlier check and both move (double-firing the boolean case, or
+	// producing a phantom uncolored token in the colored case).
+	for _, p := range from {
+		if !w.marking.HasPlace(p) {
+			return ErrTransitionNotAllowed
+		}
+	}
+
 	// Move tokens from the input places to the output places, preserving colored
 	// token data and leaving unrelated places untouched.
 	w.moveMarking(from, to)
@@ -605,6 +536,15 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 		return err
 	}
 	w.mu.Lock()
+
+	// Re-verify enablement under the write lock (see ApplyTransitionWithContext):
+	// a concurrent firing may have consumed the input places while the lock was
+	// released for the before-listeners.
+	for _, p := range from {
+		if !w.marking.HasPlace(p) {
+			return ErrTransitionNotAllowed
+		}
+	}
 
 	// Move tokens from the input places to the output places, preserving colored
 	// token data and leaving unrelated places untouched.

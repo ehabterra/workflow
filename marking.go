@@ -214,3 +214,28 @@ func copyTokens(toks []Token) []Token {
 	copy(out, toks)
 	return out
 }
+
+// cloneMarking returns a deep copy of src. It is used to snapshot a marking
+// under the workflow lock so persistence can marshal it without racing
+// concurrent transitions.
+func cloneMarking(src Marking) Marking {
+	if m, ok := src.(*marking); ok {
+		out := make(map[Place][]Token, len(m.tokens))
+		for p, toks := range m.tokens {
+			out[p] = copyTokens(toks)
+		}
+		return &marking{tokens: out}
+	}
+	// Generic fallback for other Marking implementations.
+	out := NewMarking(nil)
+	for p, toks := range src.AllTokens() {
+		if len(toks) == 0 {
+			_ = out.AddPlace(p)
+			continue
+		}
+		for _, tok := range toks {
+			out.AddToken(p, tok)
+		}
+	}
+	return out
+}

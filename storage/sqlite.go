@@ -42,6 +42,9 @@ func (s *SQLiteStorage) GenerateSchema() string {
 		fmt.Sprintf("%s TEXT NOT NULL", s.stateColumn),
 		fmt.Sprintf("%s INTEGER NOT NULL DEFAULT 0", s.versionColumn),
 	}
+	if s.contextColumn != "" {
+		columns = append(columns, fmt.Sprintf("%s TEXT NOT NULL DEFAULT '{}'", s.contextColumn))
+	}
 
 	for _, colDef := range s.customFields {
 		columns = append(columns, colDef)
@@ -76,9 +79,19 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, mar
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
+	columns := []string{s.idColumn, s.stateColumn}
+	values := []any{id, stateJSON}
+	if s.contextColumn != "" {
+		ctxJSON, err := encodeContextJSON(ctxData)
+		if err != nil {
+			return err
+		}
+		columns = append(columns, s.contextColumn)
+		values = append(values, ctxJSON)
+	}
 	customCols, customVals := s.customColumns(ctxData, encodeValue)
-	columns := append([]string{s.idColumn, s.stateColumn}, customCols...)
-	values := append([]any{id, stateJSON}, customVals...)
+	columns = append(columns, customCols...)
+	values = append(values, customVals...)
 	placeholders := make([]string, len(columns))
 	for i := range placeholders {
 		placeholders[i] = "?"
@@ -131,6 +144,10 @@ func (s *SQLiteStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) 
 
 func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
 	columns := []string{s.stateColumn}
+	if s.contextColumn != "" {
+		columns = append(columns, s.contextColumn)
+	}
+	customStart := len(columns)
 	customFieldKeys := make([]string, 0, len(s.customFields))
 
 	for key, colDef := range s.customFields {
@@ -174,10 +191,19 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
+	// The context column holds the full context map; custom-field columns are
+	// queryable projections of individual keys and are overlaid afterwards so
+	// their typed values (e.g. INTEGER int64) win over the JSON decoding.
 	context := make(map[string]any)
+	if s.contextColumn != "" {
+		context, err = decodeContextJSON(*(scanArgs[1].(*any)))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 
 	for i, key := range customFieldKeys {
-		val := *(scanArgs[i+1].(*any))
+		val := *(scanArgs[customStart+i].(*any))
 
 		// Check if this is a JSON string that should be unmarshaled
 		// This handles fields like "roles" (arrays) and "nested" (maps) which are stored as JSON
@@ -289,6 +315,14 @@ func (s *SQLiteStorage) saveVersionedState(ctx context.Context, q querier, id st
 		return 0, fmt.Errorf("failed to marshal state: %w", err)
 	}
 	customCols, customVals := s.customColumns(ctxData, encodeValue)
+	if s.contextColumn != "" {
+		ctxJSON, err := encodeContextJSON(ctxData)
+		if err != nil {
+			return 0, err
+		}
+		customCols = append([]string{s.contextColumn}, customCols...)
+		customVals = append([]any{ctxJSON}, customVals...)
+	}
 
 	if expectedVersion <= 0 {
 		// Create a new row at version 1; do nothing if the id already exists so we

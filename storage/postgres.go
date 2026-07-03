@@ -48,6 +48,9 @@ func (s *PostgresStorage) GenerateSchema() string {
 		fmt.Sprintf("%s TEXT NOT NULL", s.stateColumn),
 		fmt.Sprintf("%s BIGINT NOT NULL DEFAULT 0", s.versionColumn),
 	}
+	if s.contextColumn != "" {
+		columns = append(columns, fmt.Sprintf("%s JSONB NOT NULL DEFAULT '{}'", s.contextColumn))
+	}
 	for _, colDef := range s.customFields {
 		columns = append(columns, colDef)
 	}
@@ -71,6 +74,14 @@ func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, m
 	}
 
 	customCols, customVals := s.customColumns(ctxData, encodeValuePg)
+	if s.contextColumn != "" {
+		ctxJSON, err := encodeContextJSON(ctxData)
+		if err != nil {
+			return err
+		}
+		customCols = append([]string{s.contextColumn}, customCols...)
+		customVals = append([]any{ctxJSON}, customVals...)
+	}
 	columns := append([]string{s.idColumn, s.stateColumn}, customCols...)
 	values := append([]any{id, string(stateJSON)}, customVals...)
 
@@ -104,6 +115,10 @@ func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string
 
 func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
 	columns := []string{s.stateColumn}
+	if s.contextColumn != "" {
+		columns = append(columns, s.contextColumn)
+	}
+	customStart := len(columns)
 	customKeys := make([]string, 0, len(s.customFields))
 	for key, colDef := range s.customFields {
 		columns = append(columns, firstField(colDef))
@@ -115,9 +130,13 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	var stateJSON string
 	scanArgs := make([]any, len(columns))
 	scanArgs[0] = &stateJSON
+	var ctxJSON any
+	if s.contextColumn != "" {
+		scanArgs[1] = &ctxJSON
+	}
 	customVals := make([]any, len(customKeys))
 	for i := range customVals {
-		scanArgs[i+1] = &customVals[i]
+		scanArgs[customStart+i] = &customVals[i]
 	}
 
 	if err := q.QueryRowContext(ctx, query, id).Scan(scanArgs...); err != nil {
@@ -132,7 +151,16 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
+	// The context column holds the full context map; custom-field columns are
+	// queryable projections of individual keys and are overlaid afterwards so
+	// their natively-typed values win over the JSON decoding.
 	ctxData := make(map[string]any, len(customKeys))
+	if s.contextColumn != "" {
+		ctxData, err = decodeContextJSON(ctxJSON)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	for i, key := range customKeys {
 		ctxData[key] = decodeValue(customVals[i])
 	}
@@ -186,6 +214,14 @@ func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id 
 		return 0, fmt.Errorf("failed to marshal state: %w", err)
 	}
 	customCols, customVals := s.customColumns(ctxData, encodeValuePg)
+	if s.contextColumn != "" {
+		ctxJSON, err := encodeContextJSON(ctxData)
+		if err != nil {
+			return 0, err
+		}
+		customCols = append([]string{s.contextColumn}, customCols...)
+		customVals = append([]any{ctxJSON}, customVals...)
+	}
 
 	if expectedVersion <= 0 {
 		columns := append([]string{s.idColumn, s.stateColumn, s.versionColumn}, customCols...)
