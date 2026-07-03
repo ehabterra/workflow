@@ -133,7 +133,9 @@ func tick(ctx context.Context, mgr *workflow.Manager, def *workflow.Definition, 
 			log.Printf("  FireDue(%s): %v", id, err)
 			continue
 		}
-		fmt.Printf("  %-16s escalated (fired %v)\n", id, fired)
+		if len(fired) > 0 {
+			fmt.Printf("  %-16s escalated (fired %v)\n", id, fired)
+		}
 	}
 }
 

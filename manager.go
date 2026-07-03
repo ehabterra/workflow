@@ -585,7 +585,7 @@ func (m *Manager) FireDue(ctx context.Context, id string, definition *Definition
 			// disabled earlier in this pass — the pass is done.
 			progressed := false
 			for _, t := range wf.Due(now) {
-				err := wf.ApplyTransition(t.Name())
+				err := wf.ApplyTransitionWithContext(ctx, t.Name())
 				if err != nil {
 					if errors.Is(err, ErrTransitionNotAllowed) {
 						continue // blocked/disabled: skip, not an error.

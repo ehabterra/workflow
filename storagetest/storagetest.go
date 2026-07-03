@@ -264,31 +264,35 @@ func runDue(t *testing.T, newStore Factory) {
 		ctx := context.Background()
 		ds := dueStore(t)
 
+		// IDs deliberately do NOT match due order (z<d1, m&b<d2, a<d3), so an
+		// implementation that sorted by ID alone would fail: ordering must be by
+		// due time first, with ID only as the tie-breaker.
 		d1, d2, d3 := base.Add(1*time.Hour), base.Add(2*time.Hour), base.Add(3*time.Hour)
-		saveDue(t, ds, "c", &d3)
-		saveDue(t, ds, "a", &d1)
+		saveDue(t, ds, "z", &d1)
+		saveDue(t, ds, "m", &d2)
 		saveDue(t, ds, "b", &d2)
+		saveDue(t, ds, "a", &d3)
 		saveDue(t, ds, "notimer", nil) // no running timer → never listed
 
-		// before = d2 includes only a and b, ordered by due ascending.
+		// before = d2 includes z (d1), then b and m (both d2, ID tie-break).
 		if got, err := ds.ListDue(ctx, d2, 0); err != nil {
 			t.Fatalf("ListDue(d2): %v", err)
-		} else if want := []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+		} else if want := []string{"z", "b", "m"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("ListDue(d2) = %v, want %v", got, want)
 		}
 
-		// Far in the future lists every timer-bearing instance, ordered, and never
-		// the nil-due one.
+		// Far in the future lists every timer-bearing instance, ordered by due
+		// then ID, and never the nil-due one.
 		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 0); err != nil {
 			t.Fatalf("ListDue(future): %v", err)
-		} else if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+		} else if want := []string{"z", "b", "m", "a"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("ListDue(future) = %v, want %v", got, want)
 		}
 
 		// A limit pages the ascending order.
 		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 2); err != nil {
 			t.Fatalf("ListDue(limit 2): %v", err)
-		} else if want := []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+		} else if want := []string{"z", "b"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("ListDue(limit 2) = %v, want %v", got, want)
 		}
 	})

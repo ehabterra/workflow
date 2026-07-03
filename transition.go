@@ -98,6 +98,11 @@ func (t *Transition) To() []Place {
 //
 // The engine never fires a due transition by itself — a host drives the clock
 // (see Workflow.Due, Workflow.NextDue, and Manager.FireDue).
+//
+// Like the rest of a Definition, a transition's timeout is expected to be
+// configured before any Workflow is created from the definition; mutating it
+// afterward is not safe against concurrent Workflow.Due/NextDue reads on
+// workflows that share the definition.
 func (t *Transition) SetTimeoutAfter(d time.Duration) {
 	if d <= 0 {
 		t.timeout = 0

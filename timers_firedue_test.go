@@ -43,7 +43,14 @@ func (s *memDueStore) ListDue(ctx context.Context, before time.Time, limit int) 
 			ids = append(ids, id)
 		}
 	}
-	sort.Strings(ids)
+	// Mirror the DueStorage contract: due-time ascending, ID as tie-breaker.
+	sort.Slice(ids, func(i, j int) bool {
+		di, dj := s.due[ids[i]], s.due[ids[j]]
+		if !di.Equal(*dj) {
+			return di.Before(*dj)
+		}
+		return ids[i] < ids[j]
+	})
 	if limit > 0 && len(ids) > limit {
 		ids = ids[:limit]
 	}
@@ -456,7 +463,7 @@ func TestFireDue_UnsupportedStorageForListDue(t *testing.T) {
 	// memStore is versioned but not a DueStorage: FireDue still works (it rides
 	// Execute), but Manager.ListDue reports the missing capability.
 	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore(), workflow.WithoutRegistryCache())
-	if _, err := mgr.ListDue(context.Background(), fireDueEpoch, 0); err == nil {
-		t.Fatal("ListDue on non-DueStorage backend: want error, got nil")
+	if _, err := mgr.ListDue(context.Background(), fireDueEpoch, 0); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("ListDue on non-DueStorage backend = %v, want ErrUnsupported", err)
 	}
 }

@@ -232,7 +232,7 @@ When a timed transition joins several input places (an AND-join), it is only
 *enabled* once **all** its inputs are occupied — so its deadline runs from the
 **latest** input's entry time, not the earliest:
 
-```
+```text
 legal_ok ──┐
            ├── finalize (after: 24h)
 finance_ok ┘

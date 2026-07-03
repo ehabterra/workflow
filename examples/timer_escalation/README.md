@@ -68,7 +68,7 @@ go run ./examples/timer_escalation
 
 Expected output:
 
-```
+```text
 Fleet seeded (deadline = submitted + 72h):
   req-101-fresh     submitted 1 day  ago
   req-102-aging     submitted 2 days ago
