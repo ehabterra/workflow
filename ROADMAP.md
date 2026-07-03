@@ -1,208 +1,236 @@
 # Go Workflow — Production Roadmap
 
-> Status of this document: **living plan**. It tracks the work required to take this
-> engine from "solid core + aspirational docs" to a **reliable, feature-complete,
-> production-grade** library that delivers every capability advertised in the README.
+> Status of this document: **living plan**. Rewritten 2026-07-03 after a three-track
+> audit (capability inventory, real-system readiness review, stale-doc review) of
+> `main` @ 2f7597f (post-M2).
 >
-> Last updated: 2026-07-01
+> Last updated: 2026-07-03
 
 ---
 
 ## How to read this
 
-- **Milestones (M0–M8)** are ordered by dependency and risk, not by marketing priority.
-  Each milestone is intended to be independently releasable (a git tag) and leaves the
-  engine in a shippable state.
+- **Milestones are ordered by what unblocks building a real system with this library**,
+  not by feature breadth. Each is independently releasable and leaves the engine shippable.
 - Every task has an **acceptance criterion** — the objective bar for "done".
-- Effort is a rough order of magnitude for one experienced Go engineer: **S** = days,
-  **M** = 1–2 weeks, **L** = 3–6 weeks, **XL** = 2–3 months.
-- 🔴 blocks a production claim · 🟡 important for adoption · 🟢 polish / nice-to-have.
+- Effort for one experienced Go engineer: **S** = days, **M** = 1–2 weeks,
+  **L** = 3–6 weeks, **XL** = 2–3 months.
+- 🔴 blocks building a real system · 🟡 important for adoption · 🟢 polish / demand-driven.
 
-The single most important principle: **the code and the docs must never disagree.**
-Today they do (see M0). Until they don't, no "production" claim is defensible.
+Two standing principles:
 
----
-
-## Current reality (validated 2026-07-01)
-
-**What genuinely works and is tested (core coverage 91%):**
-- Boolean-marking Petri-net engine: definitions, places, transitions, parallel/branching.
-- Guard expressions via `expr-lang/expr` with `hasRole` / `hasPermission` / `in` helpers.
-- Pluggable `Storage` + `History` interfaces with a working SQLite implementation.
-- Thread-safe `Registry` and `Manager`; CI runs with `-race`.
-- Mermaid diagram generation; event/constraint systems; YAML config loading.
-- Web UI **example** (advanced_workflow); 7 examples total.
-
-**What is advertised but does NOT exist in code (the gap this roadmap closes):**
-- Colored Petri Nets / Smart Tokens (no `token.go`, no `Token` type).
-- Hierarchical / nested workflows (HCPN).
-- ACID / transactional persistence; compensation / rollback.
-- Advanced synchronization (AND/OR/XOR merge, discriminator).
-- Timed transitions (TPN/DPN), scheduling.
-- Static workflow validation (deadlock/reachability checking).
-- Message correlation between instances.
-- Weighted transitions, versioning, templates, RBAC, analytics, PNML export, REST API.
-
-**Active correctness bug:** the YAML loader uses non-strict decoding, so CPN keys
-(`cpn_enabled`, `token_schemas`, `token_selection`, …) in `yaml/cpn_example_minimal.yaml`
-and `examples/banking_system/banking_cpn.yaml` are **silently dropped** — the file loads
-as a plain boolean workflow and ignores all token semantics. This is a silent-wrong-behavior
-defect and the top priority.
+1. **The code and the docs must never disagree.** Drift now exists in *both* directions
+   (see "Current reality") and is treated as a defect, not a docs chore.
+2. **Library, not engine.** This is an in-process library. Features that would turn it
+   into a durable-execution server (internal schedulers, workflow-as-code replay,
+   automatic retries) are explicitly out of scope — each gets an **honest boundary
+   statement** in the docs instead of a half-implementation (see "Boundaries").
 
 ---
 
-## M0 — Truth & hardening (🔴 no new features) — target: **v0.4.0** — ✅ **COMPLETE (2026-07-01)**
+## Strategy (decided 2026-07-03)
 
-Make the repo honest and safe *before* building anything new. Small, high-leverage.
-All tasks below are done: full suite passes with `-race`, golangci-lint is clean, and
-every example module builds in CI.
+**Positioning:** the *Symfony Workflow of Go* — the best **embedded, declarative,
+Petri-net** workflow library for in-process use. Not a Temporal competitor.
+Differentiators: true parallelism (AND-split/join), colored tokens, guards,
+persistence + audit + diagrams, correctness under concurrency.
+
+**Method:** stop adding breadth. Fix what blocks real use (M3), add the one genuinely
+missing primitive (time, M4), then **dogfood** — build a near-real reference system
+(M5) and let the friction log drive everything after. Old milestones M3–M8 (weighted
+transitions, HCPN, compensation, enterprise, interop) are **parked as demand-driven**
+until dogfooding proves they're needed. The full README rewrite stays deferred to the
+very end — but *broken* README snippets are bugs and get fixed now (M3.9).
+
+**Build vs. declare** (from the readiness review):
+
+| Concern | Decision |
+|---|---|
+| Timers / timeouts | **Build** — host-driven tick, no internal scheduler (M4) |
+| External signals / async waits | **Declare + thin API** — instance rests in a place; host fires the transition; add the load-fire-save helper (M3.5) |
+| Crash recovery | **Declare + helper** — state (not code) is persisted; atomic apply+save+history in one tx (M3.5); side-effect idempotency documented as the host's job |
+| Definition versioning | **Minimal build** — fingerprint stamp + check on load; full migration parked (M3.3) |
+| Observability | **Build small** — OTel/metrics contrib on the existing event system (M5, during dogfood) |
+| Testing utilities | **Build small** — `workflowtest` assertions + path runner (M5, during dogfood) |
+| Docs / mental model | **Continuous** — deep pass after M4, grounded in the dogfood app |
+
+---
+
+## Current reality (validated 2026-07-03, three independent audits)
+
+**Genuinely implemented and tested:**
+- Boolean Petri-net core: definitions, guards (`expr-lang`), events/listeners (3-tier),
+  AND-split/join parallelism, context. Root coverage **87.5%**.
+- **Colored Petri Nets (M2, merged)**: unified `Marking` (boolean = uncolored token),
+  `Token` value type, per-token firing (`ApplyTransitionForToken`), token-aware guards
+  (`token.amount > 1000`), queries/aggregation, adaptive persisted format (old rows load).
+- Storage: SQLite + Postgres with **optimistic concurrency** (`VersionedStorage`,
+  `ErrConflict`), transactional building blocks (`RunInTx`, `*Tx` methods), and an
+  exported **conformance kit** (`storagetest.Run`) — a real strength.
+- History/audit (SQLite), YAML config with **strict decoding** + polymorphic
+  `initial_marking`, Mermaid diagrams, Manager/Registry lifecycle.
+
+**Absent (confirmed by grep, not vibes):** timers/scheduling, signals/correlation API,
+definition versioning, observability hooks, user-facing test helpers, OR/XOR-joins,
+weighted arcs, HCPN, static validation, compensation, REST API.
+
+**Defects found by the readiness review (drive M3):**
+1. 🔴 **Context persistence silently drops data** — only pre-declared custom-field
+   columns round-trip; every other `SetContext` key is lost on save (`storage/config.go`).
+2. 🔴 **Data races**: `Manager.SaveWorkflow` reads `wf.context` without the lock and
+   hands the live map to storage (`manager.go:88`); whole-marking `Apply*` unlocks
+   between enablement check and `moveMarking`, so two concurrent fires can both pass
+   (`workflow.go:510-541`); `Definition`/`Manager` listener slices are unlocked.
+3. 🔴 **Load validates only `places[0]`** against the definition; a stale marking with a
+   removed place loads silently and the instance is stuck (`manager.go:61`,
+   `workflow.go:673`).
+4. 🔴 **Fire and save are uncoordinated** — `Apply*` mutates memory only; state, history,
+   and side effects are separate steps with no atomic helper; `Manager` never writes
+   history and can't join a transaction.
+5. 🟡 `ErrTransitionNotAllowed` conflates "not enabled" with "guard rejected" — breaks
+   webhook dedup and permission UX.
+6. 🟡 Registry caches every instance forever (unbounded, stale in multi-replica).
+7. 🟡 SQLite plain save uses `REPLACE INTO` (DELETE+INSERT: fires triggers, breaks FKs);
+   history schema is SQLite-only (`AUTOINCREMENT`); storage `*Tx` methods ~0% covered.
+8. 🟡 **Doc drift both directions**: README Quick Start/interfaces/YAML snippet don't
+   compile or don't load (missing `ctx`, nonexistent `workflow.NewSQLiteStorage`, stale
+   `initial_place` key rejected by strict decoding); `doc.go` and the old roadmap said
+   CPN doesn't exist (it's merged); `docs/roadmap/cpn/*` + `banking_cpn.yaml` document a
+   YAML schema the loader **rejects**; "automatically logs every transition" is false
+   (history is opt-in); "deadlock-free" is unbacked (no static validation).
+
+---
+
+## M0 — Truth & hardening — v0.4.0 — ✅ COMPLETE (2026-07-01)
+
+Strict YAML decoding, example CI builds, lint, error model, `context.Context` on
+interfaces, repo hygiene. (Details in git history.)
+
+## M1 — Crash-safe storage (ACID) — v0.5.0 — ✅ COMPLETE (2026-07-02)
+
+Transactional state+history building blocks, optimistic concurrency, Postgres backend,
+`storagetest` conformance kit.
+
+## M2 — Colored Petri Nets / Smart Tokens — v0.6.0 — ✅ COMPLETE (2026-07-02)
+
+Unified marking (boolean = uncolored token), token model, per-token firing, token-aware
+guards/events, queries/aggregation, polymorphic `initial_marking`, adaptive persisted
+format, CPN guide + two runnable examples. Design notes in git history and
+`docs/guides/CPN_GUIDE.md`.
+
+---
+
+## M3 — Real-system correctness (🔴) — target: **v0.7.0**
+
+Fix everything the readiness review ranked as a blocker, **before** writing new features.
+Small, high-leverage, mostly S-effort. This is the milestone that makes dogfooding honest.
 
 | # | Task | Effort | Acceptance |
 |---|------|--------|-----------|
-| M0.1 | **Strict YAML decoding** — use `yaml.Decoder.KnownFields(true)`; unknown keys error with file+line. | S | Loading `cpn_example_minimal.yaml` returns a clear "unsupported field" error instead of silently succeeding. |
-| M0.2 | **Quarantine unimplemented docs/examples** — move CPN/HCPN schema + examples under `docs/roadmap/` or clearly stamp them `PLANNED — not yet implemented`. | S | No shipped `.yaml`/`.json`/README implies a feature the engine can run. |
-| M0.3 | **Untrack binary artifact** — `git rm --cached examples/migration_example/migration_example.db`; verify `*.db` ignore covers subdirs. | S | `git ls-files | grep '\.db$'` is empty. |
-| M0.4 | **golangci-lint** — add `.golangci.yml` (staticcheck, errcheck, ineffassign, gosec, revive) + CI job. | S | CI fails on new lint violations; baseline is clean. |
-| M0.5 | **Build & smoke-test every example in CI** — examples with own `go.mod` are never compiled today. | S | CI matrix builds/vets each `examples/*` module. |
-| M0.6 | **Error model** — wrap with `%w`, expand sentinels, ensure `errors.Is/As` works across `storage`/`yaml`/core. | M | Callers can branch on `ErrTransitionNotAllowed`, storage-not-found, guard-failure, etc. |
-| M0.7 | **`context.Context` on `Storage`/`History` interfaces** — decide now; it's a breaking change best done pre-1.0. | M | All persistence methods accept `ctx`; SQLite impl honors cancellation. |
-| M0.8 | **Package `doc.go` + godoc audit** — every exported symbol documented. | S | `go doc ./...` reads cleanly; pkg.go.dev score improves. |
-| M0.9 | **Repo hygiene** — move planning docs to `docs/`; add `CONTRIBUTING`, `CHANGELOG`, `SECURITY`, `CODE_OF_CONDUCT`, issue/PR templates. | S | Root has README + LICENSE + ROADMAP + CHANGELOG only. |
+| M3.1 | **Full context persistence** — always-on `context` JSON column (TEXT/JSONB); custom-field columns remain as queryable projections of it. | S | `SetContext("k", v)` on any key round-trips through save/load on both backends; conformance kit covers it. |
+| M3.2 | **Concurrency fixes** — copy `wf.context` under lock in `SaveWorkflow`; close the check-then-move gap in whole-marking `Apply*` (re-verify enablement under the write lock before `moveMarking`, mirroring `ApplyTransitionForToken`); add locking to `Definition`/`Manager` listener slices. | M | New `-race` tests: concurrent same-transition fires never double-move; concurrent `SetContext` + `SaveWorkflow` is race-clean. |
+| M3.3 | **Definition fingerprint** — `Definition.Fingerprint()` (SHA-256 over canonical places+transitions+guards); stored per instance; `LoadWorkflow` returns `ErrDefinitionMismatch` unless a migration hook is supplied. Also: validate **every** loaded place, not just `places[0]` (bug fix, independent of fingerprint). | S | Editing a definition then loading an old instance fails loudly with both fingerprints; marking with an undefined place never loads silently. |
+| M3.4 | **Split error sentinels** — `ErrNotEnabled` (marking) vs `ErrGuardRejected` (constraint), both wrapped by `ErrTransitionNotAllowed` so `errors.Is` on the old sentinel still works. | S | Webhook redelivery test distinguishes "already fired" from "forbidden". |
+| M3.5 | **Atomic execute helper** — `Manager.Execute(ctx, id, def, fn)` (load → fn → versioned save, bounded `ErrConflict` retry) and `Manager.ApplyAndSave(...)`: fire + versioned state + history record in **one** `RunInTx` transaction. Document listener side-effect semantics (at-least-once; idempotency is the host's job; outbox pattern recipe). | M | Kill-test: crash between fire and save never leaves state/history disagreeing; webhook handler is ~5 lines. |
+| M3.6 | **Registry hygiene** — opt-out of caching (`WithoutRegistry` / per-call fresh load) + `RemoveWorkflow` after save documented for multi-replica; document staleness semantics. | S | Multi-replica scenario test: replica B sees replica A's save (fresh-load mode). |
+| M3.7 | **Storage hardening** — replace `REPLACE INTO` with proper upsert; make history schema portable (Postgres history backend or dialect-aware schema); unit-test the `*Tx` methods (currently ~0%). | M | Conformance kit + history tests pass on both engines; FK to a state row survives a save. |
+| M3.8 | **Instance listing** — `ListIDs(ctx, opts)` on storage (paged), the missing primitive for "scan the fleet" (and for M4 `ListDue`). | S | Host can enumerate persisted instances without raw SQL. |
+| M3.9 | **Doc-drift hotfixes** (not the full README rewrite) — make every README snippet compile/load (`ctx` args, `storage.NewSQLiteStorage(db)`, `initial_marking`); fix `doc.go` status and `yaml/config.go:158` stale comment; correct "automatically logs" → opt-in helpers; drop/qualify "deadlock-free"; delete or rewrite `docs/roadmap/cpn/*` planning docs, `cpn_example_minimal.yaml`, `cpn_schema.json`, and `banking_cpn.yaml` (they document a schema the strict loader rejects); refresh the two comparison docs' "our side" columns (CPN now ships). | S | A new user can copy-paste every README snippet successfully; no shipped file implies a feature the loader rejects. |
 
-**Release gate:** everything advertised as "Current ✅" is true, tested, and lint-clean.
+**Release gate:** the readiness review's top-5 blocker list is empty; `-race` suite green.
 
 ---
 
-## M1 — Crash-safe storage (ACID) (🔴) — target: **v0.5.0** — ✅ **COMPLETE (2026-07-02)**
+## M4 — Time, host-driven (🔴 for real systems) — target: **v0.8.0**
 
-Durability is the foundation every later feature leans on. Do it before tokens.
-All tasks done: transactional state+history saves, optimistic concurrency, a second
-(PostgreSQL) backend, and a shared conformance kit that both backends pass.
+The single most-demanded real-world primitive ("escalate if not approved in 3 days").
+**Design decision:** the library *models* time; the **host owns the clock** (cron/ticker/
+queue). No goroutines, no internal scheduler — keeps the core deterministic and testable.
 
 | # | Task | Effort | Acceptance |
 |---|------|--------|-----------|
-| M1.1 | **Transactional save** — state save + history append commit atomically (single tx). | M | Kill-test: crash injected mid-transition never leaves state and audit log disagreeing. |
-| M1.2 | **Optimistic concurrency / versioning** — per-instance version column; reject stale writes. | M | Two concurrent `SaveWorkflow` on same id: one succeeds, one gets `ErrConflict`. |
-| M1.3 | **Postgres backend** — second reference impl proving the interface isn't SQLite-shaped. | L | Same conformance test suite passes on SQLite and Postgres. |
-| M1.4 | **Storage conformance test kit** — exported test harness any backend can run. | M | `storagetest.Run(t, factory)` validates any `Storage`. |
+| M4.1 | **Entered-at stamping** — marking records when each place received its tokens (`produce`); serialized in the token-object JSON form; old rows default sanely. | S | Round-trips both backends; old rows still load. |
+| M4.2 | **Timeout on transitions** — `Transition.SetTimeoutAfter(d)`; YAML `after: 72h`. | S | Strict loader accepts `after`; metadata visible in diagrams. |
+| M4.3 | **Due API** — `Workflow.Due(now) []Transition`, `Workflow.NextDue() (time.Time, bool)`. `now` is always a parameter (testable with a fake clock, no wall-clock in core). | S | "Wait 30 min then fire" / "timeout after 24h" expressible and unit-testable without sleeping. |
+| M4.4 | **Fleet scan** — `ListDue(ctx, before, limit)` on storage (maintained due-index column on save) + `Manager.FireDue(ctx, id, def, now)`. | M | Host cron of ~10 lines implements 3-day escalation; restart-safe by construction (state in DB, clock in host). |
+| M4.5 | **Timer docs + example** — escalation recipe; explicit boundary statement (no internal scheduler; here's the cron/queue pattern). | S | Example runs; guide explains the host-driven model. |
 
 ---
 
-## M2 — Colored Petri Nets / Smart Tokens (🔴, headline feature) — target: **v0.6.0** — ✅ **COMPLETE (2026-07-02)**
+## M5 — Dogfood: reference system + the tools it demands (🟡) — target: **v0.9.0**
 
-**Design decision (2026-07-02):** rather than a separate "CPN mode" bolted onto boolean markings, the model was **unified** — a boolean/elementary net is the trivial case of a CPN (places hold uncolored tokens). One `Marking`, one `Workflow`; the token methods are always present and cost is pay-for-what-you-use. This eliminated the dual-constructor / optional-`CPNMarking` / `ErrNotCPN` machinery. Since the project is pre-1.0, backward compatibility of the API was intentionally not preserved, but the *persisted wire format* is backward compatible (adaptive: old place arrays still load, no data migration).
-
-| # | Task | Status | Notes |
-|---|------|--------|-------|
-| M2.1 | **Token model** (`token.go`): `Token`, `TokenID`, `TokenData`, equality, validation. | ✅ | Value type, copy-on-access data, adaptive JSON. |
-| M2.2 | **Unified marking** — one `Marking` with presence + token views (`TokensAt`/`AddToken`/`RemoveToken`/`TokenCount`/`AllTokens`); token ops on `Workflow`. | ✅ | Boolean = uncolored tokens; no opt-in mode. All boolean tests pass. |
-| M2.3 | **Token-aware transitions** — `moveMarking` preserves colored tokens through firing; `ApplyTransitionForToken`; `SelectTokens`. | ✅ | Fixed the whole-marking-reset bug that wiped tokens at unrelated places. |
-| M2.4 | **Token persistence** — full marking persisted (SQLite + Postgres); adaptive format. | ✅ | Old place-array rows still load (no migration). Conformance kit has a colored-token round-trip. Pulled forward into the M2.2 commit. |
-| M2.5 | **CPN in YAML** — polymorphic `initial_marking` (scalar / list / map) declares the starting marking incl. colored tokens; `ClearPlace`. | ✅ | Replaced `initial_place` + `initial_tokens` with one polymorphic `initial_marking` key, mirroring the unified marking model (scalar = presence shorthand, map = colored tokens). Retired the aspirational `cpn_enabled`/`token_schemas` stubs; strict decoding still rejects unknown keys. |
-| M2.6 | **Token transformation & queries** — `FindTokens`, `CountTokens`, `AggregateTokens` (count/sum/min/max/avg), `TransformTokens`. | ✅ | Go-func predicates/transforms (flexible, testable). |
-| M2.7 | **CPN docs + example** — `docs/guides/CPN_GUIDE.md`, `examples/cpn_batch_processing/` (runnable). | ✅ | Example runs end-to-end; guide covers model, API, YAML, persistence, migration. |
-
-**Token-aware guards & events (added 2026-07-03):** `Event`/`GuardEvent` now carry the tokens involved in a firing (`Event.Tokens()`), and the guard expression environment exposes `token`/`tokens`. This makes **attribute-routing declarative** — a transition guard like `token.amount <= 1000` gates per-token firing (the README `route_by_amount` shape). `NewEvent`/`NewGuardEvent` gained a `tokens []Token` parameter (breaking, pre-1.0). Also hardened the constructors: `newWorkflow` derives `initialPlaces` from the marking (single source of truth, no drift).
-
----
-
-## M3 — Weighted transitions & advanced synchronization (🟡) — target: **v0.7.0**
-
-Builds directly on the token model.
+Build a near-real **expense-approval service** (see `docs/DOGFOOD.md` when started):
+parallel legal+finance approvals (AND-split/join), 3-day deadline escalation (M4),
+webhook-resumed waits, fleet of SQL-persisted instances, audit trail, metrics — plus one
+CPN-flavored component (batch payment run over approved-expense tokens) so both the
+instance-per-entity and tokens-in-one-net models get exercised.
 
 | # | Task | Effort | Acceptance |
 |---|------|--------|-----------|
-| M3.1 | **Weighted transitions** — require N tokens in a place to fire. | M | "Need 3 approvals" transition fires only at 3 tokens. |
-| M3.2 | **Advanced merge patterns** — AND-join, OR-join, XOR, discriminator ("first-wins, cancel siblings"). | L | Workflow-pattern conformance tests for each merge type pass. |
-| M3.3 | **Cancellation regions** — cancel outstanding parallel branches on discriminator fire. | M | Losing branch tokens are provably removed. |
+| M5.1 | **The reference system** — separate module (`examples/expense_approval` or own repo), HTTP layer, Postgres, cron tick, OTel. | L | Runs end-to-end; kill-tests pass; README of the example doubles as the "mental model" tutorial. |
+| M5.2 | **`workflowtest` package** — marking assertions, path runner ("apply submit→legal_approve→finance_approve, assert approved"), guard-env harness, fake-clock helpers for `Due`. Built *as the dogfood needs them*. | M | The reference system's tests use only public helpers. |
+| M5.3 | **Observability contrib** — `contrib/otel`: Manager-listener span pair + `firings_total{workflow,transition,result}`; non-erroring **observer listeners** (instrumentation must never block business flow); lifecycle + rejection events as needed. | M | Traces visible in a collector from the reference system. |
+| M5.4 | **Friction log → issues** — every papercut found while building becomes a tracked issue; this list *is* the input to re-prioritizing the parked milestones. | S | Written verdict: what the library made easy, hard, impossible. |
+
+**Exit criterion / go-no-go:** the reference system is built **without** bespoke
+persistence or scheduling layers papering over the library. If it still needs them,
+that finding outranks any roadmap item.
 
 ---
 
-## M4 — Static validation / workflow checker (🟡) — target: **v0.8.0**
+## M6 — Docs & mental model (🟡) — target: **v0.10.0**
 
-Petri-net math is the differentiator; make the "deadlock-free" claim real and *checkable*.
-
-| # | Task | Effort | Acceptance |
-|---|------|--------|-----------|
-| M4.1 | **Reachability / coverability analysis** — detect unreachable places & dead transitions. | L | Checker flags a deliberately dead transition. |
-| M4.2 | **Deadlock detection** — report markings with no enabled transition (non-final). | L | Checker flags a hand-built deadlock before deploy. |
-| M4.3 | **`workflow lint` CLI + CI hook** — validate YAML definitions pre-deploy. | M | `go run ./cmd/workflow lint file.yaml` exits non-zero on defects. |
+The deep pass, grounded in the dogfood app (not before): a narrative "how to think in
+Petri nets" guide, the signals/crash-recovery/idempotency recipes, `Boundaries` doc
+(below), pkg.go.dev polish. The **full README rewrite still lands last**, at the v1.0 gate,
+describing only shipping behavior.
 
 ---
 
-## M5 — Nested workflows / HCPN (🟡) — target: **v0.9.0**
+## Parked — demand-driven (🟢, revisit after M5 friction log)
 
-Depends on CPN (M2) for token passing across levels.
+Formerly M3–M8. None is deleted; none proceeds without a dogfood-proven need.
 
-| # | Task | Effort | Acceptance |
-|---|------|--------|-----------|
-| M5.1 | **Sub-workflow definition & substitution** — a place/transition expands to a nested net. | XL | Order→Payment sub-workflow example (README §HCPN) runs end-to-end. |
-| M5.2 | **Token passing across boundaries** — in/out socket mapping between parent and child. | L | Tokens flow parent→child→parent with correct data. |
-| M5.3 | **Hierarchical diagram** — Mermaid renders collapse/expand of sub-processes. | M | Diagram shows both summary and drill-down. |
-| M5.4 | **Reusable fragment registry** — define once, embed in many parents. | M | One fragment reused in two parent workflows in tests. |
-
----
-
-## M6 — Time, scheduling & compensation (🟡) — target: **v0.10.0**
-
-| # | Task | Effort | Acceptance |
-|---|------|--------|-----------|
-| M6.1 | **Timed transitions (TPN/DPN)** — earliest/latest firing windows, fixed durations. | L | "Wait 30 min then fire" and "timeout after 24h" both honored. |
-| M6.2 | **Restart-safe scheduler** — pluggable queue adapter (Asynq/NATS/RabbitMQ), timers survive restart. | L | Scheduled transition fires after simulated process restart. |
-| M6.3 | **Compensation / rollback** — record completed steps; structured, ordered undo (saga-style). | L | Failed step N triggers reverse compensation of steps N-1…1. |
-| M6.4 | **Message correlation** — instances wait for/emit signals keyed by shared data. | L | Workflow A blocks until Workflow B emits correlated signal. |
+- **Weighted transitions & advanced sync** (N-token thresholds, OR/XOR-join,
+  discriminator, cancellation regions). Note: per-token AND-join is impossible today
+  (`ApplyTransitionForToken` is single-input) — promote this specific gap if the dogfood
+  batch component hits it.
+- **Static validation / `workflow lint`** (reachability, deadlock detection) — also the
+  precondition for ever claiming "deadlock-free" in marketing.
+- **HCPN / nested workflows**; **compensation/saga**; **message correlation** beyond
+  id-keyed lookup.
+- **Enterprise**: full definition migration (beyond the M3.3 fingerprint), RBAC,
+  templates, analytics.
+- **Interop**: YAML export (stream with an encoder — don't buffer large documents in
+  memory), PNML, REST API, packaged web UI.
 
 ---
 
-## M7 — Enterprise & governance (🟢) — target: **v0.11.0**
+## Boundaries (honest statements, to be written into docs in M6)
 
-| # | Task | Effort | Acceptance |
-|---|------|--------|-----------|
-| M7.1 | **Workflow definition versioning & migration** — run old instances on old defs, migrate forward. | L | v1 instance completes after v2 def deployed. |
-| M7.2 | **Variable scope management** — local (per-task) vs global (workflow) isolation. | M | Local var invisible to sibling task; global shared. |
-| M7.3 | **RBAC** — first-class roles/permissions model beyond guard helpers. | M | Transition denied for unauthorized role with typed error. |
-| M7.4 | **Templates system** — parameterized reusable workflow templates. | M | Instantiate two workflows from one template with different params. |
-| M7.5 | **Statistics & analytics** — per-transition timing, throughput, bottleneck report. | M | Query "avg time in `review`" returns real data. |
-
----
-
-## M8 — Interop, API & observability (🟢) — target: **v1.0.0-rc**
-
-| # | Task | Effort | Acceptance |
-|---|------|--------|-----------|
-| M8.1 | **YAML round-trip** — export Go definitions back to YAML. | M | Load→export→load is idempotent. |
-
-> **M8.1 implementation note (file writing):** when serializing definitions to disk,
-> stream directly to the file with `yaml.NewEncoder(file)` (`SetIndent(2)`) or an
-> `*json.Encoder`, rather than building the whole document in memory with
-> `MarshalIndent` and then writing. This keeps memory flat for large exports. Mirror
-> the pattern already used in the author's `apispec` `writeOutput` helper: open with
-> `O_WRONLY|O_CREATE|O_TRUNC`, `defer` a checked `Close()`, and on encode error still
-> `Close()` the encoder and wrap both errors with `%w`. Default output to stdout when
-> no explicit `--output` flag is set; pick YAML vs JSON by file extension.
-| M8.2 | **PNML import/export** — interop with standard Petri-net tools. | L | Round-trips a PNML file through an external tool. |
-| M8.3 | **REST API** — standalone service over the engine (create/apply/query/history). | L | Documented OpenAPI; example server + integration tests. |
-| M8.4 | **Standalone web UI** — promote the example into a real, packaged UI. | L | Runnable binary, not just an example. |
-| M8.5 | **OpenTelemetry** — spans around transitions, metrics for firings/latency/errors. | M | Traces visible in an OTel collector; documented. |
-
-**v1.0.0 gate:** every README feature is implemented, tested (≥90%), documented, and
-benchmarked; two storage backends; validation, durability, and observability in place;
-the "not production ready" banner is removed and the README rewritten to describe only
-shipping behavior.
+1. **Not a durable-execution engine.** State is persisted, code is not. A crash loses
+   in-memory progress since the last save — by design. Recovery = load + re-drive.
+2. **No internal clock or scheduler.** Time enters via the host (M4 tick model).
+3. **Listeners run at-least-once relative to persisted state.** Side effects need
+   idempotency keys or an outbox; the library provides the transaction hook, not the
+   guarantee.
+4. **History is opt-in**, wired through the atomic helper (M3.5) — never silently
+   automatic.
+5. **Org structure / assignment stays in the host app**
+   (see `docs/guides/ORGANIZATIONAL_FEATURES_EXPLAINED.md`).
 
 ---
 
-## Suggested sequencing rationale
+## v1.0.0 gate
 
-1. **M0 first, always** — honesty + hardening is cheap and de-risks everything else.
-2. **M1 before M2** — durable storage underpins tokens, sagas, timers.
-3. **M2 is the spine** — CPN unlocks M3 (weighted/sync), M5 (HCPN), M6 (compensation).
-4. **M4 validation** can slot in anytime after M2 but pairs well as a mid-project quality gate.
-5. **M7–M8** are adoption/interop polish; valuable but not blockers for a defensible 1.0.
+Every advertised feature implemented, tested (≥90%), documented; two storage backends
+(state **and** history); M3 defect list empty; timers + observability + test utilities
+shipped; the reference system running; README rewritten to describe only shipping
+behavior; "not production ready" banner removed.
 
-## Cross-cutting definition of done (applies to every task)
+## Cross-cutting definition of done (every task)
 
 - Unit + integration tests, ≥90% package coverage, `-race` clean.
 - Godoc on all new exported symbols; user-facing docs updated in the same PR.
 - No feature merged whose docs/examples can't actually be executed by the engine.
-- CHANGELOG entry; benchmark added for any hot path.
+- CHANGELOG entry; benchmark for any hot path.
