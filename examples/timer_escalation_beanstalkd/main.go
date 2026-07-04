@@ -74,6 +74,10 @@ const (
 	// job after this long so another worker can pick it up. Set it comfortably
 	// above a FireDue's latency.
 	jobTTR = 30 * time.Second
+
+	// releaseDelay is how long a job stays invisible after a failed FireDue
+	// before another worker may reserve it again.
+	releaseDelay = 10 * time.Second
 )
 
 // start is the reference "now" of the first cron tick. Every instance is seeded
@@ -237,7 +241,7 @@ func runWorker(ctx context.Context, mgr *workflow.Manager, def *workflow.Definit
 			// Leave the job for another attempt; the next cron tick would also
 			// re-list it (the due row is unchanged), and FireDue is idempotent.
 			log.Printf("  [worker %d] FireDue(%s): %v", worker, id, err)
-			_ = conn.Release(jobID, 0, 10*time.Second)
+			_ = conn.Release(jobID, 0, releaseDelay)
 			continue
 		}
 		_ = conn.Delete(jobID)

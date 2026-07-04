@@ -5,7 +5,8 @@ This example extends the [`timer_escalation`](../timer_escalation) demo to a
 purely as a **job distributor**. The library still owns no clock and no scheduler
 — it only answers "what is due as of now?" (`ListDue`) and "fire it" (`FireDue`).
 Beanstalkd sits between those two calls and hands each due instance to whichever
-worker is free, so **no two replicas ever fire the same instance**.
+worker is free, so **at most one worker successfully fires each instance** — the
+broker spreads the work, and `FireDue`'s idempotency makes any redelivery a no-op.
 
 The scenario is the same as the base demo: **escalate an approval if nobody acts
 within three days** — but now the firing work is fanned out across a pool of
@@ -23,11 +24,12 @@ ListDue (SQLite/Postgres) ──▶ dispatcher (singleton) ──▶ "timers" tu
 
 - The **database is the source of truth** for *what* is due. `ListDue` is an
   indexed `WHERE due <= now` scan.
-- **Beanstalkd only decides *who* fires it.** A tube is a work queue; multiple
-  workers reserving from it each get a *disjoint* set of jobs — that is the
-  fan-out that prevents duplicate work.
-- `FireDue` rides optimistic concurrency, so even if a job is somehow delivered
-  twice, the second firing is a no-op.
+- **Beanstalkd only decides *who* fires it.** A tube is a work queue; a reserved
+  job is held for one worker at a time, so under normal operation each worker
+  gets a *disjoint* set — that is the fan-out that spreads the load.
+- `FireDue` rides optimistic concurrency, so if a job is ever redelivered (a
+  worker crash, a TTR expiry), the second firing is a no-op. Correctness rests on
+  this idempotency, not on the broker guaranteeing exactly-once delivery.
 
 ### Why a simple, in-memory distributor is enough
 

@@ -4,6 +4,10 @@
 # leans on.
 FROM alpine:3.20
 RUN apk add --no-cache beanstalkd
+# Run as a non-root user (defense-in-depth): 11300 is unprivileged and this
+# example runs beanstalkd purely in-memory, so it needs no root and no disk.
+RUN adduser -D -H beanstalkd
+USER beanstalkd
 EXPOSE 11300
 # -l 0.0.0.0 so the container accepts connections from the host.
 ENTRYPOINT ["beanstalkd", "-l", "0.0.0.0", "-p", "11300"]
