@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-07
+
+Rolls up all work since v0.0.2: storage truth & hardening (M0), crash-safe ACID
+storage (M1), Colored Petri Nets (M2), real-system correctness (M3), and
+host-driven timers (M4).
+
 ### Added
+- Release automation: pushing a `vX.Y.Z` tag re-runs the race-enabled test suite
+  against the tagged commit, extracts that version's section from this file, and
+  publishes a GitHub Release (`.github/workflows/release.yml`). Tagging without a
+  matching changelog section fails the release.
 - Crash-safe persistence (M1.1): `storage.RunInTx` plus `SaveStateTx`/`LoadStateTx`/
   `DeleteStateTx` on the SQLite storage and `SaveTransitionTx` on the SQLite history
   store. Callers can now commit a workflow state change and its history record in a
