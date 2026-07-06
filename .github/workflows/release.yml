@@ -1,0 +1,94 @@
+name: Release
+
+# Cut a release by pushing a semver tag:
+#   1. Move the [Unreleased] CHANGELOG entries under a new "## [X.Y.Z] - YYYY-MM-DD"
+#      heading and merge that to main.
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
+# This workflow re-runs the race-enabled test suite against the tagged commit,
+# extracts that version's CHANGELOG section, and publishes a GitHub Release.
+# Go module consumers get the version automatically from the tag itself.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  test:
+    name: Test tagged commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow
+          POSTGRES_DB: workflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      WORKFLOW_TEST_POSTGRES_DSN: postgres://workflow:workflow@localhost:5432/workflow?sslmode=disable
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run tests
+        run: go test -race ./...
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Print the body of the "## [X.Y.Z]" section (up to the next "## ["
+          # heading). Exact string match on the heading prefix — no regex on
+          # the version, so dots can't act as wildcards.
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no section for version $version." \
+                 "Move the [Unreleased] entries under '## [$version] - $(date +%F)' before tagging."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag
