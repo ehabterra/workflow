@@ -13,13 +13,12 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
-permissions:
-  contents: write
-
 jobs:
   test:
     name: Test tagged commit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     services:
       postgres:
@@ -42,6 +41,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -55,19 +56,25 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          # Print the body of the "## [X.Y.Z]" section (up to the next "## [" heading).
+          # Print the body of the "## [X.Y.Z]" section (up to the next "## ["
+          # heading). Exact string match on the heading prefix — no regex on
+          # the version, so dots can't act as wildcards.
           awk -v ver="$version" '
-            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            index($0, "## [" ver "]") == 1 { found=1; next }
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md > release-notes.md
