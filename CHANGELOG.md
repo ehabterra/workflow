@@ -87,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/timer_escalation` module: a `after: 72h` approval workflow, a fleet of
   SQLite-persisted instances at different ages, and a ~10-line cron tick advanced over
   a fixed clock so it runs instantly and deterministically.
+- Replica-safe timer distribution example: new `examples/timer_escalation_beanstalkd`
+  module showing the `ListDue`/`FireDue` fleet recipe across multiple worker replicas
+  with Beanstalkd as a plain job distributor — a singleton dispatcher enqueues due
+  instances, long-lived competing workers fire them, and the demo injects (and
+  absorbs) both distributor failure modes live: a duplicate delivery no-ops via
+  `FireDue`'s idempotency, and a crashed worker's job is redelivered to a peer.
+  Ships a `docker-compose.yml` for the broker.
 - Timer hardening (M4 review): several correctness fixes to the host-driven timer
   model before release:
   - `NewWorkflowFromMarking` now *adopts* a persisted marking: tokens that already

@@ -1,0 +1,11 @@
+# Brings up a single Beanstalkd on :11300 for the example to talk to.
+#
+#   docker compose up -d      # start the distributor
+#   go run .                  # seed a fleet and drive the cron
+#   docker compose down       # stop it
+services:
+  beanstalkd:
+    build: .
+    ports:
+      - "11300:11300"
+    restart: unless-stopped
