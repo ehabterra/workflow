@@ -3,7 +3,7 @@ module github.com/ehabterra/workflow
 go 1.25.0
 
 require (
-	github.com/expr-lang/expr v1.17.6
+	github.com/expr-lang/expr v1.17.7
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/testcontainers/testcontainers-go v0.43.0
