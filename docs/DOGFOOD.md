@@ -115,5 +115,6 @@ examples/expense_approval/          (nested Go module, like the other examples)
 
 Every papercut goes to `docs/roadmap/FRICTION.md` as it is found — one line:
 what was attempted, what the library made easy/hard/impossible, workaround.
-Graduated to GitHub issues at the end of M5.1. The M5 exit verdict summarizes
-the list and re-ranks the parked milestones against it.
+The log runs for all of M5 and graduates to GitHub issues at M5 exit, when
+the exit verdict summarizes the list and re-ranks the parked milestones
+against it.
