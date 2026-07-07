@@ -17,12 +17,13 @@ import (
 	"github.com/ehabterra/workflow"
 )
 
-// TestStrandedBranchEscalatesHarmlessly documents the cancellation-regions
-// gap end to end: after legal rejects, finance's token is stranded in
-// pending_finance and its 72h timer still fires. That must stay harmless —
-// the expense reads rejected throughout, no actions reopen, and the timer
-// goes quiet afterwards (escalated has no further timer).
-func TestStrandedBranchEscalatesHarmlessly(t *testing.T) {
+// TestRejectCancelsSiblingBranch: the reject transition's reset arcs cancel
+// the sibling branch in the same atomic firing — no stranded token, no
+// zombie escalation ever fires, and the instance drops straight out of the
+// due index. (This test used to document the opposite: a stranded finance
+// token whose 72h timer still fired. Reset arcs closed that gap —
+// docs/roadmap/FRICTION.md, resolved entry 1.)
+func TestRejectCancelsSiblingBranch(t *testing.T) {
 	app, _ := newTestApp(t)
 	ctx := context.Background()
 	id := mustSubmit(t, app, "alice", 150)
@@ -31,34 +32,29 @@ func TestStrandedBranchEscalatesHarmlessly(t *testing.T) {
 		t.Fatalf("reject: %v", err)
 	}
 
-	later := time.Now().Add(73 * time.Hour)
-	fired, err := app.Tick(ctx, later)
-	if err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	if len(fired[id]) != 1 || fired[id][0] != "finance_escalate" {
-		t.Fatalf("want the stranded finance branch to escalate, fired %v", fired)
-	}
-
 	view, err := app.Expense(ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.State != "rejected" {
-		t.Fatalf("state must stay rejected, got %q (marking %v)", view.State, view.Places)
+	if len(view.Places) != 1 || view.Places[0] != "rejected" {
+		t.Fatalf("reject must cancel the sibling branch, marking %v", view.Places)
 	}
-	if _, err := app.Approve(ctx, id, "finance", "cfo"); !errors.Is(err, ErrTerminal) {
-		t.Fatalf("the stranded branch must not be approvable, got %v", err)
+	if view.NextDue != nil {
+		t.Fatalf("no timer may survive the reset, next due %v", view.NextDue)
 	}
 
-	// The timer must now be quiet: escalated_finance has no timed
-	// transition, so the instance drops out of the due index.
-	fired, err = app.Tick(ctx, later.Add(100*time.Hour))
+	// No escalation ever fires — the due index is already quiet.
+	fired, err := app.Tick(ctx, time.Now().Add(200*time.Hour))
 	if err != nil {
-		t.Fatalf("second tick: %v", err)
+		t.Fatalf("tick: %v", err)
 	}
 	if len(fired) != 0 {
-		t.Fatalf("no further timers may fire on a closed expense, got %v", fired)
+		t.Fatalf("nothing may fire on a rejected expense, got %v", fired)
+	}
+
+	// And the cancelled branch is not approvable.
+	if _, err := app.Approve(ctx, id, "finance", "cfo"); !errors.Is(err, ErrTerminal) {
+		t.Fatalf("cancelled branch must not be approvable, got %v", err)
 	}
 }
 

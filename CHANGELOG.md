@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Cancellation regions via reset arcs** — the top-ranked finding of the M5
+  friction log. A transition can declare places it CLEARS when it fires:
+  `Transition.SetResets("b", "c")` in Go, `resets: [b, c]` in YAML. Firing
+  consumes the inputs, empties every reset place, and only then produces the
+  outputs (a place that is both reset and an output keeps what the firing
+  produces) — all inside the same atomic critical section as the marking
+  move, in every apply path including per-token firing. Reset places do not
+  affect enablement. Any timer running on a cleared token dies with it, so a
+  rejected instance can no longer leave a zombie escalation in the due
+  index. Reset places are validated by `NewDefinition`, included in the
+  definition fingerprint, and rendered in Mermaid diagrams. The canonical
+  use: a reject transition on one review branch resets the sibling branch,
+  cancelling its pending work — previously host-side token surgery.
+
 ### Breaking
+- The definition fingerprint encoding now includes each transition's reset
+  places, so **every fingerprint changes** with this version. Persisted
+  instances load again after a `WithDefinitionMigration` hook approves the
+  upgrade (the loader still validates every place).
 - **Versioning is now part of the `Storage` contract** (the library is pre-1.0
   with no compatibility guarantees; an unversioned backend loses updates by
   design, so the contract no longer allows one). `LoadState` returns

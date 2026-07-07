@@ -85,6 +85,7 @@ type TransitionConfig struct {
 	To           []string       `yaml:"to"`
 	Guard        string         `yaml:"guard,omitempty"`         // Expression string
 	After        string         `yaml:"after,omitempty"`         // Timeout duration, e.g. "72h" (Go time.ParseDuration)
+	Resets       []string       `yaml:"resets,omitempty"`        // Places cleared when this transition fires (cancellation region)
 	Metadata     map[string]any `yaml:"metadata,omitempty"`      // Transition metadata
 	Notes        string         `yaml:"notes,omitempty"`         // Default notes for history
 	Actor        string         `yaml:"actor,omitempty"`         // Default actor for history
@@ -204,6 +205,9 @@ func (c *Config) Validate() error {
 			for _, to := range trans.To {
 				placeSet[to] = true
 			}
+			for _, reset := range trans.Resets {
+				placeSet[reset] = true
+			}
 		}
 	}
 
@@ -237,6 +241,12 @@ func (c *Config) Validate() error {
 		for _, to := range trans.To {
 			if !placeSet[to] {
 				return fmt.Errorf("transition '%s' references undefined place '%s'", trans.Name, to)
+			}
+		}
+
+		for _, reset := range trans.Resets {
+			if !placeSet[reset] {
+				return fmt.Errorf("transition '%s' resets undefined place '%s'", trans.Name, reset)
 			}
 		}
 	}

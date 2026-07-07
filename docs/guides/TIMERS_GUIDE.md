@@ -300,3 +300,13 @@ out of `ListDue` entirely. Run as many cron replicas as you like.
 See also: [CPN_GUIDE.md](CPN_GUIDE.md) for the token model that entry-time stamping
 builds on, and [`examples/timer_escalation`](../../examples/timer_escalation) for the
 runnable escalation recipe.
+
+## Cancelling timers with reset arcs
+
+A timer lives on a token; clear the token and the timer dies with it. A
+transition's reset arcs (`resets: [pending_finance]` in YAML,
+`SetResets(...)` in Go) empty the declared places atomically when it fires,
+so a reject/cancel transition can cancel a sibling branch's pending work —
+and its escalation deadline — in the same firing. The due index is derived
+from the marking on every save, so the instance drops out of `ListDue`
+without any host bookkeeping.

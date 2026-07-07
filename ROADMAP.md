@@ -195,6 +195,14 @@ describing only shipping behavior.
 
 ---
 
+## Post-M5 — friction-log-driven features
+
+- **Cancellation regions (reset arcs)** — ✅ shipped (2026-07-07), the friction
+  log's #1 finding. `Transition.SetResets` / YAML `resets:` clear declared
+  places atomically on firing (validated, fingerprinted, timer-killing,
+  Mermaid-rendered); the dogfood's reject transitions adopted it and deleted
+  their token surgery.
+
 ## Parked — demand-driven (🟢, revisit after M5 friction log)
 
 Formerly M3–M8. None is deleted; none proceeds without a dogfood-proven need.

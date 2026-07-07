@@ -84,11 +84,14 @@ which is friction entry #3.
 
 **Cycles are just arcs too.** `revise` closes the loop: a rejected expense
 returns to `draft`, takes an updated amount, and re-routes through the
-submit guards — possibly straight to auto-approval. The catch is the
-cancellation-regions gap: the host must clear the stranded sibling branch's
-tokens BY HAND (`ClearPlace` × 6 in `Revise`) or round two double-fires and
-inherits round one's stale escalation deadline. That token surgery is the
-top-ranked finding in the friction log.
+submit guards — possibly straight to auto-approval.
+
+**Rejection cancels the sibling branch — declaratively.** Each reject
+transition carries reset arcs (`resets: [pending_finance, …]`): firing it
+clears the other branch's places atomically, killing its pending token and
+any escalation timer running on it. This replaced the host-side `ClearPlace`
+token surgery that was the friction log's top-ranked finding — the library
+grew the feature and the app deleted the workaround.
 
 **Colored tokens where entities flow together.** The payment net
 (`payment.yaml`) is the opposite modeling style: ONE long-lived instance,

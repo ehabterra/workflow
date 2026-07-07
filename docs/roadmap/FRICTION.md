@@ -10,7 +10,14 @@ workaround.
 
 ## Hard / missing
 
-1. **No cancellation regions** (parked milestone, now dogfood-confirmed).
+1. ✅ **SHIPPED: cancellation regions via reset arcs** (was: no cancellation
+   regions). A transition now declares places it clears atomically when it
+   fires (`resets:` in YAML, `SetResets` in Go); the dogfood's reject
+   transitions cancel the sibling branch — token, timer and all — and
+   `Revise` dropped its six-place `ClearPlace` surgery. Original finding
+   kept below for the record.
+
+   **Original entry** (parked milestone, now dogfood-confirmed).
    Rejecting one review branch cannot cancel the sibling branch's token; the
    "rejected is terminal" rule had to move into the host (an `ErrTerminal`
    check before every decision). Workaround is fine but every consumer with
@@ -99,12 +106,9 @@ cycles (revise/resubmit), per-token manual release, AND-split/join,
 timers, and the CPN batch — deliberately probing the library's limits.
 Priority order for what the library needs next, from what actually hurt:
 
-1. **Cancellation regions** (entries 1, and now the revise cycle). The
-   workaround graduated from "host checks a flag" to **host-side token
-   surgery**: `Revise` must `ClearPlace` six places by hand or round two
-   double-fires reviews and inherits round one's stale escalation deadline.
-   Every consumer with reject/timeout semantics on parallel branches will
-   have to reinvent this. Highest priority by a wide margin.
+1. ✅ **SHIPPED: cancellation regions** — implemented as reset arcs
+   immediately after this ranking was written; the dogfood adopted them and
+   deleted its token surgery (see resolved entry 1 above).
 
 2. **OR-input transitions** (entry 2). The escalation feature doubled the
    approve/reject transitions; with the revise loop the duplication now
