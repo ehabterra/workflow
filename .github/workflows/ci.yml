@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [ main, develop ]
+  # No branch filter: stacked PRs (a feature branch targeting another feature
+  # branch) must get the same CI as PRs into main.
   pull_request:
-    branches: [ main, develop ]
 
 jobs:
   test:
