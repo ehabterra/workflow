@@ -8,6 +8,6 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.32
 )
 
-require github.com/expr-lang/expr v1.17.6 // indirect
+require github.com/expr-lang/expr v1.17.7 // indirect
 
 replace github.com/ehabterra/workflow => ../../
