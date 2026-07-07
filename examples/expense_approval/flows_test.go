@@ -359,7 +359,7 @@ func TestDiagramsPages(t *testing.T) {
 	}
 	page, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(page), "1 token(s) · 300.00") {
-		t.Fatalf("batch page must show live token badges:\n%s", page)
+	if !strings.Contains(string(page), "⬤×1") {
+		t.Fatalf("batch page must show the live token badge:\n%s", page)
 	}
 }

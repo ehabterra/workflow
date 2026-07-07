@@ -17,13 +17,21 @@ workflow:
   name: expense_approval
   initial_marking: draft
   places:
+    # diagram_group boxes the two parallel review lanes in the diagram; the
+    # shared boundary places (draft/approved/rejected/paid) stay ungrouped.
     - name: draft
     - name: pending_legal
+      metadata: {diagram_group: Legal review}
     - name: pending_finance
+      metadata: {diagram_group: Finance review}
     - name: escalated_legal
+      metadata: {diagram_group: Legal review}
     - name: escalated_finance
+      metadata: {diagram_group: Finance review}
     - name: legal_ok
+      metadata: {diagram_group: Legal review}
     - name: finance_ok
+      metadata: {diagram_group: Finance review}
     - name: approved
     - name: rejected
     - name: paid
@@ -32,10 +40,12 @@ workflow:
       from: [draft]
       to: [approved]
       guard: "amount <= 100.0"
+      metadata: {diagram_class: auto}
     - name: submit
       from: [draft]
       to: [pending_legal, pending_finance]
       guard: "amount > 100.0"
+      metadata: {diagram_class: person}
     # ONE approve/reject per branch: from_any (OR-input) accepts the token
     # from whichever stage holds it — pending or escalated — consuming only
     # that stage. This collapsed four *_escalated twin transitions (friction
@@ -44,10 +54,12 @@ workflow:
       from: [pending_legal, escalated_legal]
       to: [legal_ok]
       from_any: true
+      metadata: {diagram_class: person}
     - name: finance_approve
       from: [pending_finance, escalated_finance]
       to: [finance_ok]
       from_any: true
+      metadata: {diagram_class: person}
     - name: legal_escalate
       from: [pending_legal]
       to: [escalated_legal]
@@ -64,18 +76,23 @@ workflow:
       from: [pending_legal, escalated_legal]
       to: [rejected]
       from_any: true
+      metadata: {diagram_class: person}
       resets: [pending_finance, escalated_finance, finance_ok]
     - name: finance_reject
       from: [pending_finance, escalated_finance]
       to: [rejected]
       from_any: true
+      metadata: {diagram_class: person}
       resets: [pending_legal, escalated_legal, legal_ok]
     - name: finalize
       from: [legal_ok, finance_ok]
       to: [approved]
+      metadata: {diagram_class: auto}
     - name: revise
       from: [rejected]
       to: [draft]
+      metadata: {diagram_class: person}
     - name: mark_paid
       from: [approved]
       to: [paid]
+      metadata: {diagram_class: auto}

@@ -661,10 +661,15 @@ func (a *App) Reconcile(ctx context.Context) (*ReconcileReport, error) {
 // treats it as a crash artifact rather than a creation in flight.
 const draftGrace = 5 * time.Minute
 
-// DiagramExpenseStructure renders the expense net's structure (no instance
-// state) with the UI's rich flowchart renderer.
+// DiagramExpenseStructure renders the expense net via the library's Mermaid
+// renderer, as a fresh instance: the entry marker and the draft place light
+// up exactly the way every new expense starts.
 func (a *App) DiagramExpenseStructure() string {
-	return mermaidNet(a.expenseDef, nil, nil)
+	wf, err := workflow.NewWorkflow("structure", a.expenseDef, "draft")
+	if err != nil {
+		return a.expenseDef.Diagram() // structure-only fallback
+	}
+	return wf.Diagram()
 }
 
 // DiagramExpenseLive renders one expense's net with its current marking
@@ -674,52 +679,18 @@ func (a *App) DiagramExpenseLive(ctx context.Context, id string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	current := map[workflow.Place]bool{}
-	for _, p := range wf.CurrentPlaces() {
-		current[p] = true
-	}
-	return mermaidNet(a.expenseDef, current, nil), nil
+	return wf.Diagram(), nil
 }
 
-// DiagramPaymentLive renders the payment net with live token badges: each
-// token-bearing place shows its token count, amount total, and (for payable)
-// how many the guard is holding.
+// DiagramPaymentLive renders the payment net with the current marking and
+// per-place colored-token count badges (the library renderer draws them;
+// amounts live in the tables below the diagram).
 func (a *App) DiagramPaymentLive(ctx context.Context) (string, error) {
 	wf, err := a.mgr.LoadWorkflow(ctx, paymentID, a.paymentDef)
 	if err != nil {
 		return "", err
 	}
-	current := map[workflow.Place]bool{}
-	for _, p := range wf.CurrentPlaces() {
-		current[p] = true
-	}
-	badge := func(p workflow.Place) string {
-		if p == "batch_control" {
-			return "" // permanent anchor token; a count would just confuse
-		}
-		tokens := wf.GetTokens(p)
-		if len(tokens) == 0 {
-			return ""
-		}
-		var sum float64
-		held := 0
-		for _, tok := range tokens {
-			if v, ok := tok.Get("amount"); ok {
-				if f, ok := v.(float64); ok {
-					sum += f
-					if f > payGuardLimit {
-						held++
-					}
-				}
-			}
-		}
-		out := fmt.Sprintf("%d token(s) · %.2f", len(tokens), sum)
-		if p == "payable" && held > 0 {
-			out += fmt.Sprintf("<br/>⚠ %d held by guard", held)
-		}
-		return out
-	}
-	return mermaidNet(a.paymentDef, current, badge), nil
+	return wf.Diagram(), nil
 }
 
 // --- read side (dashboard / detail pages) ---

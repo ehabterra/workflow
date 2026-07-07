@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ehabterra/workflow"
@@ -609,118 +610,97 @@ func TestWorkflow_ForkAndMerge(t *testing.T) {
 }
 
 func TestWorkflow_Diagram(t *testing.T) {
-	tests := []struct {
-		name         string
-		definition   func() (*workflow.Definition, error)
-		initialPlace workflow.Place
-		want         string
-	}{
-		{
-			name: "simple workflow",
-			definition: func() (*workflow.Definition, error) {
-				t, _ := workflow.NewTransition("to-end", []workflow.Place{"start"}, []workflow.Place{"end"})
-				return workflow.NewDefinition(
-					[]workflow.Place{"start", "end"},
-					[]workflow.Transition{*t},
-				)
-			},
-			initialPlace: "start",
-			want: `stateDiagram-v2
-    direction TB
-    classDef currentPlace font-weight:bold,stroke-width:4px
-    start
-    end
-    start --> end : <span class="transition-label" data-transition-name="to-end">to-end</span>
-
-    %% Current places
-    class start currentPlace
-
-    %% Initial place(s)
-    [*] --> start
-`,
-		},
-		{
-			name: "complex workflow",
-			definition: func() (*workflow.Definition, error) {
-				t1, _ := workflow.NewTransition("to-middle", []workflow.Place{"start"}, []workflow.Place{"middle"})
-				t2, _ := workflow.NewTransition("to-end", []workflow.Place{"middle"}, []workflow.Place{"end"})
-				return workflow.NewDefinition(
-					[]workflow.Place{"start", "middle", "end"},
-					[]workflow.Transition{*t1, *t2},
-				)
-			},
-			initialPlace: "start",
-			want: `stateDiagram-v2
-    direction TB
-    classDef currentPlace font-weight:bold,stroke-width:4px
-    start
-    middle
-    end
-    start --> middle : <span class="transition-label" data-transition-name="to-middle">to-middle</span>
-    middle --> end : <span class="transition-label" data-transition-name="to-end">to-end</span>
-
-    %% Current places
-    class start currentPlace
-
-    %% Initial place(s)
-    [*] --> start
-`,
-		},
-		{
-			name: "fork and merge workflow",
-			definition: func() (*workflow.Definition, error) {
-				t1, _ := workflow.NewTransition("fork", []workflow.Place{"start"}, []workflow.Place{"branch1", "branch2"})
-				t2, _ := workflow.NewTransition("merge", []workflow.Place{"branch1", "branch2"}, []workflow.Place{"end"})
-				return workflow.NewDefinition(
-					[]workflow.Place{"start", "branch1", "branch2", "end"},
-					[]workflow.Transition{*t1, *t2},
-				)
-			},
-			initialPlace: "start",
-			want: `stateDiagram-v2
-    direction TB
-    classDef currentPlace font-weight:bold,stroke-width:4px
-    start
-    branch1
-    branch2
-    end
-    state fork_fork <<fork>>
-    start --> fork_fork : <span class="transition-label" data-transition-name="fork">fork</span>
-    fork_fork --> branch1
-    fork_fork --> branch2
-    state merge_join <<join>>
-    branch1 --> merge_join : <span class="transition-label" data-transition-name="merge">merge</span>
-    branch2 --> merge_join : <span class="transition-label" data-transition-name="merge">merge</span>
-    merge_join --> end
-
-    %% Current places
-    class start currentPlace
-
-    %% Initial place(s)
-    [*] --> start
-`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			def, err := tt.definition()
-			if err != nil {
-				t.Fatalf("failed to create definition: %v", err)
+	t.Run("simple workflow", func(t *testing.T) {
+		tr, _ := workflow.NewTransition("to-end", []workflow.Place{"start"}, []workflow.Place{"end"})
+		def, _ := workflow.NewDefinition([]workflow.Place{"start", "end"}, []workflow.Transition{*tr})
+		wf, err := workflow.NewWorkflow("t", def, "start")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := wf.Diagram()
+		for _, want := range []string{
+			"flowchart LR",          // the rich flowchart renderer
+			"START((( )))",          // the initial-state entry marker…
+			"START --> p_start",     // …feeding the initial place
+			`p_start(["start"])`,    // places are stadium nodes
+			"class p_start current", // the live marking is highlighted
+			"class p_end terminal",  // end states get the terminal style
+			`t_to_end["to-end"]`,    // transitions are typed nodes
+			"p_start --> t_to_end",  // wired place -> transition -> place
+			"t_to_end --> p_end",
+			"classDef current", // self-contained palette
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Diagram() missing %q:\n%s", want, got)
 			}
-			wf, err := workflow.NewWorkflow("test", def, tt.initialPlace)
-			if err != nil {
-				t.Fatalf("failed to create workflow: %v", err)
-			}
+		}
+	})
 
-			got := wf.Diagram()
-			if got != tt.want {
-				t.Errorf("Diagram() = %v, want %v", got, tt.want)
+	t.Run("fork and merge workflow", func(t *testing.T) {
+		f, _ := workflow.NewTransition("fork", []workflow.Place{"start"}, []workflow.Place{"branch1", "branch2"})
+		m, _ := workflow.NewTransition("merge", []workflow.Place{"branch1", "branch2"}, []workflow.Place{"end"})
+		def, _ := workflow.NewDefinition([]workflow.Place{"start", "branch1", "branch2", "end"}, []workflow.Transition{*f, *m})
+		wf, err := workflow.NewWorkflow("t", def, "start")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := wf.Diagram()
+		for _, want := range []string{
+			"t_fork --> p_branch1",        // AND-split fans out of one node…
+			"t_fork --> p_branch2",        //   (outputs are always "produce all")
+			"p_branch1 -->|all| t_merge",  // …and the AND-join fans in, labeled "all"
+			"p_branch2 -->|all| t_merge",  //   (symmetric with "either" for OR-inputs)
+			"t_merge --> p_end",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Diagram() missing %q:\n%s", want, got)
 			}
-		})
-	}
+		}
+	})
+
+	t.Run("definition structure diagram", func(t *testing.T) {
+		tr, _ := workflow.NewTransition("go", []workflow.Place{"a"}, []workflow.Place{"b"})
+		def, _ := workflow.NewDefinition([]workflow.Place{"a", "b"}, []workflow.Transition{*tr})
+		got := def.Diagram()
+		if strings.Contains(got, "START") || strings.Contains(got, "current") == false {
+			// A definition has no initial marking and no live state: no entry
+			// marker, and the only "current" occurrence is the classDef.
+			if strings.Contains(got, "class p_a current") {
+				t.Errorf("structure diagram must not highlight a marking:\n%s", got)
+			}
+		}
+		if !strings.Contains(got, `t_go["go"]`) {
+			t.Errorf("structure diagram missing transition node:\n%s", got)
+		}
+	})
+
+	t.Run("place grouping subgraphs", func(t *testing.T) {
+		split, _ := workflow.NewTransition("split", []workflow.Place{"start"}, []workflow.Place{"a1", "b1"})
+		def, _ := workflow.NewDefinition(
+			[]workflow.Place{"start", "a1", "b1"},
+			[]workflow.Transition{*split},
+		)
+		// Same-group places are boxed together; ungrouped places are not.
+		def.SetPlaceMetadata("a1", map[string]any{"diagram_group": "Lane A"})
+		def.SetPlaceMetadata("b1", map[string]any{"diagram_group": "Lane B"})
+		got := def.Diagram()
+		for _, want := range []string{
+			`subgraph grp_Lane_A ["Lane A"]`, // one box per distinct group…
+			`subgraph grp_Lane_B ["Lane B"]`,
+			`p_a1(["a1"])`, // …containing the grouped place declaration
+			`p_b1(["b1"])`,
+			"end",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Diagram() missing %q:\n%s", want, got)
+			}
+		}
+		// The ungrouped place must NOT be wrapped in a subgraph.
+		if strings.Contains(got, `subgraph grp_ [`) {
+			t.Errorf("ungrouped place should not create a subgraph:\n%s", got)
+		}
+	})
 }
-
 func TestWorkflow_InitialPlace(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -12,17 +12,24 @@ workflow:
   name: payment_batch
   initial_marking: batch_control
   places:
+    # diagram_group boxes the always-marked control anchor separately from the
+    # region colored expense tokens actually flow through.
     - name: batch_control
+      metadata: {diagram_group: Control}
     - name: payable
+      metadata: {diagram_group: Token flow}
     - name: paid_out
+      metadata: {diagram_group: Token flow}
   transitions:
     - name: pay
       from: [payable]
       to: [paid_out]
       guard: "token.amount <= 5000.0"
+      metadata: {diagram_class: auto}
     - name: release
       from: [payable]
       to: [paid_out]
       metadata:
         manual: true
+        diagram_class: person
         description: reviewer-approved payout of a guard-held token

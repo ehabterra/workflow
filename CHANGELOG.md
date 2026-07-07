@@ -24,19 +24,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing fires, the last blocking error tells the caller whether nothing
   was enabled or a guard refused. Guard-routed alternatives out of one
   place (auto-approve vs. review) become one call.
-- **Diagrams in the dogfood UI, full UX**: a `/diagrams` page and live
-  embedded diagrams on the expense and batch pages, rendered by a
-  purpose-built flowchart generator (`examples/expense_approval/diagram.go`)
-  driven by the same definitions the engine fires. Places and transitions
-  are visually distinct; transitions are color-typed (person / automatic /
-  timer), guards are visible on the routing edges (`❰ amount ≤ 100 ❱`),
-  reset arcs are dotted "cancels" edges, OR-merge inputs are labeled
-  "either", the live marking is highlighted, and colored-token places carry
-  live badges (token count · amount total · held-by-guard) — with a legend
-  on every diagram for non-technical readers.
-- `Workflow.Diagram()` (the library's generic Mermaid renderer) now shows
-  guard expressions visibly on transition labels (`❰…❱`, angle brackets
-  escaped) and prefixes timed transitions with ⏱.
+- **Rich Mermaid renderer, in the library**: `Workflow.Diagram()` was
+  rewritten as a flowchart designed for technical and non-technical readers,
+  and `Definition.Diagram()` (structure-only) is new. Places are stadium
+  nodes with the classic ◉ entry marker and a distinct terminal style;
+  transitions are rectangles color-typed by nature — ⏱ timed transitions
+  (derived from `TimeoutAfter`, amber with dashed edges) and a documented
+  `diagram_class` metadata key ("person", "auto", or any host classDef) for
+  actor typing the engine cannot know. Guards appear visibly on the routing
+  edges, prettified (`❰ amount ≤ 100 ❱`); reset arcs are dotted red
+  "cancels" edges. The transition node is the fork/join point (it fans in
+  from every input, out to every output); merge inputs are labeled so the
+  semantics are explicit — an AND-join says "all", an OR-input says "either".
+  Places may name a region via a `diagram_group` metadata key; same-group
+  places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
+  (the dogfood boxes the expense net's Legal/Finance review lanes). On a live
+  instance the current marking is highlighted and colored-token places carry
+  ⬤×N badges. The old stateDiagram output (and its HTML tooltip spans) is
+  gone. The dogfood embeds these diagrams on `/diagrams`, every expense page,
+  and the batch page, with an HTML legend.
+- **Per-place metadata on `Definition`** (`SetPlaceMetadata` /
+  `PlaceMetadata`): places are bare strings and cannot carry their own
+  metadata like transitions, so a Definition-level side-table now holds it.
+  It is cosmetic (currently diagram hints) and excluded from `Fingerprint`,
+  so it never invalidates persisted instances. The YAML loader now attaches
+  place `metadata:` to the Definition instead of dropping it in
+  `LoadDefinition`.
 - **Cancellation regions via reset arcs** — the top-ranked finding of the M5
   friction log. A transition can declare places it CLEARS when it fires:
   `Transition.SetResets("b", "c")` in Go, `resets: [b, c]` in YAML. Firing

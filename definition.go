@@ -17,6 +17,33 @@ type Definition struct {
 	// from this definition. It is concurrency-safe: listeners may be added or
 	// removed while instances fire transitions on other goroutines.
 	listeners listenerSet
+
+	// placeMeta holds optional per-place metadata (places are bare strings and
+	// cannot carry their own, unlike transitions). It is cosmetic — used for
+	// diagram grouping (diagram_group) — and deliberately excluded from
+	// Fingerprint, so regrouping a diagram never invalidates persisted state.
+	placeMeta map[Place]map[string]any
+}
+
+// SetPlaceMetadata attaches metadata to a place. Places are bare strings, so
+// this side-table is how a place carries diagram hints (e.g. diagram_group).
+// It is cosmetic and not part of the definition's Fingerprint.
+func (d *Definition) SetPlaceMetadata(p Place, meta map[string]any) {
+	if d.placeMeta == nil {
+		d.placeMeta = make(map[Place]map[string]any)
+	}
+	d.placeMeta[p] = meta
+}
+
+// PlaceMetadata returns the metadata value stored for a place under key,
+// mirroring Transition.Metadata. The second result reports whether it was set.
+func (d *Definition) PlaceMetadata(p Place, key string) (any, bool) {
+	meta, ok := d.placeMeta[p]
+	if !ok {
+		return nil, false
+	}
+	v, ok := meta[key]
+	return v, ok
 }
 
 // NewDefinition creates a new workflow definition

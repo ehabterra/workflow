@@ -151,8 +151,11 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 		return nil, fmt.Errorf("failed to create definition: %w", err)
 	}
 
-	// Store workflow-level metadata in definition (we'll need to extend Definition for this)
-	// For now, we'll handle this when creating the workflow instance
+	// Attach per-place metadata (e.g. diagram_group) so it reaches the diagram
+	// renderer, which works off the Definition.
+	for p, meta := range placeMetadata {
+		definition.SetPlaceMetadata(p, meta)
+	}
 
 	return definition, nil
 }
