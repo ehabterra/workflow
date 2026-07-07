@@ -8,7 +8,7 @@ require (
 )
 
 require (
-	github.com/expr-lang/expr v1.17.6 // indirect
+	github.com/expr-lang/expr v1.17.7 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
