@@ -43,7 +43,8 @@
 // multiple data-carrying tokens; simple boolean workflows are the single-token
 // special case), per-token transition firing, token-aware guards, reset arcs
 // (cancellation regions — a transition clears declared places atomically when
-// it fires), host-driven timers (SetTimeoutAfter / Due / Manager.ListDue and
+// it fires), OR-input merge transitions (enabled by any one marked input) with
+// the ApplyAny XOR-split resolver, host-driven timers (SetTimeoutAfter / Due / Manager.ListDue and
 // FireDue — the host owns the clock), SQLite and PostgreSQL storage backends
 // with optimistic concurrency built into the Storage contract and
 // transactional building blocks, SQLite and PostgreSQL history stores, the

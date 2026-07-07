@@ -204,6 +204,18 @@ func (r *stepRecorder) applyForToken(ctx context.Context, name string, tok workf
 	return nil
 }
 
+// applyAny fires the first allowed candidate via Workflow.ApplyAny (the
+// XOR-split resolver), recording the one that fired with its own snapshot.
+func (r *stepRecorder) applyAny(ctx context.Context, names ...string) error {
+	from := placesString(r.wf.CurrentPlaces())
+	name, err := r.wf.ApplyAny(ctx, names...)
+	if err != nil {
+		return err
+	}
+	r.steps = append(r.steps, firedStep{name: name, from: from, to: placesString(r.wf.CurrentPlaces())})
+	return nil
+}
+
 // note records a pseudo-step for a host-side mutation that is not a
 // transition firing (e.g. dropping a token into the payment net).
 func (r *stepRecorder) note(name, notes string) {
@@ -303,22 +315,10 @@ func (a *App) SubmitExpense(ctx context.Context, submitter, description string, 
 }
 
 // routeSubmit fires whichever submit variant the amount guard enables — the
-// XOR-split. There is no engine primitive for "fire the one enabled
-// transition out of this place" (friction-logged), so the host tries each
-// variant and treats a guard rejection as "not this route".
+// XOR-split, resolved by the library's ApplyAny (which skips not-enabled and
+// guard-rejected candidates and fires the first that the state allows).
 func routeSubmit(ctx context.Context, r *stepRecorder) error {
-	var lastErr error
-	for _, name := range []string{"submit_auto", "submit"} {
-		err := r.apply(ctx, name)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, workflow.ErrTransitionNotAllowed) {
-			return err
-		}
-		lastErr = err
-	}
-	return fmt.Errorf("no submit route accepted the expense: %w", lastErr)
+	return r.applyAny(ctx, "submit_auto", "submit")
 }
 
 // Revise closes the loop on a rejection: the submitter updates the expense
@@ -373,7 +373,8 @@ func (a *App) Approve(ctx context.Context, id, branch, actor string) ([]string, 
 		if hasPlace(r.wf, "rejected") {
 			return ErrTerminal
 		}
-		if err := applyFirst(ctx, r, branch+"_approve", branch+"_approve_escalated"); err != nil {
+		// One OR-input transition serves both stages (pending/escalated).
+		if err := r.apply(ctx, branch+"_approve"); err != nil {
 			return err
 		}
 		if err := r.apply(ctx, "finalize"); err != nil && !errors.Is(err, workflow.ErrTransitionNotAllowed) {
@@ -394,7 +395,7 @@ func (a *App) Reject(ctx context.Context, id, branch, actor string) ([]string, e
 		if hasPlace(r.wf, "rejected") {
 			return ErrTerminal
 		}
-		return applyFirst(ctx, r, branch+"_reject", branch+"_reject_escalated")
+		return r.apply(ctx, branch+"_reject")
 	})
 }
 
@@ -660,6 +661,30 @@ func (a *App) Reconcile(ctx context.Context) (*ReconcileReport, error) {
 // treats it as a crash artifact rather than a creation in flight.
 const draftGrace = 5 * time.Minute
 
+// NetDiagrams renders the Mermaid diagrams of both nets' STRUCTURE (a
+// throwaway unstarted instance per net; no fleet state).
+func (a *App) NetDiagrams() (expense, payment string, err error) {
+	ewf, err := workflow.NewWorkflow("expense-structure", a.expenseDef, "draft")
+	if err != nil {
+		return "", "", err
+	}
+	pwf, err := workflow.NewWorkflow("payment-structure", a.paymentDef, "batch_control")
+	if err != nil {
+		return "", "", err
+	}
+	return ewf.Diagram(), pwf.Diagram(), nil
+}
+
+// ExpenseDiagram renders one expense's LIVE Mermaid diagram — the marking's
+// current places are highlighted.
+func (a *App) ExpenseDiagram(ctx context.Context, id string) (string, error) {
+	wf, err := a.mgr.LoadWorkflow(ctx, id, a.expenseDef)
+	if err != nil {
+		return "", err
+	}
+	return wf.Diagram(), nil
+}
+
 // --- read side (dashboard / detail pages) ---
 
 // ExpenseView is what the UI renders for one expense.
@@ -843,24 +868,6 @@ func stateLabel(v *ExpenseView) string {
 }
 
 // --- helpers ---
-
-// applyFirst tries the transitions in order, recording the one that fires.
-// ErrNotEnabled means "token isn't there" — try the next source place; any
-// other error (including ErrGuardRejected) stops immediately.
-func applyFirst(ctx context.Context, r *stepRecorder, names ...string) error {
-	var lastErr error
-	for _, name := range names {
-		err := r.apply(ctx, name)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, workflow.ErrNotEnabled) {
-			return err
-		}
-		lastErr = err
-	}
-	return lastErr
-}
 
 func hasPlace(wf *workflow.Workflow, place workflow.Place) bool {
 	for _, p := range wf.CurrentPlaces() {

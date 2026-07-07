@@ -112,6 +112,31 @@ func (w *Workflow) Diagram() string {
 			displayLabel = fmt.Sprintf(`<span class="transition-label" data-transition-name="%s">%s</span>`, escapedNameAttr, labelInner)
 		}
 
+		// OR-input (FromAny): no join node — each input feeds the target
+		// independently, labeled so the merge semantics are visible.
+		if trans.FromAny() && len(trans.From()) > 1 {
+			orLabel := displayLabel + " #40;or#41;"
+			if len(trans.To()) > 1 {
+				forkState := fmt.Sprintf("%s_fork", trans.Name())
+				fmt.Fprintf(&diagram, "    state %s <<fork>>\n", forkState)
+				for _, from := range trans.From() {
+					fmt.Fprintf(&diagram, "    %s --> %s : %s\n", from, forkState, orLabel)
+				}
+				for _, to := range trans.To() {
+					fmt.Fprintf(&diagram, "    %s --> %s\n", forkState, to)
+				}
+			} else {
+				for _, from := range trans.From() {
+					fmt.Fprintf(&diagram, "    %s --> %s : %s\n", from, trans.To()[0], orLabel)
+				}
+			}
+			for _, reset := range trans.Resets() {
+				fmt.Fprintf(&diagram, "    %s --> %s : %s\n", reset, trans.From()[0],
+					escapeMermaidLabel(trans.Name())+" resets")
+			}
+			continue
+		}
+
 		// Handle multiple to places
 		if len(trans.To()) > 1 {
 			// This is a fork

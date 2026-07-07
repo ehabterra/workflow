@@ -1,0 +1,14 @@
+{{template "head" "Diagrams"}}
+{{template "flash" .Flash}}
+<p class="eyebrow">The nets, as executed</p>
+<h1>Diagrams</h1>
+<p class="lede">Generated from the same definitions the engine fires — <span class="mono">Workflow.Diagram()</span> — so they can never drift from the code. OR-input merges are labeled <span class="mono">(or)</span>; reset arcs (cancellation) appear as <span class="mono">resets</span> edges.</p>
+
+<h2>Expense net — one instance per expense</h2>
+<div class="card diagram-card"><pre class="mermaid">{{.Expense}}</pre></div>
+
+<h2>Payment net — one long-lived colored-token instance</h2>
+<div class="card diagram-card"><pre class="mermaid">{{.Payment}}</pre></div>
+
+{{template "mermaidjs"}}
+{{template "foot"}}

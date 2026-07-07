@@ -29,7 +29,12 @@ workaround.
    chained timer a rejected instance would stay hot in the due index
    forever.
 
-2. **"From pending OR escalated" doubles the transition count.** A
+2. ✅ **SHIPPED: OR-input transitions (`from_any`)** — one transition now
+   accepts from any one of its input places, consuming only it; the dogfood
+   collapsed its four `*_escalated` twins and deleted the `applyFirst`
+   helper. Original finding kept below.
+
+   **Original entry**: "From pending OR escalated" doubles the transition count. A
    transition's inputs are fixed places, so approve/reject each need a
    `*_escalated` twin (13 transitions where ~8 feel necessary). Workaround:
    `applyFirst(...)` helper trying each variant and treating `ErrNotEnabled`
@@ -110,15 +115,12 @@ Priority order for what the library needs next, from what actually hurt:
    immediately after this ranking was written; the dogfood adopted them and
    deleted its token surgery (see resolved entry 1 above).
 
-2. **OR-input transitions** (entry 2). The escalation feature doubled the
-   approve/reject transitions; with the revise loop the duplication now
-   also infects every host-side action helper (`applyFirst` chains).
+2. ✅ **SHIPPED: OR-input transitions** — `from_any` (see resolved entry 2
+   above).
 
-3. **XOR-split routing primitive** (new). Guard-routed alternatives out of
-   one place (petty cash vs. review) work, but the host must try each
-   variant and interpret guard rejections (`routeSubmit`). An engine-level
-   "fire the enabled one of these" (free-choice conflict resolution) — or
-   just a documented recipe — belongs in the library.
+3. ✅ **SHIPPED: XOR-split routing** — `Workflow.ApplyAny(ctx, names...)`
+   fires the first allowed candidate, skipping not-enabled and
+   guard-rejected ones; the dogfood's `routeSubmit` is now one call.
 
 4. **`FireDue` side effects** (entry 4). Timer audit records are still
    at-least-once while every interactive fire is exactly-once. Grows worse

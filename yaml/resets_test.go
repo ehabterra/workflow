@@ -68,3 +68,39 @@ workflow:
 		t.Fatalf("want validation error naming ghost, got %v", err)
 	}
 }
+
+// TestFromAnyFromYAML: the `from_any:` key wires OR-input semantics.
+func TestFromAnyFromYAML(t *testing.T) {
+	cfg, err := yaml.LoadConfigFromBytes([]byte(`
+workflow:
+  name: or_demo
+  initial_marking: pending
+  transitions:
+    - name: escalate
+      from: [pending]
+      to: [escalated]
+    - name: approve
+      from: [pending, escalated]
+      to: [done]
+      from_any: true
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	wf, err := yaml.NewLoader().LoadWorkflow(cfg, "wf")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !wf.Definition().Transition("approve").FromAny() {
+		t.Fatal("from_any not wired")
+	}
+	if err := wf.ApplyTransition("escalate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wf.ApplyTransition("approve"); err != nil {
+		t.Fatalf("approve from escalated stage: %v", err)
+	}
+	if places := wf.Marking().Places(); len(places) != 1 || places[0] != "done" {
+		t.Fatalf("want [done], got %v", places)
+	}
+}

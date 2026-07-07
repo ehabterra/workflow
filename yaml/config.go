@@ -86,6 +86,7 @@ type TransitionConfig struct {
 	Guard        string         `yaml:"guard,omitempty"`         // Expression string
 	After        string         `yaml:"after,omitempty"`         // Timeout duration, e.g. "72h" (Go time.ParseDuration)
 	Resets       []string       `yaml:"resets,omitempty"`        // Places cleared when this transition fires (cancellation region)
+	FromAny      bool           `yaml:"from_any,omitempty"`      // OR-input: enabled by ANY one marked from-place; consumes only it
 	Metadata     map[string]any `yaml:"metadata,omitempty"`      // Transition metadata
 	Notes        string         `yaml:"notes,omitempty"`         // Default notes for history
 	Actor        string         `yaml:"actor,omitempty"`         // Default actor for history

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -423,16 +424,19 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 		return fmt.Errorf("%w: %s", ErrTransitionNotFound, transitionName)
 	}
 
-	// Check if transition is enabled (all 'from' places must be present)
+	// Check if transition is enabled: all 'from' places for the default
+	// AND-join, or any one of them for an OR-input (FromAny) transition —
+	// consumeFrom is the input set this firing will actually consume.
 	currentPlaces := w.CurrentPlaces()
-	for _, fromPlace := range targetTransition.From() {
-		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrNotEnabled
-		}
+	consumeFrom, enabled := targetTransition.consumeSet(func(p Place) bool {
+		return slices.Contains(currentPlaces, p)
+	})
+	if !enabled {
+		return ErrNotEnabled
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(targetTransition.From()), w)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(consumeFrom), w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -539,16 +543,19 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return fmt.Errorf("%w: %s", ErrTransitionNotFound, transitionName)
 	}
 
-	// Check if transition is enabled (all 'from' places must be present)
+	// Check if transition is enabled: all 'from' places for the default
+	// AND-join, or any one of them for an OR-input (FromAny) transition —
+	// consumeFrom is the input set this firing will actually consume.
 	currentPlaces := w.CurrentPlaces()
-	for _, fromPlace := range targetTransition.From() {
-		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrNotEnabled
-		}
+	consumeFrom, enabled := targetTransition.consumeSet(func(p Place) bool {
+		return slices.Contains(currentPlaces, p)
+	})
+	if !enabled {
+		return ErrNotEnabled
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(targetTransition.From()), w)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(consumeFrom), w)
 	if err := targetTransition.validate(event); err != nil {
 		return err
 	}
@@ -565,7 +572,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	from := targetTransition.From()
+	from := consumeFrom
 	to := targetTransition.To()
 
 	// Fire before transition event (unlock before calling listeners). Gather the
@@ -584,11 +591,12 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	// guards and before-listeners, and a concurrent firing may have consumed the
 	// input places in the meantime. Without this, two racing calls could both
 	// pass the earlier check and both move (double-firing the boolean case, or
-	// producing a phantom uncolored token in the colored case).
-	for _, p := range from {
-		if !w.marking.HasPlace(p) {
-			return ErrNotEnabled
-		}
+	// producing a phantom uncolored token in the colored case). For an
+	// OR-input transition the consumed input is re-resolved here — the place
+	// picked before the lock may have been drained meanwhile.
+	from, enabled = targetTransition.consumeSet(w.marking.HasPlace)
+	if !enabled {
+		return ErrNotEnabled
 	}
 
 	// Move tokens from the input places to the output places (clearing any
@@ -632,17 +640,13 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 
 	// Check each transition
 	for _, t := range w.definition.Transitions {
-		// Check if all 'from' places are in current places
-		allFromPlacesPresent := true
-		for _, fromPlace := range t.From() {
-			if !slices.Contains(currentPlaces, fromPlace) {
-				allFromPlacesPresent = false
-				break
-			}
-		}
+		// Enabled: all inputs marked (AND-join) or any one (OR-input).
+		consumed, enabled := t.consumeSet(func(p Place) bool {
+			return slices.Contains(currentPlaces, p)
+		})
 
 		// Check if all 'to' places match
-		if allFromPlacesPresent && len(t.To()) == len(targetPlaces) {
+		if enabled && len(t.To()) == len(targetPlaces) {
 			matches := true
 			for i := range t.To() {
 				if t.To()[i] != targetPlaces[i] {
@@ -651,7 +655,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 				}
 			}
 			if matches {
-				from = t.From()
+				from = consumed
 				transition = &t
 				break
 			}
@@ -675,11 +679,12 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 
 	// Re-verify enablement under the write lock (see ApplyTransitionWithContext):
 	// a concurrent firing may have consumed the input places while the lock was
-	// released for the before-listeners.
-	for _, p := range from {
-		if !w.marking.HasPlace(p) {
-			return ErrNotEnabled
-		}
+	// released for the before-listeners. The OR-input consume set is
+	// re-resolved for the same reason.
+	var enabled bool
+	from, enabled = transition.consumeSet(w.marking.HasPlace)
+	if !enabled {
+		return ErrNotEnabled
 	}
 
 	// Move tokens from the input places to the output places (clearing any
@@ -699,6 +704,40 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	return nil
 }
 
+// ApplyAny fires the first of the named transitions that the current state
+// allows, returning the name of the one that fired. It is the free-choice /
+// XOR-split resolver: declare guard-routed alternatives out of a place
+// (e.g. auto-approve vs. full review, split by an amount guard) and let one
+// call fire whichever the state enables.
+//
+// A candidate that is not enabled (ErrNotEnabled) or whose guard rejects it
+// (ErrGuardRejected) is skipped and the next is tried; any other error —
+// including ErrTransitionNotFound for a name that does not exist — aborts
+// immediately. When no candidate fires, the last blocking error is returned
+// so the caller can distinguish "nothing was enabled" from "a guard said no".
+//
+// Note the check-then-fire race inherent to trying candidates in order:
+// under concurrent writers a candidate that was skipped may become enabled
+// again by the time the call returns. Each individual firing is atomic; use
+// Manager.Execute for load-fire-save cycles under optimistic concurrency.
+func (w *Workflow) ApplyAny(ctx context.Context, names ...string) (string, error) {
+	if len(names) == 0 {
+		return "", fmt.Errorf("%w: ApplyAny requires at least one transition name", ErrInvalidTransition)
+	}
+	var lastErr error
+	for _, name := range names {
+		err := w.ApplyTransitionWithContext(ctx, name)
+		if err == nil {
+			return name, nil
+		}
+		if !errors.Is(err, ErrTransitionNotAllowed) {
+			return "", err
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("no transition of %v fired: %w", names, lastErr)
+}
+
 // EnabledTransitions returns all transitions that can be applied in the current place
 func (w *Workflow) EnabledTransitions() ([]Transition, error) {
 	w.mu.RLock()
@@ -706,19 +745,12 @@ func (w *Workflow) EnabledTransitions() ([]Transition, error) {
 	var enabled []Transition
 	currentPlaces := w.marking.Places()
 
-	// Check each transition
+	// Check each transition: all inputs marked (AND-join) or any one
+	// (OR-input / FromAny).
 	for _, trans := range w.definition.Transitions {
-		// Check if all 'from' places are in current places
-		allFromPlacesPresent := true
-		for _, fromPlace := range trans.From() {
-			found := slices.Contains(currentPlaces, fromPlace)
-			if !found {
-				allFromPlacesPresent = false
-				break
-			}
-		}
-
-		if allFromPlacesPresent {
+		if _, ok := trans.consumeSet(func(p Place) bool {
+			return slices.Contains(currentPlaces, p)
+		}); ok {
 			enabled = append(enabled, trans)
 		}
 	}

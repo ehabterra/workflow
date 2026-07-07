@@ -195,6 +195,9 @@
   .toolbar { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin: 0 0 1rem; }
   .toolbar .muted a { color: var(--pine); }
 
+  .diagram-card { padding: 1rem 1.2rem; overflow-x: auto; }
+  .diagram-card pre.mermaid { margin: 0; font-family: var(--mono); font-size: .78rem; color: var(--slate); }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
   }
@@ -211,6 +214,7 @@
       <a href="/">Dashboard</a>
       <a href="/expenses/new">Submit expense</a>
       <a href="/batch">Payment batch</a>
+      <a href="/diagrams">Diagrams</a>
       <a href="/metrics">Metrics</a>
     </nav>
     <label class="whoami">acting as
@@ -222,6 +226,15 @@
 {{end}}
 
 {{define "flash"}}{{if .}}<div class="flash" role="status">{{.}}</div>{{end}}{{end}}
+
+{{define "mermaidjs"}}
+<script type="module">
+  // Rendered client-side from the engine's own Diagram() output. Without
+  // network/JS the raw Mermaid source stays readable in the <pre> blocks.
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral" });
+</script>
+{{end}}
 
 {{define "foot"}}
 </main>

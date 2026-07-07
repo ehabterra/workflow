@@ -87,6 +87,25 @@ func transitionDeadline(m Marking, t *Transition) (time.Time, bool) {
 	if !ok {
 		return time.Time{}, false
 	}
+	if t.fromAny {
+		// OR-input: due as soon as ANY marked input's token has waited long
+		// enough — the earliest deadline among the marked inputs.
+		var deadline time.Time
+		found := false
+		for _, p := range t.from {
+			at, ok := placeEntered(m, p)
+			if !ok {
+				continue
+			}
+			if d := at.Add(d); !found || d.Before(deadline) {
+				deadline, found = d, true
+			}
+		}
+		if !found {
+			return time.Time{}, false
+		}
+		return deadline, true
+	}
 	var enabledAt time.Time
 	for i, p := range t.from {
 		at, ok := placeEntered(m, p)
