@@ -92,10 +92,11 @@ func TestReviseAfterRejection(t *testing.T) {
 	if _, err := app.Reject(ctx, id, "legal", "lawyer"); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
-	// Round one's finance token is stranded; its timer still fires.
+	// The reject's reset arcs cancelled round one's finance token, so this
+	// tick fires nothing (it used to fire a stranded escalation).
 	later := time.Now().Add(73 * time.Hour)
-	if _, err := app.Tick(ctx, later); err != nil {
-		t.Fatalf("tick: %v", err)
+	if fired, err := app.Tick(ctx, later); err != nil || len(fired) != 0 {
+		t.Fatalf("tick after reject: fired %v, err %v (want nothing)", fired, err)
 	}
 
 	fired, err := app.Revise(ctx, id, "bob", "cheaper option", 90)

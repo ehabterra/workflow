@@ -145,6 +145,14 @@ func (w *Workflow) Diagram() string {
 				fmt.Fprintf(&diagram, "    %s --> %s : %s\n", trans.From()[0], trans.To()[0], displayLabel)
 			}
 		}
+
+		// Reset arcs (cancellation region): rendered as an edge from the
+		// cleared place back to the transition's first input, labelled so the
+		// cancellation is visible in the diagram.
+		for _, reset := range trans.Resets() {
+			fmt.Fprintf(&diagram, "    %s --> %s : %s\n", reset, trans.From()[0],
+				escapeMermaidLabel(trans.Name())+" resets")
+		}
 	}
 
 	// Add current place highlighting

@@ -591,9 +591,10 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		}
 	}
 
-	// Move tokens from the input places to the output places, preserving colored
-	// token data and leaving unrelated places untouched.
-	w.moveMarking(from, to)
+	// Move tokens from the input places to the output places (clearing any
+	// reset places), preserving colored token data and leaving unrelated
+	// places untouched.
+	w.moveMarking(from, to, targetTransition.Resets())
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
@@ -681,9 +682,10 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 		}
 	}
 
-	// Move tokens from the input places to the output places, preserving colored
-	// token data and leaving unrelated places untouched.
-	w.moveMarking(from, targetPlaces)
+	// Move tokens from the input places to the output places (clearing any
+	// reset places), preserving colored token data and leaving unrelated
+	// places untouched.
+	w.moveMarking(from, targetPlaces, transition.Resets())
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()

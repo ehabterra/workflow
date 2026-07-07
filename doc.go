@@ -41,12 +41,16 @@
 //
 // Implemented and tested: the unified colored-token marking (a place can hold
 // multiple data-carrying tokens; simple boolean workflows are the single-token
-// special case), per-token transition firing, token-aware guards, SQLite and
-// PostgreSQL storage backends with optimistic concurrency built into the Storage contract and
-// transactional building blocks, SQLite and PostgreSQL history stores, the strict YAML loader
-// with the polymorphic initial_marking key, and Mermaid diagram generation.
+// special case), per-token transition firing, token-aware guards, reset arcs
+// (cancellation regions — a transition clears declared places atomically when
+// it fires), host-driven timers (SetTimeoutAfter / Due / Manager.ListDue and
+// FireDue — the host owns the clock), SQLite and PostgreSQL storage backends
+// with optimistic concurrency built into the Storage contract and
+// transactional building blocks, SQLite and PostgreSQL history stores, the
+// strict YAML loader with the polymorphic initial_marking key, and Mermaid
+// diagram generation.
 //
-// Not yet available (tracked in ROADMAP.md): timers/scheduling, a signals API,
-// static validation (deadlock/soundness checking), hierarchical workflows (HCPN),
+// Not yet available (tracked in ROADMAP.md): a signals API, static validation
+// (deadlock/soundness checking), hierarchical workflows (HCPN),
 // compensation/rollback, and observability hooks.
 package workflow

@@ -21,6 +21,19 @@ type Transition struct {
 	// for the timeout; a zero value means the transition is not timed. The library
 	// never fires it on its own; a host schedules the check.
 	timeout time.Duration
+
+	// resets holds the places this transition CLEARS when it fires — reset
+	// arcs, the Petri-net primitive for cancellation regions. Firing removes
+	// every token from each reset place atomically with the marking move:
+	// inputs are consumed, reset places are emptied, and only then are
+	// outputs produced (so a place that is both reset and an output keeps
+	// what this firing produces). Reset places do not affect enablement.
+	//
+	// The canonical use is an OR-outcome AND-split: a reject transition on
+	// one review branch resets the sibling branch's places, cancelling its
+	// pending work — and any timer running on those tokens — in the same
+	// atomic firing.
+	resets []Place
 }
 
 // Constraint represents a validation constraint for a transition
@@ -116,6 +129,32 @@ func (t *Transition) SetTimeoutAfter(d time.Duration) {
 // mirror.
 func (t *Transition) TimeoutAfter() (time.Duration, bool) {
 	return t.timeout, t.timeout > 0
+}
+
+// SetResets declares the places this transition clears when it fires (reset
+// arcs / a cancellation region). Duplicates are collapsed; order is not
+// significant. Reset places must exist in the definition — NewDefinition
+// validates them. Resets are part of the definition's Fingerprint.
+func (t *Transition) SetResets(places ...Place) {
+	seen := make(map[Place]bool, len(places))
+	t.resets = t.resets[:0]
+	for _, p := range places {
+		if !seen[p] {
+			seen[p] = true
+			t.resets = append(t.resets, p)
+		}
+	}
+}
+
+// Resets returns the places this transition clears when it fires. The returned
+// slice is a copy.
+func (t *Transition) Resets() []Place {
+	if len(t.resets) == 0 {
+		return nil
+	}
+	out := make([]Place, len(t.resets))
+	copy(out, t.resets)
+	return out
 }
 
 // AddConstraint adds a constraint to the transition

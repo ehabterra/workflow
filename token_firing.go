@@ -43,7 +43,7 @@ func (w *Workflow) coloredTokensAt(places []Place) []Token {
 // each output receives a fresh copy of every consumed token. When no colored
 // tokens are consumed it falls back to boolean presence (one uncolored token per
 // output). Callers must hold w.mu.
-func (w *Workflow) moveMarking(from, to []Place) {
+func (w *Workflow) moveMarking(from, to, resets []Place) {
 	var carried []Token
 	for _, f := range from {
 		for _, tok := range w.marking.TokensAt(f) {
@@ -52,6 +52,14 @@ func (w *Workflow) moveMarking(from, to []Place) {
 			}
 		}
 		_ = w.marking.RemovePlace(f) // removes all tokens at f; no-op error if empty
+	}
+	// Reset arcs (cancellation regions): empty every reset place after the
+	// inputs are consumed and BEFORE the outputs are produced, so a place
+	// that is both reset and an output keeps what this firing produces. Any
+	// timer running on a cleared token dies with it — the due index is
+	// recomputed from the marking on save.
+	for _, p := range resets {
+		_ = w.marking.RemovePlace(p)
 	}
 	w.produce(to, carried)
 }
@@ -204,6 +212,11 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	if err := w.marking.RemoveToken(inputPlace, tokenID); err != nil {
 		w.mu.Unlock()
 		return err
+	}
+	// Reset arcs clear WHOLE places, also in per-token firing — a reset on
+	// the input place removes the sibling tokens that were not consumed.
+	for _, p := range targetTransition.Resets() {
+		_ = w.marking.RemovePlace(p)
 	}
 	w.produce(to, []Token{tok})
 	w.mu.Unlock()

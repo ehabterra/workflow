@@ -49,6 +49,9 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 			for _, to := range trans.To {
 				placeSet[to] = true
 			}
+			for _, reset := range trans.Resets {
+				placeSet[reset] = true
+			}
 		}
 		for placeName := range placeSet {
 			places = append(places, workflow.Place(placeName))
@@ -103,6 +106,16 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 				return nil, fmt.Errorf("transition '%s': after duration must be positive, got %q", transConfig.Name, transConfig.After)
 			}
 			transition.SetTimeoutAfter(d)
+		}
+
+		// Reset arcs (cancellation region): places cleared when this
+		// transition fires. Place existence is validated by NewDefinition.
+		if len(transConfig.Resets) > 0 {
+			resets := make([]workflow.Place, len(transConfig.Resets))
+			for i, p := range transConfig.Resets {
+				resets[i] = workflow.Place(p)
+			}
+			transition.SetResets(resets...)
 		}
 
 		// Add transition metadata
