@@ -14,6 +14,10 @@ func escapeMermaidLabel(label string) string {
 	label = strings.ReplaceAll(label, ":", "#58;")
 	// Replace single quotes with corresponding html entity
 	label = strings.ReplaceAll(label, "'", "#39;")
+	// Angle brackets would otherwise read as HTML in Mermaid labels — guard
+	// expressions are full of them ("amount <= 100").
+	label = strings.ReplaceAll(label, "<", "#60;")
+	label = strings.ReplaceAll(label, ">", "#62;")
 
 	return label
 }
@@ -89,8 +93,15 @@ func (w *Workflow) Diagram() string {
 		// of truth), and the guard is exposed via tooltip data attributes.
 		escapedName := escapeMermaidLabel(trans.Name())
 		labelInner := escapedName
+		if guard, ok := trans.Metadata("guard"); ok {
+			if g, ok := guard.(string); ok && g != "" {
+				// Surface the guard VISIBLY on the edge (the data-guard
+				// attribute below additionally powers tooltips).
+				labelInner += " ❰" + escapeMermaidLabel(simplifyGuard(g)) + "❱"
+			}
+		}
 		if d, ok := trans.TimeoutAfter(); ok {
-			labelInner = escapedName + " after " + escapeMermaidLabel(d.String())
+			labelInner = "⏱ " + labelInner + " after " + escapeMermaidLabel(d.String())
 		}
 		displayLabel := labelInner
 

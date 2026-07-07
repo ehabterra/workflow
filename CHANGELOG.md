@@ -24,11 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing fires, the last blocking error tells the caller whether nothing
   was enabled or a guard refused. Guard-routed alternatives out of one
   place (auto-approve vs. review) become one call.
-- **Diagrams in the dogfood UI**: a `/diagrams` page renders both nets from
-  `Workflow.Diagram()` (so they can never drift from the executed code),
-  and each expense page embeds its LIVE diagram with the current marking
-  highlighted (client-side Mermaid; the raw source stays readable without
-  JS).
+- **Diagrams in the dogfood UI, full UX**: a `/diagrams` page and live
+  embedded diagrams on the expense and batch pages, rendered by a
+  purpose-built flowchart generator (`examples/expense_approval/diagram.go`)
+  driven by the same definitions the engine fires. Places and transitions
+  are visually distinct; transitions are color-typed (person / automatic /
+  timer), guards are visible on the routing edges (`❰ amount ≤ 100 ❱`),
+  reset arcs are dotted "cancels" edges, OR-merge inputs are labeled
+  "either", the live marking is highlighted, and colored-token places carry
+  live badges (token count · amount total · held-by-guard) — with a legend
+  on every diagram for non-technical readers.
+- `Workflow.Diagram()` (the library's generic Mermaid renderer) now shows
+  guard expressions visibly on transition labels (`❰…❱`, angle brackets
+  escaped) and prefixes timed transitions with ⏱.
 - **Cancellation regions via reset arcs** — the top-ranked finding of the M5
   friction log. A transition can declare places it CLEARS when it fires:
   `Transition.SetResets("b", "c")` in Go, `resets: [b, c]` in YAML. Firing

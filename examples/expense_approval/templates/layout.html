@@ -196,6 +196,15 @@
   .toolbar .muted a { color: var(--pine); }
 
   .diagram-card { padding: 1rem 1.2rem; overflow-x: auto; }
+  .legend { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin: .6rem 0 1rem; font-size: .8rem; color: var(--slate); }
+  .lg { display: inline-flex; align-items: center; gap: .35rem; }
+  .lg-swatch { display: inline-block; width: .85rem; height: .85rem; border-radius: 4px; border: 1px solid var(--line); }
+  .lg-current { background: var(--pine-soft); border: 2px solid var(--pine); }
+  .lg-place { background: var(--card); border-color: var(--slate); border-radius: 99px; }
+  .lg-person { background: var(--pine); border-color: var(--pine-deep); }
+  .lg-auto { background: var(--sky-soft); border-color: var(--sky); }
+  .lg-timer { background: var(--amber-soft); border-color: var(--amber); }
+  .lg-line { display: inline-block; width: 1.3rem; border-top: 2px dotted var(--rust); }
   .diagram-card pre.mermaid { margin: 0; font-family: var(--mono); font-size: .78rem; color: var(--slate); }
 
   @media (prefers-reduced-motion: reduce) {
@@ -227,12 +236,26 @@
 
 {{define "flash"}}{{if .}}<div class="flash" role="status">{{.}}</div>{{end}}{{end}}
 
+{{define "diagram-legend"}}
+<div class="legend">
+  <span class="lg"><span class="lg-swatch lg-current"></span>current marking</span>
+  <span class="lg"><span class="lg-swatch lg-place"></span>place (state at rest)</span>
+  <span class="lg"><span class="lg-swatch lg-person"></span>action by a person</span>
+  <span class="lg"><span class="lg-swatch lg-auto"></span>automatic (host/batch)</span>
+  <span class="lg"><span class="lg-swatch lg-timer"></span>⏱ timer (host tick)</span>
+  <span class="lg"><span class="lg-line lg-cancel"></span>cancels (reset arc)</span>
+  <span class="lg mono">❰…❱ guard condition</span>
+  <span class="lg mono">either = OR-merge input</span>
+</div>
+{{end}}
+
 {{define "mermaidjs"}}
 <script type="module">
   // Rendered client-side from the engine's own Diagram() output. Without
   // network/JS the raw Mermaid source stays readable in the <pre> blocks.
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-  mermaid.initialize({ startOnLoad: true, theme: "neutral" });
+  // securityLevel "loose" lets labels use <br/> and <b> (token badges).
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
 </script>
 {{end}}
 

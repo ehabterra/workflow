@@ -661,28 +661,65 @@ func (a *App) Reconcile(ctx context.Context) (*ReconcileReport, error) {
 // treats it as a crash artifact rather than a creation in flight.
 const draftGrace = 5 * time.Minute
 
-// NetDiagrams renders the Mermaid diagrams of both nets' STRUCTURE (a
-// throwaway unstarted instance per net; no fleet state).
-func (a *App) NetDiagrams() (expense, payment string, err error) {
-	ewf, err := workflow.NewWorkflow("expense-structure", a.expenseDef, "draft")
-	if err != nil {
-		return "", "", err
-	}
-	pwf, err := workflow.NewWorkflow("payment-structure", a.paymentDef, "batch_control")
-	if err != nil {
-		return "", "", err
-	}
-	return ewf.Diagram(), pwf.Diagram(), nil
+// DiagramExpenseStructure renders the expense net's structure (no instance
+// state) with the UI's rich flowchart renderer.
+func (a *App) DiagramExpenseStructure() string {
+	return mermaidNet(a.expenseDef, nil, nil)
 }
 
-// ExpenseDiagram renders one expense's LIVE Mermaid diagram — the marking's
-// current places are highlighted.
-func (a *App) ExpenseDiagram(ctx context.Context, id string) (string, error) {
+// DiagramExpenseLive renders one expense's net with its current marking
+// highlighted.
+func (a *App) DiagramExpenseLive(ctx context.Context, id string) (string, error) {
 	wf, err := a.mgr.LoadWorkflow(ctx, id, a.expenseDef)
 	if err != nil {
 		return "", err
 	}
-	return wf.Diagram(), nil
+	current := map[workflow.Place]bool{}
+	for _, p := range wf.CurrentPlaces() {
+		current[p] = true
+	}
+	return mermaidNet(a.expenseDef, current, nil), nil
+}
+
+// DiagramPaymentLive renders the payment net with live token badges: each
+// token-bearing place shows its token count, amount total, and (for payable)
+// how many the guard is holding.
+func (a *App) DiagramPaymentLive(ctx context.Context) (string, error) {
+	wf, err := a.mgr.LoadWorkflow(ctx, paymentID, a.paymentDef)
+	if err != nil {
+		return "", err
+	}
+	current := map[workflow.Place]bool{}
+	for _, p := range wf.CurrentPlaces() {
+		current[p] = true
+	}
+	badge := func(p workflow.Place) string {
+		if p == "batch_control" {
+			return "" // permanent anchor token; a count would just confuse
+		}
+		tokens := wf.GetTokens(p)
+		if len(tokens) == 0 {
+			return ""
+		}
+		var sum float64
+		held := 0
+		for _, tok := range tokens {
+			if v, ok := tok.Get("amount"); ok {
+				if f, ok := v.(float64); ok {
+					sum += f
+					if f > payGuardLimit {
+						held++
+					}
+				}
+			}
+		}
+		out := fmt.Sprintf("%d token(s) · %.2f", len(tokens), sum)
+		if p == "payable" && held > 0 {
+			out += fmt.Sprintf("<br/>⚠ %d held by guard", held)
+		}
+		return out
+	}
+	return mermaidNet(a.paymentDef, current, badge), nil
 }
 
 // --- read side (dashboard / detail pages) ---

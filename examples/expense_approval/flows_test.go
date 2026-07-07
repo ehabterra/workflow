@@ -327,7 +327,14 @@ func TestDiagramsPages(t *testing.T) {
 	page, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	body := string(page)
-	for _, want := range []string{"stateDiagram", "legal_approve", "#40;or#41;", "resets", "pay"} {
+	for _, want := range []string{
+		"flowchart LR",       // the rich renderer
+		"legal approve",      // humanized transition names
+		"either",             // OR-merge inputs
+		"cancels",            // reset arcs
+		"❰ amount ≤ 100.0 ❱", // visible guard
+		"classDef timer",     // typed transitions
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("diagrams page missing %q:\n%s", want, body)
 		}
@@ -339,7 +346,20 @@ func TestDiagramsPages(t *testing.T) {
 	}
 	page, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(page), "stateDiagram") {
-		t.Fatal("detail page must embed the live diagram")
+	if !strings.Contains(string(page), "flowchart LR") || !strings.Contains(string(page), "class p_pending_legal current") {
+		t.Fatal("detail page must embed the live diagram with the marking highlighted")
+	}
+
+	// The batch page carries the live token-flow diagram with badges.
+	postForm(t, ts.URL+"/expenses/"+id+"/approve", url.Values{"branch": {"legal"}})
+	postForm(t, ts.URL+"/expenses/"+id+"/approve", url.Values{"branch": {"finance"}})
+	resp, err = http.Get(ts.URL + "/batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(page), "1 token(s) · 300.00") {
+		t.Fatalf("batch page must show live token badges:\n%s", page)
 	}
 }

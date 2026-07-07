@@ -93,9 +93,14 @@ the transition count. And the submit XOR-split is resolved by the library:
 `ApplyAny("submit_auto", "submit")` fires whichever route the amount guard
 allows.
 
-**The diagrams cannot drift.** `/diagrams` renders both nets from
-`Workflow.Diagram()` — the same structures the engine fires — and each
-expense page embeds its live diagram with the current marking highlighted.
+**The diagrams cannot drift.** `/diagrams`, the expense pages, and the
+batch page render the nets from the same definitions the engine fires,
+through a purpose-built flowchart renderer (`diagram.go`): transition nodes
+are color-typed (person / automatic / ⏱ timer), guards sit visibly on the
+routing edges, reset arcs are dotted "cancels" edges, OR-merges say
+"either", the live marking is highlighted, and the payment net's places
+carry live token badges (count · total · held) — with a legend for
+non-technical readers.
 
 **Rejection cancels the sibling branch — declaratively.** Each reject
 transition carries reset arcs (`resets: [pending_finance, …]`): firing it
