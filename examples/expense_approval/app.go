@@ -144,34 +144,77 @@ func loadDefinition(raw []byte) (*workflow.Definition, error) {
 	return wfyaml.NewLoader().LoadDefinition(cfg)
 }
 
+// firedStep is one transition firing with the marking snapshotted around
+// THAT firing — a compound action (approve + finalize, or a batch of pays)
+// records each step's own from/to, not one aggregate pair for all of them.
+type firedStep struct {
+	name     string
+	from, to string
+	notes    string
+}
+
+// stepRecorder wraps a loaded instance so callers fire transitions through
+// it and get per-step from/to snapshots for the audit trail.
+type stepRecorder struct {
+	wf    *workflow.Workflow
+	steps []firedStep
+}
+
+// apply fires one transition, recording its own from/to marking.
+func (r *stepRecorder) apply(ctx context.Context, name string) error {
+	from := placesString(r.wf.CurrentPlaces())
+	if err := r.wf.ApplyTransitionWithContext(ctx, name); err != nil {
+		return err
+	}
+	r.steps = append(r.steps, firedStep{name: name, from: from, to: placesString(r.wf.CurrentPlaces())})
+	return nil
+}
+
+// applyForToken fires a per-token transition (CPN); notes carries what moved
+// (the place-set from/to of a token net often doesn't change, so the token
+// identity is the informative part).
+func (r *stepRecorder) applyForToken(ctx context.Context, name string, tok workflow.Token, notes string) error {
+	from := placesString(r.wf.CurrentPlaces())
+	if err := r.wf.ApplyTransitionForToken(ctx, name, tok.ID()); err != nil {
+		return err
+	}
+	r.steps = append(r.steps, firedStep{name: name, from: from, to: placesString(r.wf.CurrentPlaces()), notes: notes})
+	return nil
+}
+
+// note records a pseudo-step for a host-side mutation that is not a
+// transition firing (e.g. dropping a token into the payment net).
+func (r *stepRecorder) note(name, notes string) {
+	m := placesString(r.wf.CurrentPlaces())
+	r.steps = append(r.steps, firedStep{name: name, from: m, to: m, notes: notes})
+}
+
 // fire runs fn on the instance under Manager.Execute and commits one history
-// record per fired transition in the same transaction as the state save
-// (M3.5: state and audit trail can never disagree). fn returns the names of
-// the transitions it fired.
-func (a *App) fire(ctx context.Context, id string, def *workflow.Definition, actor string, fn func(wf *workflow.Workflow) ([]string, error)) ([]string, error) {
-	var fired []string
-	var fromStr, toStr string
+// record per fired step — each with the marking snapshotted around that
+// step — in the same transaction as the state save (M3.5: state and audit
+// trail can never disagree). It returns the fired transition names.
+func (a *App) fire(ctx context.Context, id string, def *workflow.Definition, actor string, fn func(r *stepRecorder) error) ([]string, error) {
+	var steps []firedStep
 	err := a.mgr.Execute(ctx, id, def, func(wf *workflow.Workflow) error {
-		fired = nil // Execute retries fn on ErrConflict; start each attempt clean.
-		fromStr = placesString(wf.CurrentPlaces())
-		names, err := fn(wf)
-		if err != nil {
+		rec := &stepRecorder{wf: wf} // Execute retries fn on ErrConflict; each attempt records fresh.
+		if err := fn(rec); err != nil {
+			steps = nil
 			return err
 		}
-		fired = names
-		toStr = placesString(wf.CurrentPlaces())
+		steps = rec.steps
 		return nil
 	}, workflow.WithTxSideEffect(func(ctx context.Context, tx any) error {
 		sqlTx, ok := tx.(*sql.Tx)
 		if !ok {
 			return fmt.Errorf("unexpected tx type %T", tx)
 		}
-		for _, name := range fired {
+		for _, s := range steps {
 			rec := &history.TransitionRecord{
 				WorkflowID: id,
-				FromState:  fromStr,
-				ToState:    toStr,
-				Transition: name,
+				FromState:  s.from,
+				ToState:    s.to,
+				Transition: s.name,
+				Notes:      s.notes,
 				Actor:      actor,
 				CreatedAt:  a.now(),
 			}
@@ -184,7 +227,11 @@ func (a *App) fire(ctx context.Context, id string, def *workflow.Definition, act
 	if err != nil {
 		return nil, err
 	}
-	return fired, nil
+	names := make([]string, len(steps))
+	for i, s := range steps {
+		names[i] = s.name
+	}
+	return names, nil
 }
 
 // SubmitExpense creates a new expense instance and fires submit (the
@@ -214,14 +261,11 @@ func (a *App) SubmitExpense(ctx context.Context, submitter, description string, 
 	if _, err := a.mgr.CreateWorkflow(ctx, id, a.expenseDef, "draft"); err != nil {
 		return "", fmt.Errorf("create expense: %w", err)
 	}
-	_, err = a.fire(ctx, id, a.expenseDef, submitter, func(wf *workflow.Workflow) ([]string, error) {
-		wf.SetContext("submitter", submitter)
-		wf.SetContext("description", description)
-		wf.SetContext("amount", amount)
-		if err := wf.ApplyTransitionWithContext(ctx, "submit"); err != nil {
-			return nil, err
-		}
-		return []string{"submit"}, nil
+	_, err = a.fire(ctx, id, a.expenseDef, submitter, func(r *stepRecorder) error {
+		r.wf.SetContext("submitter", submitter)
+		r.wf.SetContext("description", description)
+		r.wf.SetContext("amount", amount)
+		return r.apply(ctx, "submit")
 	})
 	if err != nil {
 		return "", err
@@ -240,21 +284,17 @@ func (a *App) Approve(ctx context.Context, id, branch, actor string) ([]string, 
 	if err := validBranch(branch); err != nil {
 		return nil, err
 	}
-	return a.fire(ctx, id, a.expenseDef, actor, func(wf *workflow.Workflow) ([]string, error) {
-		if hasPlace(wf, "rejected") {
-			return nil, ErrTerminal
+	return a.fire(ctx, id, a.expenseDef, actor, func(r *stepRecorder) error {
+		if hasPlace(r.wf, "rejected") {
+			return ErrTerminal
 		}
-		name, err := applyFirst(ctx, wf, branch+"_approve", branch+"_approve_escalated")
-		if err != nil {
-			return nil, err
+		if err := applyFirst(ctx, r, branch+"_approve", branch+"_approve_escalated"); err != nil {
+			return err
 		}
-		fired := []string{name}
-		if err := wf.ApplyTransitionWithContext(ctx, "finalize"); err == nil {
-			fired = append(fired, "finalize")
-		} else if !errors.Is(err, workflow.ErrTransitionNotAllowed) {
-			return nil, err
+		if err := r.apply(ctx, "finalize"); err != nil && !errors.Is(err, workflow.ErrTransitionNotAllowed) {
+			return err
 		}
-		return fired, nil
+		return nil
 	})
 }
 
@@ -265,15 +305,11 @@ func (a *App) Reject(ctx context.Context, id, branch, actor string) ([]string, e
 	if err := validBranch(branch); err != nil {
 		return nil, err
 	}
-	return a.fire(ctx, id, a.expenseDef, actor, func(wf *workflow.Workflow) ([]string, error) {
-		if hasPlace(wf, "rejected") {
-			return nil, ErrTerminal
+	return a.fire(ctx, id, a.expenseDef, actor, func(r *stepRecorder) error {
+		if hasPlace(r.wf, "rejected") {
+			return ErrTerminal
 		}
-		name, err := applyFirst(ctx, wf, branch+"_reject", branch+"_reject_escalated")
-		if err != nil {
-			return nil, err
-		}
-		return []string{name}, nil
+		return applyFirst(ctx, r, branch+"_reject", branch+"_reject_escalated")
 	})
 }
 
@@ -293,19 +329,19 @@ func (a *App) EnqueueApproved(ctx context.Context, expenseID string) error {
 	if !view.Has("approved") && !view.Has("paid") {
 		return fmt.Errorf("expense %s is not approved", expenseID)
 	}
-	_, err = a.fire(ctx, paymentID, a.paymentDef, "system", func(wf *workflow.Workflow) ([]string, error) {
-		if paymentHasExpense(wf, expenseID) {
-			return nil, nil // already enqueued (or already paid): no-op
+	_, err = a.fire(ctx, paymentID, a.paymentDef, "system", func(r *stepRecorder) error {
+		if paymentHasExpense(r.wf, expenseID) {
+			return nil // already enqueued (or already paid): no-op
 		}
-		_, err := wf.CreateToken("payable", workflow.TokenData{
+		if _, err := r.wf.CreateToken("payable", workflow.TokenData{
 			"expense_id": expenseID,
 			"amount":     view.Amount,
 			"submitter":  view.Submitter,
-		})
-		if err != nil {
-			return nil, err
+		}); err != nil {
+			return err
 		}
-		return []string{"enqueue_payable"}, nil
+		r.note("enqueue_payable", fmt.Sprintf("expense %s (%.2f)", expenseID, view.Amount))
+		return nil
 	})
 	return err
 }
@@ -323,27 +359,25 @@ type BatchResult struct {
 func (a *App) RunBatch(ctx context.Context, actor string) (*BatchResult, error) {
 	start := a.now()
 	res := &BatchResult{}
-	_, err := a.fire(ctx, paymentID, a.paymentDef, actor, func(wf *workflow.Workflow) ([]string, error) {
+	_, err := a.fire(ctx, paymentID, a.paymentDef, actor, func(r *stepRecorder) error {
 		res.Paid = nil
 		res.Held = 0
-		var fired []string
-		for _, tok := range wf.GetTokens("payable") {
-			err := wf.ApplyTransitionForToken(ctx, "pay", tok.ID())
+		for _, tok := range r.wf.GetTokens("payable") {
+			expID, _ := tokenExpenseID(tok)
+			amount, _ := tok.Get("amount")
+			err := r.applyForToken(ctx, "pay", tok, fmt.Sprintf("expense %s (%v)", expID, amount))
 			if errors.Is(err, workflow.ErrGuardRejected) {
 				res.Held++
 				continue
 			}
 			if err != nil {
-				return nil, err
+				return err
 			}
-			fired = append(fired, "pay")
-			if idv, ok := tok.Get("expense_id"); ok {
-				if id, ok := idv.(string); ok {
-					res.Paid = append(res.Paid, id)
-				}
+			if expID != "" {
+				res.Paid = append(res.Paid, expID)
 			}
 		}
-		return fired, nil
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -361,15 +395,12 @@ func (a *App) RunBatch(ctx context.Context, actor string) (*BatchResult, error) 
 }
 
 func (a *App) markPaid(ctx context.Context, id string) error {
-	_, err := a.fire(ctx, id, a.expenseDef, "system", func(wf *workflow.Workflow) ([]string, error) {
-		err := wf.ApplyTransitionWithContext(ctx, "mark_paid")
+	_, err := a.fire(ctx, id, a.expenseDef, "system", func(r *stepRecorder) error {
+		err := r.apply(ctx, "mark_paid")
 		if errors.Is(err, workflow.ErrNotEnabled) {
-			return nil, nil // already marked (redelivery/reconcile): no-op
+			return nil // already marked (redelivery/reconcile): no-op
 		}
-		if err != nil {
-			return nil, err
-		}
-		return []string{"mark_paid"}, nil
+		return err
 	})
 	return err
 }
@@ -666,22 +697,22 @@ func stateLabel(v *ExpenseView) string {
 
 // --- helpers ---
 
-// applyFirst tries the transitions in order, returning the name of the one
-// that fired. ErrNotEnabled means "token isn't there" — try the next source
-// place; any other error (including ErrGuardRejected) stops immediately.
-func applyFirst(ctx context.Context, wf *workflow.Workflow, names ...string) (string, error) {
+// applyFirst tries the transitions in order, recording the one that fires.
+// ErrNotEnabled means "token isn't there" — try the next source place; any
+// other error (including ErrGuardRejected) stops immediately.
+func applyFirst(ctx context.Context, r *stepRecorder, names ...string) error {
 	var lastErr error
 	for _, name := range names {
-		err := wf.ApplyTransitionWithContext(ctx, name)
+		err := r.apply(ctx, name)
 		if err == nil {
-			return name, nil
+			return nil
 		}
 		if !errors.Is(err, workflow.ErrNotEnabled) {
-			return "", err
+			return err
 		}
 		lastErr = err
 	}
-	return "", lastErr
+	return lastErr
 }
 
 func hasPlace(wf *workflow.Workflow, place workflow.Place) bool {
@@ -719,9 +750,13 @@ func memberOf(tokens []workflow.Token) workflow.TokenPredicate {
 	return func(t workflow.Token) bool { return ids[t.ID()] }
 }
 
+// ErrBadBranch marks client input naming a review branch that doesn't exist;
+// the HTTP layer maps it to 400.
+var ErrBadBranch = errors.New("unknown branch (want legal or finance)")
+
 func validBranch(branch string) error {
 	if branch != "legal" && branch != "finance" {
-		return fmt.Errorf("unknown branch %q (want legal or finance)", branch)
+		return fmt.Errorf("%w: %q", ErrBadBranch, branch)
 	}
 	return nil
 }

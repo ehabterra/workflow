@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -60,30 +61,40 @@ func main() {
 
 	// The host-driven timer loop (M4): the library models time, this ticker
 	// owns the clock. Deadlines live in the database, so they survive
-	// restarts.
-	go every(ctx, *tick, func(now time.Time) {
-		fired, err := app.Tick(ctx, now)
-		if err != nil {
-			log.Printf("tick: %v", err)
-		}
-		for id, names := range fired {
-			log.Printf("tick: %s fired %v", id, names)
-		}
-	})
+	// restarts. Loops are joined on shutdown so the deferred db.Close never
+	// races an in-flight tick.
+	var loops sync.WaitGroup
+	loops.Add(1)
+	go func() {
+		defer loops.Done()
+		every(ctx, *tick, func(now time.Time) {
+			fired, err := app.Tick(ctx, now)
+			if err != nil {
+				log.Printf("tick: %v", err)
+			}
+			for id, names := range fired {
+				log.Printf("tick: %s fired %v", id, names)
+			}
+		})
+	}()
 
 	// Periodic self-healing for the documented cross-instance crash
 	// windows (see App.Reconcile).
 	if *reconcileEvery > 0 {
-		go every(ctx, *reconcileEvery, func(time.Time) {
-			rep, err := app.Reconcile(ctx)
-			if err != nil {
-				log.Printf("reconcile: %v", err)
-			}
-			if rep != nil && (rep.Enqueued+rep.Marked+rep.DraftsDeleted) > 0 {
-				log.Printf("reconcile: %d enqueued, %d marked paid, %d stale draft(s) deleted",
-					rep.Enqueued, rep.Marked, rep.DraftsDeleted)
-			}
-		})
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			every(ctx, *reconcileEvery, func(time.Time) {
+				rep, err := app.Reconcile(ctx)
+				if err != nil {
+					log.Printf("reconcile: %v", err)
+				}
+				if rep != nil && (rep.Enqueued+rep.Marked+rep.DraftsDeleted) > 0 {
+					log.Printf("reconcile: %d enqueued, %d marked paid, %d stale draft(s) deleted",
+						rep.Enqueued, rep.Marked, rep.DraftsDeleted)
+				}
+			})
+		}()
 	}
 
 	handler, err := NewServer(app)
@@ -98,20 +109,33 @@ func main() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
+	// The serve error feeds back into the graceful path (no log.Fatal in a
+	// goroutine — that would skip the deferred db.Close and the loop join).
+	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("expense approval listening on %s (driver=%s, tick=%s)", *addr, driver, *tick)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("serve: %v", err)
+			serveErr <- err
+			return
 		}
+		serveErr <- nil
 	}()
 
-	<-ctx.Done()
-	log.Print("shutting down…")
+	select {
+	case <-ctx.Done():
+		log.Print("shutting down…")
+	case err := <-serveErr:
+		if err != nil {
+			log.Printf("serve: %v — shutting down", err)
+		}
+	}
+	stop() // stop the tick/reconcile loops
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	loops.Wait() // no tick/reconcile may touch the DB after this point
 	log.Print("bye")
 }
 

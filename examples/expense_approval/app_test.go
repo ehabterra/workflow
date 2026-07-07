@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -251,5 +252,49 @@ func TestReconcileRepairsCrashWindow(t *testing.T) {
 	}
 	if rep.Enqueued != 0 {
 		t.Fatalf("second reconcile must be a no-op, enqueued %d", rep.Enqueued)
+	}
+}
+
+// TestHistoryRecordsPerStepMarkings: a compound action (approve + finalize)
+// must record each transition with the marking around THAT step, not one
+// aggregate pair stamped on every row.
+func TestHistoryRecordsPerStepMarkings(t *testing.T) {
+	app, _ := newTestApp(t)
+	ctx := context.Background()
+	id := mustSubmit(t, app, "alice", 500)
+	if _, err := app.Approve(ctx, id, "legal", "l"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Approve(ctx, id, "finance", "f"); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, err := app.hist.ListHistory(ctx, id, history.QueryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]history.TransitionRecord{}
+	for _, r := range recs {
+		byName[r.Transition] = r
+	}
+
+	fa, ok := byName["finance_approve"]
+	if !ok {
+		t.Fatalf("missing finance_approve record: %+v", recs)
+	}
+	fin, ok := byName["finalize"]
+	if !ok {
+		t.Fatalf("missing finalize record: %+v", recs)
+	}
+	// finance_approve moved pending_finance -> finance_ok; finalize joined
+	// legal_ok+finance_ok -> approved. Same fire() call, different snapshots.
+	if !strings.Contains(fa.FromState, "pending_finance") || !strings.Contains(fa.ToState, "finance_ok") {
+		t.Fatalf("finance_approve row has wrong marking: %s -> %s", fa.FromState, fa.ToState)
+	}
+	if strings.Contains(fin.FromState, "pending_finance") || !strings.Contains(fin.ToState, "approved") {
+		t.Fatalf("finalize row has wrong marking: %s -> %s", fin.FromState, fin.ToState)
+	}
+	if fa.FromState == fin.FromState && fa.ToState == fin.ToState {
+		t.Fatal("compound steps must not share one aggregate from/to pair")
 	}
 }

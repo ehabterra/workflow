@@ -193,6 +193,8 @@ func (s *Server) decision(action string) http.HandlerFunc {
 				}
 			}
 			s.respond(w, r, id, http.StatusOK, fmt.Sprintf("fired %s", strings.Join(fired, ", ")))
+		case errors.Is(err, ErrBadBranch):
+			http.Error(w, err.Error(), http.StatusBadRequest)
 		case errors.Is(err, workflow.ErrWorkflowNotFound):
 			http.NotFound(w, r)
 		case errors.Is(err, ErrTerminal):
