@@ -17,7 +17,7 @@ import (
 var _ workflow.TransactionalDueStorage = (*PostgresStorage)(nil)
 
 // PostgresStorage is a PostgreSQL-backed implementation of workflow.Storage and
-// workflow.VersionedStorage. It mirrors SQLiteStorage but uses PostgreSQL syntax
+// It mirrors SQLiteStorage but uses PostgreSQL syntax
 // ($N placeholders and INSERT ... ON CONFLICT upserts).
 //
 // Use it with any database/sql driver that speaks PostgreSQL; the pgx stdlib
@@ -26,7 +26,7 @@ var _ workflow.TransactionalDueStorage = (*PostgresStorage)(nil)
 //	import _ "github.com/jackc/pgx/v5/stdlib"
 //	db, _ := sql.Open("pgx", dsn)
 //	store, _ := storage.NewPostgresStorage(db)
-//	_ = storage.Initialize(db, store.GenerateSchema())
+//	_ = store.EnsureSchema(context.Background())
 type PostgresStorage struct {
 	db *sql.DB
 	config
@@ -90,77 +90,22 @@ func (s *PostgresStorage) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-// SaveState upserts the workflow's places and custom fields (last write wins). It
-// does not maintain the due index (the due column is left untouched); for a timed
-// definition, save through the Manager or SaveVersionedStateWithDue so the index
-// stays consistent.
-func (s *PostgresStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any) error {
-	return s.saveState(ctx, s.db, id, marking, ctxData)
-}
-
-// SaveStateTx behaves like SaveState but writes through the provided transaction.
-func (s *PostgresStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any) error {
-	return s.saveState(ctx, tx, id, marking, ctxData)
-}
-
-func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any) error {
-	stateJSON, err := json.Marshal(marking)
-	if err != nil {
-		return fmt.Errorf("failed to marshal state: %w", err)
-	}
-
-	customCols, customVals := s.customColumns(ctxData, encodeValuePg)
-	if s.contextColumn != "" {
-		ctxJSON, err := encodeContextJSON(ctxData)
-		if err != nil {
-			return err
-		}
-		customCols = append([]string{s.contextColumn}, customCols...)
-		customVals = append([]any{ctxJSON}, customVals...)
-	}
-	columns := append([]string{s.idColumn, s.stateColumn}, customCols...)
-	values := append([]any{id, string(stateJSON)}, customVals...)
-
-	// On conflict, update every non-id column from the proposed row.
-	setClauses := make([]string, 0, len(columns)-1)
-	for _, col := range columns[1:] {
-		setClauses = append(setClauses, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
-	}
-
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s;",
-		s.table,
-		strings.Join(columns, ", "),
-		strings.Join(pgPlaceholders(len(values)), ", "),
-		s.idColumn,
-		strings.Join(setClauses, ", "),
-	)
-
-	_, err = q.ExecContext(ctx, query, values...)
-	return err
-}
-
-// LoadState loads the workflow's marking and custom fields.
-func (s *PostgresStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
+// LoadState loads the workflow's marking, context, and optimistic-concurrency
+// version in ONE query. Reading the version separately would allow read skew
+// under concurrency: a marking from version N paired with version N+1 read
+// after a concurrent commit, which makes a later stale save pass the version
+// check and lose the concurrent update.
+func (s *PostgresStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
 	return s.loadState(ctx, s.db, id)
 }
 
-// LoadStateTx behaves like LoadState but reads through the provided transaction.
-func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) (workflow.Marking, map[string]any, error) {
+// LoadStateTx behaves like LoadState but reads through the provided transaction,
+// so it observes the transaction's own uncommitted writes.
+func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) (workflow.Marking, map[string]any, int64, error) {
 	return s.loadState(ctx, tx, id)
 }
 
-func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
-	marking, ctxData, _, err := s.loadStateVersion(ctx, q, id, false)
-	return marking, ctxData, err
-}
-
-// loadStateVersion loads the marking and context, and — when withVersion is
-// set — the optimistic-concurrency version, all in ONE query. Reading the
-// version in a separate query would allow read skew under concurrency: a
-// marking from version N paired with version N+1 read after a concurrent
-// commit, which makes a later stale save pass the version check and lose
-// the concurrent update.
-func (s *PostgresStorage) loadStateVersion(ctx context.Context, q querier, id string, withVersion bool) (workflow.Marking, map[string]any, int64, error) {
+func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, int64, error) {
 	columns := []string{s.stateColumn}
 	if s.contextColumn != "" {
 		columns = append(columns, s.contextColumn)
@@ -171,11 +116,8 @@ func (s *PostgresStorage) loadStateVersion(ctx context.Context, q querier, id st
 		columns = append(columns, firstField(colDef))
 		customKeys = append(customKeys, key)
 	}
-	versionIdx := -1
-	if withVersion {
-		versionIdx = len(columns)
-		columns = append(columns, s.versionColumn)
-	}
+	versionIdx := len(columns)
+	columns = append(columns, s.versionColumn)
 
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = $1", strings.Join(columns, ", "), s.table, s.idColumn)
 
@@ -191,9 +133,7 @@ func (s *PostgresStorage) loadStateVersion(ctx context.Context, q querier, id st
 		scanArgs[customStart+i] = &customVals[i]
 	}
 	var version int64
-	if versionIdx >= 0 {
-		scanArgs[versionIdx] = &version
-	}
+	scanArgs[versionIdx] = &version
 
 	if err := q.QueryRowContext(ctx, query, id).Scan(scanArgs...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -281,55 +221,50 @@ func (s *PostgresStorage) deleteState(ctx context.Context, q querier, id string)
 	return err
 }
 
-// LoadVersionedState implements workflow.VersionedStorage.
-func (s *PostgresStorage) LoadVersionedState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
-	return s.loadStateVersion(ctx, s.db, id, true)
-}
-
-// SaveVersionedState implements workflow.VersionedStorage. It preserves the due
+// SaveState implements workflow.Storage. It preserves the due
 // column (untouched on update, NULL on insert) but does not maintain the due
-// index; for a timed definition, use SaveVersionedStateWithDue or go through the
+// index; for a timed definition, use SaveStateWithDue or go through the
 // Manager so the index stays current.
-func (s *PostgresStorage) SaveVersionedState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
+func (s *PostgresStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
 }
 
-// SaveVersionedStateTx behaves like SaveVersionedState but writes through the
-// provided transaction. Like SaveVersionedState it does not maintain the due
+// SaveStateTx behaves like SaveState but writes through the
+// provided transaction. Like SaveState it does not maintain the due
 // index; for a timed definition composed manually into a transaction, use
-// SaveVersionedStateInTxWithDue (or the Manager) so the due index commits with it.
-func (s *PostgresStorage) SaveVersionedStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
+// SaveStateInTxWithDue (or the Manager) so the due index commits with it.
+func (s *PostgresStorage) SaveStateTx(ctx context.Context, tx *sql.Tx, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
+	return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
 }
 
-// SaveVersionedStateInTx implements workflow.TransactionalStorage: the versioned
+// SaveStateInTx implements workflow.TransactionalStorage: the versioned
 // save and every side effect run in one transaction, committing only if all
 // succeed. Effects receive the *sql.Tx (as an any). It does not maintain the due
-// index; for a timed definition use SaveVersionedStateInTxWithDue so the index
+// index; for a timed definition use SaveStateInTxWithDue so the index
 // commits atomically with state and effects.
-func (s *PostgresStorage) SaveVersionedStateInTx(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, effects ...workflow.TxSideEffect) (int64, error) {
-	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
-		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
+func (s *PostgresStorage) SaveStateInTx(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, effects ...workflow.TxSideEffect) (int64, error) {
+	return saveStateInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
+		return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
 	})
 }
 
-// SaveVersionedStateWithDue implements workflow.DueStorage: it saves the
+// SaveStateWithDue implements workflow.DueStorage: it saves the
 // versioned state and records the instance's next-due time (nil clears it) in
 // the due-index column.
-func (s *PostgresStorage) SaveVersionedStateWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (int64, error) {
-	return s.saveVersionedState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
+func (s *PostgresStorage) SaveStateWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (int64, error) {
+	return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
 }
 
-// SaveVersionedStateInTxWithDue implements workflow.TransactionalDueStorage: the
+// SaveStateInTxWithDue implements workflow.TransactionalDueStorage: the
 // versioned save, the due-index update, and every side effect run in one
 // transaction, committing only if all succeed.
-func (s *PostgresStorage) SaveVersionedStateInTxWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, effects ...workflow.TxSideEffect) (int64, error) {
-	return saveVersionedInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
-		return s.saveVersionedState(ctx, tx, id, marking, ctxData, expectedVersion, due, true)
+func (s *PostgresStorage) SaveStateInTxWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, effects ...workflow.TxSideEffect) (int64, error) {
+	return saveStateInTx(ctx, s.db, effects, func(tx *sql.Tx) (int64, error) {
+		return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, due, true)
 	})
 }
 
-func (s *PostgresStorage) saveVersionedState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, setDue bool) (int64, error) {
+func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, setDue bool) (int64, error) {
 	stateJSON, err := json.Marshal(marking)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal state: %w", err)

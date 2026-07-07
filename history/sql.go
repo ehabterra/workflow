@@ -57,9 +57,6 @@ type SQLHistory struct {
 	dialect      dialect
 }
 
-// SQLiteHistory is the historical name for the SQLite-flavored SQLHistory.
-type SQLiteHistory = SQLHistory
-
 // Option configures a SQLHistory.
 type Option func(*SQLHistory)
 

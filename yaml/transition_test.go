@@ -65,7 +65,7 @@ func TestApplyTransitionWithHistory_TemplateResolution(t *testing.T) {
 	ctx = yaml.WithTemplateValue(ctx, "reason", "Test rejection")
 
 	// Apply transition with history
-	err = yaml.ApplyTransitionWithHistory(wf, []workflow.Place{"end"}, historyStore, ctx, "", "", nil)
+	err = yaml.ApplyTransitionByNameWithHistory(wf, "to-end", historyStore, ctx, "", "", nil)
 	if err != nil {
 		t.Fatalf("Failed to apply transition: %v", err)
 	}

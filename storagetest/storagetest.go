@@ -1,8 +1,7 @@
 // Package storagetest provides a reusable conformance suite for workflow.Storage
 // implementations. Any backend (SQLite, Postgres, an in-memory mock, …) can run
-// Run against a factory to verify it honors the Storage contract, and — when the
-// backend also implements workflow.VersionedStorage — the optimistic-concurrency
-// contract as well.
+// Run against a factory to verify it honors the Storage contract, including the
+// built-in optimistic-concurrency versioning.
 //
 // Usage from a backend's tests:
 //
@@ -10,7 +9,7 @@
 //	    storagetest.Run(t, func(t *testing.T) workflow.Storage {
 //	        db := openFreshDB(t)
 //	        store, _ := storage.NewSQLiteStorage(db)
-//	        _ = storage.Initialize(db, store.GenerateSchema())
+//	        _ = store.EnsureSchema(context.Background())
 //	        return store
 //	    })
 //	}
@@ -37,19 +36,20 @@ func mk(places ...workflow.Place) workflow.Marking {
 	return workflow.NewMarking(places)
 }
 
-// Run executes the full Storage conformance suite against newStore. If the store
-// returned by newStore also implements workflow.VersionedStorage, the versioning
-// conformance suite is run too.
+// Run executes the full Storage conformance suite against newStore, including
+// the optimistic-concurrency versioning contract. Optional capabilities
+// (ListableStorage, DueStorage, TransactionalDueStorage) are exercised when the
+// backend implements them.
 func Run(t *testing.T, newStore Factory) {
 	t.Helper()
 
 	t.Run("SaveLoadRoundTrip", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", mk("review"), nil); err != nil {
+		if _, err := store.SaveState(ctx, "wf", mk("review"), nil, 0); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
-		m, _, err := store.LoadState(ctx, "wf")
+		m, _, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
@@ -61,7 +61,7 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("LoadMissingReturnsNotFound", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if _, _, err := store.LoadState(ctx, "nope"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
+		if _, _, _, err := store.LoadState(ctx, "nope"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
 			t.Fatalf("LoadState(missing) err = %v, want ErrWorkflowNotFound", err)
 		}
 	})
@@ -69,13 +69,13 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("Overwrite", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", mk("a"), nil); err != nil {
+		if _, err := store.SaveState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("first SaveState: %v", err)
 		}
-		if err := store.SaveState(ctx, "wf", mk("b"), nil); err != nil {
+		if _, err := store.SaveState(ctx, "wf", mk("b"), nil, 1); err != nil {
 			t.Fatalf("second SaveState: %v", err)
 		}
-		m, _, err := store.LoadState(ctx, "wf")
+		m, _, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
@@ -87,13 +87,13 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("Delete", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", mk("a"), nil); err != nil {
+		if _, err := store.SaveState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
 		if err := store.DeleteState(ctx, "wf"); err != nil {
 			t.Fatalf("DeleteState: %v", err)
 		}
-		if _, _, err := store.LoadState(ctx, "wf"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
+		if _, _, _, err := store.LoadState(ctx, "wf"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
 			t.Fatalf("LoadState after delete err = %v, want ErrWorkflowNotFound", err)
 		}
 	})
@@ -101,10 +101,10 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("MultiplePlaces", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
-		if err := store.SaveState(ctx, "wf", mk("qa", "security"), nil); err != nil {
+		if _, err := store.SaveState(ctx, "wf", mk("qa", "security"), nil, 0); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
-		m, _, err := store.LoadState(ctx, "wf")
+		m, _, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
@@ -120,11 +120,11 @@ func Run(t *testing.T, newStore Factory) {
 		m := workflow.NewMarking(nil)
 		m.AddToken("pending", workflow.NewTokenWithID("t1", workflow.TokenData{"order": "A", "amount": float64(100)}))
 		m.AddToken("pending", workflow.NewTokenWithID("t2", workflow.TokenData{"order": "B", "amount": float64(250)}))
-		if err := store.SaveState(ctx, "batch", m, nil); err != nil {
+		if _, err := store.SaveState(ctx, "batch", m, nil, 0); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
 
-		loaded, _, err := store.LoadState(ctx, "batch")
+		loaded, _, _, err := store.LoadState(ctx, "batch")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
@@ -158,10 +158,10 @@ func Run(t *testing.T, newStore Factory) {
 			"tags":      []any{"travel", "q3"},
 			"approver":  map[string]any{"dept": "finance", "level": float64(2)},
 		}
-		if err := store.SaveState(ctx, "wf", mk("submitted"), saved); err != nil {
+		if _, err := store.SaveState(ctx, "wf", mk("submitted"), saved, 0); err != nil {
 			t.Fatalf("SaveState: %v", err)
 		}
-		_, got, err := store.LoadState(ctx, "wf")
+		_, got, _, err := store.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("LoadState: %v", err)
 		}
@@ -187,7 +187,7 @@ func Run(t *testing.T, newStore Factory) {
 		}
 
 		for _, id := range []string{"c", "a", "b"} {
-			if err := store.SaveState(ctx, id, mk("s"), nil); err != nil {
+			if _, err := store.SaveState(ctx, id, mk("s"), nil, 0); err != nil {
 				t.Fatalf("SaveState(%s): %v", id, err)
 			}
 		}
@@ -227,10 +227,8 @@ func Run(t *testing.T, newStore Factory) {
 		}
 	})
 
-	// Versioning conformance, only if the backend supports it.
-	if _, ok := newStore(t).(workflow.VersionedStorage); ok {
-		runVersioned(t, newStore)
-	}
+	// Versioning conformance (part of the base Storage contract).
+	runVersioned(t, newStore)
 
 	// Due-index conformance, only if the backend supports it.
 	if _, ok := newStore(t).(workflow.DueStorage); ok {
@@ -254,9 +252,9 @@ func runDue(t *testing.T, newStore Factory) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	saveDue := func(t *testing.T, ds workflow.DueStorage, id string, due *time.Time) int64 {
 		t.Helper()
-		v, err := ds.SaveVersionedStateWithDue(context.Background(), id, mk("s"), nil, 0, due)
+		v, err := ds.SaveStateWithDue(context.Background(), id, mk("s"), nil, 0, due)
 		if err != nil {
-			t.Fatalf("SaveVersionedStateWithDue(%s): %v", id, err)
+			t.Fatalf("SaveStateWithDue(%s): %v", id, err)
 		}
 		return v
 	}
@@ -324,7 +322,7 @@ func runDue(t *testing.T, newStore Factory) {
 
 		// Re-save with a nil due (as FireDue does when a timer stops running):
 		// the instance must drop out of the index.
-		if _, err := ds.SaveVersionedStateWithDue(ctx, "wf", mk("done"), nil, v, nil); err != nil {
+		if _, err := ds.SaveStateWithDue(ctx, "wf", mk("done"), nil, v, nil); err != nil {
 			t.Fatalf("clear due: %v", err)
 		}
 		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 0); err != nil {
@@ -342,7 +340,7 @@ func runDue(t *testing.T, newStore Factory) {
 
 		// A plain (non-due) versioned save must leave the due column untouched, so
 		// the instance still appears in the index.
-		if _, err := ds.SaveVersionedState(ctx, "wf", mk("s2"), nil, v); err != nil {
+		if _, err := ds.SaveState(ctx, "wf", mk("s2"), nil, v); err != nil {
 			t.Fatalf("plain save: %v", err)
 		}
 		if got, err := ds.ListDue(ctx, base.Add(1000*time.Hour), 0); err != nil {
@@ -358,7 +356,7 @@ func runDue(t *testing.T, newStore Factory) {
 	}
 }
 
-// runTxDue exercises workflow.TransactionalDueStorage: SaveVersionedStateInTxWithDue
+// runTxDue exercises workflow.TransactionalDueStorage: SaveStateInTxWithDue
 // must commit the state change, the due-index update, and every side effect as one
 // atom — or roll all of them back together.
 func runTxDue(t *testing.T, newStore Factory, base time.Time) {
@@ -378,10 +376,10 @@ func runTxDue(t *testing.T, newStore Factory, base time.Time) {
 		tds := txDueStore(t)
 		d := base.Add(time.Hour)
 		effectRan := false
-		v, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d,
+		v, err := tds.SaveStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d,
 			func(ctx context.Context, tx any) error { effectRan = true; return nil })
 		if err != nil {
-			t.Fatalf("SaveVersionedStateInTxWithDue: %v", err)
+			t.Fatalf("SaveStateInTxWithDue: %v", err)
 		}
 		if v != 1 {
 			t.Fatalf("version = %d, want 1", v)
@@ -401,12 +399,12 @@ func runTxDue(t *testing.T, newStore Factory, base time.Time) {
 		ctx := context.Background()
 		tds := txDueStore(t)
 		d := base.Add(time.Hour)
-		v, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d)
+		v, err := tds.SaveStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d)
 		if err != nil {
 			t.Fatalf("initial in-tx save: %v", err)
 		}
 		// A nil due (timer stopped) clears the index inside the transaction.
-		if _, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("done"), nil, v, nil); err != nil {
+		if _, err := tds.SaveStateInTxWithDue(ctx, "wf", mk("done"), nil, v, nil); err != nil {
 			t.Fatalf("clear due in tx: %v", err)
 		}
 		if got, err := tds.ListDue(ctx, far, 0); err != nil {
@@ -420,12 +418,12 @@ func runTxDue(t *testing.T, newStore Factory, base time.Time) {
 		ctx := context.Background()
 		tds := txDueStore(t)
 		d := base.Add(time.Hour)
-		if _, err := tds.SaveVersionedStateWithDue(ctx, "wf", mk("s"), nil, 0, &d); err != nil {
+		if _, err := tds.SaveStateWithDue(ctx, "wf", mk("s"), nil, 0, &d); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		// A stale expected version conflicts; the proposed new due must not apply.
 		newDue := base.Add(500 * time.Hour)
-		if _, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("x"), nil, 99, &newDue); !errors.Is(err, workflow.ErrConflict) {
+		if _, err := tds.SaveStateInTxWithDue(ctx, "wf", mk("x"), nil, 99, &newDue); !errors.Is(err, workflow.ErrConflict) {
 			t.Fatalf("stale in-tx save err = %v, want ErrConflict", err)
 		}
 		// The original due is intact: listed at d, not shifted out to newDue.
@@ -441,13 +439,13 @@ func runTxDue(t *testing.T, newStore Factory, base time.Time) {
 		tds := txDueStore(t)
 		d := base.Add(time.Hour)
 		boom := errors.New("effect boom")
-		if _, err := tds.SaveVersionedStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d,
+		if _, err := tds.SaveStateInTxWithDue(ctx, "wf", mk("s"), nil, 0, &d,
 			func(ctx context.Context, tx any) error { return boom }); err == nil {
-			t.Fatal("SaveVersionedStateInTxWithDue with failing effect: want error, got nil")
+			t.Fatal("SaveStateInTxWithDue with failing effect: want error, got nil")
 		}
 		// The whole transaction rolled back: no row, and nothing in the index.
-		if _, _, _, err := tds.LoadVersionedState(ctx, "wf"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
-			t.Fatalf("LoadVersionedState after rollback err = %v, want ErrWorkflowNotFound", err)
+		if _, _, _, err := tds.LoadState(ctx, "wf"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
+			t.Fatalf("LoadState after rollback err = %v, want ErrWorkflowNotFound", err)
 		}
 		if got, err := tds.ListDue(ctx, far, 0); err != nil {
 			t.Fatalf("ListDue: %v", err)
@@ -460,18 +458,14 @@ func runTxDue(t *testing.T, newStore Factory, base time.Time) {
 func runVersioned(t *testing.T, newStore Factory) {
 	t.Helper()
 
-	versioned := func(t *testing.T) workflow.VersionedStorage {
-		vs, ok := newStore(t).(workflow.VersionedStorage)
-		if !ok {
-			t.Fatal("store does not implement VersionedStorage")
-		}
-		return vs
+	versioned := func(t *testing.T) workflow.Storage {
+		return newStore(t)
 	}
 
 	t.Run("Versioned/CreateStartsAtOne", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		v, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0)
+		v, err := vs.SaveState(ctx, "wf", mk("a"), nil, 0)
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -483,10 +477,10 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/LoadReturnsVersion", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0); err != nil {
+		if _, err := vs.SaveState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		_, _, v, err := vs.LoadVersionedState(ctx, "wf")
+		_, _, v, err := vs.LoadState(ctx, "wf")
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
@@ -498,10 +492,10 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/CreateExistingConflicts", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0); err != nil {
+		if _, err := vs.SaveState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("x"), nil, 0); !errors.Is(err, workflow.ErrConflict) {
+		if _, err := vs.SaveState(ctx, "wf", mk("x"), nil, 0); !errors.Is(err, workflow.ErrConflict) {
 			t.Fatalf("recreate err = %v, want ErrConflict", err)
 		}
 	})
@@ -509,13 +503,13 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/StaleUpdateConflicts", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("a"), nil, 0); err != nil {
+		if _, err := vs.SaveState(ctx, "wf", mk("a"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("b"), nil, 1); err != nil {
+		if _, err := vs.SaveState(ctx, "wf", mk("b"), nil, 1); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("c"), nil, 1); !errors.Is(err, workflow.ErrConflict) {
+		if _, err := vs.SaveState(ctx, "wf", mk("c"), nil, 1); !errors.Is(err, workflow.ErrConflict) {
 			t.Fatalf("stale update err = %v, want ErrConflict", err)
 		}
 	})
@@ -530,7 +524,7 @@ func runVersioned(t *testing.T, newStore Factory) {
 	t.Run("Versioned/LoadIsAtomicSnapshot", func(t *testing.T) {
 		ctx := context.Background()
 		vs := versioned(t)
-		if _, err := vs.SaveVersionedState(ctx, "wf", mk("p1"), nil, 0); err != nil {
+		if _, err := vs.SaveState(ctx, "wf", mk("p1"), nil, 0); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 
@@ -542,7 +536,7 @@ func runVersioned(t *testing.T, newStore Factory) {
 			v := int64(1)
 			for range writes {
 				next := v + 1
-				nv, err := vs.SaveVersionedState(ctx, "wf", mk(workflow.Place(fmt.Sprintf("p%d", next))), nil, v)
+				nv, err := vs.SaveState(ctx, "wf", mk(workflow.Place(fmt.Sprintf("p%d", next))), nil, v)
 				if err != nil {
 					writeErr <- err
 					return
@@ -560,7 +554,7 @@ func runVersioned(t *testing.T, newStore Factory) {
 				return
 			default:
 			}
-			m, _, version, err := vs.LoadVersionedState(ctx, "wf")
+			m, _, version, err := vs.LoadState(ctx, "wf")
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}

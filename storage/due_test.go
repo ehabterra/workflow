@@ -59,10 +59,10 @@ func TestSQLiteDueMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStorage(old): %v", err)
 	}
-	if err := storage.Initialize(db, old.GenerateSchema()); err != nil {
+	if err := old.EnsureSchema(context.Background()); err != nil {
 		t.Fatalf("Initialize(old schema): %v", err)
 	}
-	if _, err := old.SaveVersionedState(ctx, "legacy", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0); err != nil {
+	if _, err := old.SaveState(ctx, "legacy", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestSQLiteDueMigration(t *testing.T) {
 	}
 
 	// The legacy row still loads and, with a NULL due, never matches ListDue.
-	if _, _, _, err := store.LoadVersionedState(ctx, "legacy"); err != nil {
+	if _, _, _, err := store.LoadState(ctx, "legacy"); err != nil {
 		t.Fatalf("load legacy row after migration: %v", err)
 	}
 	if ids, err := store.ListDue(ctx, e2eEpoch.Add(1000*time.Hour), 0); err != nil {
@@ -91,8 +91,8 @@ func TestSQLiteDueMigration(t *testing.T) {
 
 	// A due-aware save on the migrated table populates the index.
 	due := e2eEpoch.Add(time.Hour)
-	if _, err := store.SaveVersionedStateWithDue(ctx, "timed", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0, &due); err != nil {
-		t.Fatalf("SaveVersionedStateWithDue: %v", err)
+	if _, err := store.SaveStateWithDue(ctx, "timed", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0, &due); err != nil {
+		t.Fatalf("SaveStateWithDue: %v", err)
 	}
 	if ids, err := store.ListDue(ctx, due, 0); err != nil {
 		t.Fatalf("ListDue(after due save): %v", err)
@@ -121,8 +121,8 @@ func TestSQLiteDueOverflowClamp(t *testing.T) {
 	// A due far past the UnixNano ceiling. Naively, UnixNano would wrap to a
 	// negative value and this instance would look overdue "in the past".
 	yr2266 := time.Date(2266, 1, 1, 0, 0, 0, 0, time.UTC)
-	if _, err := store.SaveVersionedStateWithDue(ctx, "far", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0, &yr2266); err != nil {
-		t.Fatalf("SaveVersionedStateWithDue(far): %v", err)
+	if _, err := store.SaveStateWithDue(ctx, "far", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0, &yr2266); err != nil {
+		t.Fatalf("SaveStateWithDue(far): %v", err)
 	}
 
 	// A present-day scan must NOT return the far-future instance.
@@ -167,8 +167,8 @@ func TestSQLiteDueDisabled(t *testing.T) {
 		t.Fatalf("EnsureSchema (second call): %v", err)
 	}
 	// The store still works for plain saves...
-	if _, err := store.SaveVersionedState(ctx, "wf", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0); err != nil {
-		t.Fatalf("SaveVersionedState: %v", err)
+	if _, err := store.SaveState(ctx, "wf", workflow.NewMarking([]workflow.Place{"submitted"}), nil, 0); err != nil {
+		t.Fatalf("SaveState: %v", err)
 	}
 	// ...but a fleet scan is unavailable.
 	if _, err := store.ListDue(ctx, e2eEpoch, 0); err == nil {
@@ -196,7 +196,7 @@ func TestSQLiteFleetEscalation(t *testing.T) {
 	if err := store.EnsureSchema(ctx); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 
 	// The host's evaluation clock.
 	now := e2eEpoch.Add(escalateAfter)

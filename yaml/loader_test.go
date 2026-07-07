@@ -161,7 +161,7 @@ workflow:
 	}
 
 	ctx := context.Background()
-	err = yaml.ApplyTransitionWithHistory(wf, []workflow.Place{"end"}, historyStore, ctx, "", "", nil)
+	err = yaml.ApplyTransitionByNameWithHistory(wf, "to_end", historyStore, ctx, "", "", nil)
 	if err != nil {
 		t.Fatalf("Failed to apply transition with history: %v", err)
 	}

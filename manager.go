@@ -18,8 +18,8 @@ const defFingerprintKey = "__workflow_def_fingerprint"
 // stored definition fingerprint differs from the definition supplied to load it.
 // Returning nil lets the load proceed (the caller has confirmed the change is
 // safe, or has migrated the marking); returning an error aborts the load with
-// that error. storedFingerprint is empty for instances saved before fingerprints
-// were recorded.
+// that error. storedFingerprint is empty for a row that was not written by this
+// library's save path (every save stamps one).
 type DefinitionMigrationFunc func(ctx context.Context, id, storedFingerprint, currentFingerprint string) error
 
 // Manager handles workflow instances and their persistence.
@@ -37,9 +37,10 @@ type Manager struct {
 	listeners listenerSet
 
 	// useCache controls whether loaded instances are cached in the registry.
-	// When false, every GetWorkflow/LoadWorkflow reads fresh from storage — the
-	// correct mode for multi-replica deployments where a cached copy could be
-	// stale versus the database.
+	// Fresh loads are the default: they are correct in every deployment shape,
+	// and optimistic concurrency protects the saves. Caching is an explicit
+	// single-process optimization (WithRegistryCache) — a cached copy can be
+	// stale versus the database the moment another replica saves.
 	useCache bool
 
 	// onDefinitionMismatch, if set, is consulted when a loaded instance's stored
@@ -50,12 +51,14 @@ type Manager struct {
 // ManagerOption configures a Manager.
 type ManagerOption func(*Manager)
 
-// WithoutRegistryCache makes the Manager load every instance fresh from storage
-// instead of serving a cached copy from the registry. Use it in multi-replica
-// deployments, where a process-local cache can serve state that another replica
-// has already advanced; optimistic concurrency (ErrConflict) then protects saves.
-func WithoutRegistryCache() ManagerOption {
-	return func(m *Manager) { m.useCache = false }
+// WithRegistryCache makes the Manager serve loaded instances from the registry
+// instead of reading fresh from storage on every load. It is a single-process
+// optimization: a cached copy can be stale the moment another replica saves,
+// so never enable it in multi-replica deployments. The registry grows with
+// every distinct instance loaded; long-lived processes should EvictWorkflow
+// after finishing with an instance.
+func WithRegistryCache() ManagerOption {
+	return func(m *Manager) { m.useCache = true }
 }
 
 // WithDefinitionMigration installs a handler consulted when a persisted
@@ -70,7 +73,6 @@ func NewManager(registry *Registry, storage Storage, opts ...ManagerOption) *Man
 	m := &Manager{
 		registry: registry,
 		storage:  storage,
-		useCache: true,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -78,9 +80,9 @@ func NewManager(registry *Registry, storage Storage, opts ...ManagerOption) *Man
 	return m
 }
 
-// LoadWorkflow loads a workflow instance from storage. When registry caching is
-// enabled (the default) a cached instance is returned if present; otherwise the
-// instance is loaded fresh from storage and cached.
+// LoadWorkflow loads a workflow instance fresh from storage. With
+// WithRegistryCache enabled, a cached instance is returned if present and the
+// loaded instance is cached for next time.
 func (m *Manager) LoadWorkflow(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
 	if m.useCache {
 		if wf, err := m.registry.Workflow(id); err == nil {
@@ -182,21 +184,14 @@ func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *De
 	return wf, nil
 }
 
-// readState loads a workflow's persisted marking, context, and version, using
-// the versioned path when the backend supports optimistic concurrency.
+// readState loads a workflow's persisted marking, context, and
+// optimistic-concurrency version.
 func (m *Manager) readState(ctx context.Context, id string) (Marking, map[string]any, int64, error) {
-	if vs, ok := m.storage.(VersionedStorage); ok {
-		loaded, wfContext, version, err := vs.LoadVersionedState(ctx, id)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("failed to load workflow state: %w", err)
-		}
-		return loaded, wfContext, version, nil
-	}
-	loaded, wfContext, err := m.storage.LoadState(ctx, id)
+	loaded, wfContext, version, err := m.storage.LoadState(ctx, id)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to load workflow state: %w", err)
 	}
-	return loaded, wfContext, 0, nil
+	return loaded, wfContext, version, nil
 }
 
 // checkFingerprint compares the stored definition fingerprint against the
@@ -207,7 +202,11 @@ func (m *Manager) readState(ctx context.Context, id string) (Marking, map[string
 func (m *Manager) checkFingerprint(ctx context.Context, id string, definition *Definition, wfContext map[string]any) (migrated bool, err error) {
 	stored, ok := wfContext[defFingerprintKey].(string)
 	if !ok || stored == "" {
-		return false, nil // legacy instance saved before fingerprints; nothing to compare
+		// Every save stamps the fingerprint, so a persisted instance without
+		// one was not written by this library's save path. Treat it exactly
+		// like a mismatch: fail loudly, or route to the migration handler
+		// (which receives an empty storedFingerprint).
+		stored = ""
 	}
 	current := definition.Fingerprint()
 	if stored == current {
@@ -237,9 +236,9 @@ func contextForSave(ctxData map[string]any, definition *Definition) map[string]a
 
 // SaveWorkflow saves a workflow instance state to storage.
 //
-// When the backend is a VersionedStorage, the save is guarded by the workflow's
-// current version: if another writer saved first, it returns ErrConflict and the
-// workflow's version is left unchanged so the caller can reload and retry.
+// The save is guarded by the workflow's current version: if another writer
+// saved first, it returns ErrConflict and the workflow's version is left
+// unchanged so the caller can reload and retry.
 func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) error {
 	// Snapshot marking and context under the workflow's lock: handing the live
 	// state to the storage layer would race concurrent transitions and
@@ -247,13 +246,11 @@ func (m *Manager) SaveWorkflow(ctx context.Context, id string, wf *Workflow) err
 	marking, ctxData := wf.snapshotState()
 	ctxData = contextForSave(ctxData, wf.Definition())
 	due := m.dueForSave(wf.Definition(), marking)
-	newVersion, versioned, err := m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
+	newVersion, err := m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
 	if err != nil {
 		return err
 	}
-	if versioned {
-		wf.setVersion(newVersion)
-	}
+	wf.setVersion(newVersion)
 	return nil
 }
 
@@ -275,22 +272,14 @@ func (m *Manager) dueForSave(definition *Definition, marking Marking) *time.Time
 	return nil
 }
 
-// persistState saves a marking and context, selecting the highest capability the
-// backend supports and always maintaining the due index when the backend is a
-// DueStorage — so the index can never go stale, whatever save path a caller
-// takes. It returns the new version and whether the backend is versioned (an
-// unversioned backend reports version 0).
-func (m *Manager) persistState(ctx context.Context, id string, marking Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (newVersion int64, versioned bool, err error) {
-	switch s := m.storage.(type) {
-	case DueStorage:
-		v, err := s.SaveVersionedStateWithDue(ctx, id, marking, ctxData, expectedVersion, due)
-		return v, true, err
-	case VersionedStorage:
-		v, err := s.SaveVersionedState(ctx, id, marking, ctxData, expectedVersion)
-		return v, true, err
-	default:
-		return 0, false, s.SaveState(ctx, id, marking, ctxData)
+// persistState saves a marking and context, always maintaining the due index
+// when the backend is a DueStorage — so the index can never go stale, whatever
+// save path a caller takes. It returns the new version.
+func (m *Manager) persistState(ctx context.Context, id string, marking Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (int64, error) {
+	if ds, ok := m.storage.(DueStorage); ok {
+		return ds.SaveStateWithDue(ctx, id, marking, ctxData, expectedVersion, due)
 	}
+	return m.storage.SaveState(ctx, id, marking, ctxData, expectedVersion)
 }
 
 // ExecuteOption configures a single Manager.Execute call.
@@ -383,7 +372,7 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		if _, isDue := m.storage.(DueStorage); isDue {
 			if tds, ok = m.storage.(TransactionalDueStorage); !ok && definitionHasTimers(definition) {
 				return fmt.Errorf("WithTxSideEffect on a DueStorage backend with a timed definition requires a TransactionalDueStorage backend "+
-					"(implement SaveVersionedStateInTxWithDue so the due index commits atomically with state and effects): %w", errors.ErrUnsupported)
+					"(implement SaveStateInTxWithDue so the due index commits atomically with state and effects): %w", errors.ErrUnsupported)
 			}
 		}
 	}
@@ -424,12 +413,12 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 			// due backend (DueStorage but not TransactionalDueStorage) with a timed
 			// definition was already rejected before the loop.
 			if tds != nil {
-				_, err = tds.SaveVersionedStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, cfg.effects...)
+				_, err = tds.SaveStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, cfg.effects...)
 			} else {
-				_, err = ts.SaveVersionedStateInTx(ctx, id, marking, ctxData, wf.Version(), cfg.effects...)
+				_, err = ts.SaveStateInTx(ctx, id, marking, ctxData, wf.Version(), cfg.effects...)
 			}
 		default:
-			_, _, err = m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
+			_, err = m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
 		}
 		if err != nil {
 			if errors.Is(err, ErrConflict) {
@@ -448,9 +437,9 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 	return fmt.Errorf("%w: giving up after %d attempts", lastErr, maxAttempts)
 }
 
-// GetWorkflow gets a workflow instance from the registry or loads it from
-// storage. With registry caching disabled (WithoutRegistryCache) it always
-// loads fresh.
+// GetWorkflow gets a workflow instance, loading it fresh from storage (or from
+// the registry when WithRegistryCache is enabled). It is an alias of
+// LoadWorkflow.
 func (m *Manager) GetWorkflow(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
 	return m.LoadWorkflow(ctx, id, definition)
 }
@@ -463,20 +452,18 @@ func (m *Manager) CreateWorkflow(ctx context.Context, id string, definition *Def
 	}
 	wf.SetManager(m)
 
-	// Save initial state. With a versioned backend this inserts at version 1 and
-	// fails with ErrConflict if a workflow with this id already exists. A
-	// timer-bearing workflow's initial marking is already stamped, so its first
-	// deadline is indexed from creation.
+	// Save initial state. This inserts at version 1 and fails with ErrConflict
+	// if a workflow with this id already exists. A timer-bearing workflow's
+	// initial marking is already stamped, so its first deadline is indexed from
+	// creation.
 	marking, ctxData := wf.snapshotState()
 	ctxData = contextForSave(ctxData, definition)
 	due := m.dueForSave(definition, marking)
-	newVersion, versioned, err := m.persistState(ctx, id, marking, ctxData, 0, due)
+	newVersion, err := m.persistState(ctx, id, marking, ctxData, 0, due)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save initial state: %w", err)
 	}
-	if versioned {
-		wf.setVersion(newVersion)
-	}
+	wf.setVersion(newVersion)
 
 	if m.useCache {
 		if err := m.registry.AddWorkflow(wf); err != nil {

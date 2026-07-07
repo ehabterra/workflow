@@ -88,19 +88,10 @@ func ResolveTemplateValue(value any, ctx context.Context, wf *workflow.Workflow)
 	return resolved
 }
 
-// getStringFromContext retrieves a string value from context.
-// It tries string keys first (for backward compatibility and direct access).
-//
-// Note: Go's context.Value() requires exact type matching. If examples use typed keys
-// (like `type contextKey string; const actorKey contextKey = "actor"`), they must either:
-// 1. Use string keys: `context.WithValue(ctx, "actor", value)`
-// 2. Use the WithTemplateValue helper: `yaml.WithTemplateValue(ctx, "actor", value)`
-// 3. Store with both typed and string keys for compatibility
-//
-// This function only checks string keys. For typed keys, use WithTemplateValue or store
-// values with string keys directly.
+// getStringFromContext retrieves a string value stored in the context under a
+// string key — set it with WithTemplateValue (Go's context.Value matches on
+// exact type, so a caller-defined typed key is invisible here by design).
 func getStringFromContext(ctx context.Context, key string) string {
-	// Try string key (works if examples use string keys or WithTemplateValue)
 	if val := ctx.Value(key); val != nil {
 		if str, ok := val.(string); ok {
 			return str
@@ -110,35 +101,20 @@ func getStringFromContext(ctx context.Context, key string) string {
 	return ""
 }
 
-// getValueFromContext retrieves a value from context or workflow context.
-// It supports string keys, contextKey type keys, and custom string-based types.
-// Template variables like {{reason}} extract as strings, so we try multiple lookup strategies.
-//
-// Lookup order:
-// 1. String key (for backward compatibility and direct template resolution)
-// 2. contextKey type (for type-safe keys from this package)
-// 3. Custom string-based types (via reflection - tries common patterns)
-// 4. Workflow context (string keys)
+// getValueFromContext retrieves a template value: first from the request
+// context under a string key (set via WithTemplateValue), then from the
+// workflow's own context. String keys are the one canonical mechanism — a
+// caller-defined typed key can never be matched from here (type identity is
+// per-package), so no other lookup is attempted.
 func getValueFromContext(ctx context.Context, key string, wf *workflow.Workflow) any {
-	// First try string key (for template resolution and backward compatibility)
 	if val := ctx.Value(key); val != nil {
 		return val
 	}
-
-	// Try typed key pattern (common in examples: type contextKey string)
-	type contextKey string
-	typedKey := contextKey(key)
-	if val := ctx.Value(typedKey); val != nil {
-		return val
-	}
-
-	// Finally try workflow context (which uses string keys)
 	if wf != nil {
 		if val, ok := wf.Context(key); ok {
 			return val
 		}
 	}
-
 	return nil
 }
 

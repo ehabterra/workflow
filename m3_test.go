@@ -29,12 +29,7 @@ type memRow struct {
 
 func newMemStore() *memStore { return &memStore{rows: make(map[string]memRow)} }
 
-func (s *memStore) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
-	m, c, _, err := s.LoadVersionedState(ctx, id)
-	return m, c, err
-}
-
-func (s *memStore) LoadVersionedState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
+func (s *memStore) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, ok := s.rows[id]
@@ -54,13 +49,7 @@ func (s *memStore) LoadVersionedState(ctx context.Context, id string) (workflow.
 	return m, c, row.version, nil
 }
 
-func (s *memStore) SaveState(ctx context.Context, id string, m workflow.Marking, c map[string]any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.putLocked(id, m, c, s.rows[id].version+1)
-}
-
-func (s *memStore) SaveVersionedState(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64) (int64, error) {
+func (s *memStore) SaveState(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, ok := s.rows[id]
@@ -139,7 +128,7 @@ func TestManager_DefinitionFingerprint_RoundTripAndMismatch(t *testing.T) {
 	ctx := context.Background()
 	def := abDef(t)
 
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	if _, err := mgr.CreateWorkflow(ctx, "wf", def, "a"); err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
@@ -172,7 +161,7 @@ func TestManager_DefinitionFingerprint_RoundTripAndMismatch(t *testing.T) {
 
 	// ...unless a migration handler approves it.
 	called := false
-	migrating := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache(),
+	migrating := workflow.NewManager(workflow.NewRegistry(), store,
 		workflow.WithDefinitionMigration(func(_ context.Context, id, stored, current string) error {
 			called = true
 			if stored == "" || current == "" || stored == current {
@@ -196,28 +185,28 @@ func TestManager_LoadValidatesAllPlaces(t *testing.T) {
 	// Persist a marking that references a place not in the definition. Bypass the
 	// Manager (which would reject it on create) and write straight to storage.
 	stray := workflow.NewMarking([]workflow.Place{"a", "ghost"})
-	if _, err := store.SaveVersionedState(ctx, "wf", stray, map[string]any{}, 0); err != nil {
-		t.Fatalf("seed SaveVersionedState: %v", err)
+	if _, err := store.SaveState(ctx, "wf", stray, map[string]any{}, 0); err != nil {
+		t.Fatalf("seed SaveState: %v", err)
 	}
 
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	if _, err := mgr.LoadWorkflow(ctx, "wf", def); !errors.Is(err, workflow.ErrDefinitionMismatch) {
 		t.Fatalf("LoadWorkflow with stray place err = %v, want ErrDefinitionMismatch", err)
 	}
 }
 
-// conflictInjector fails the first n SaveVersionedState calls with ErrConflict
+// conflictInjector fails the first n SaveState calls with ErrConflict
 // to drive Execute's retry loop deterministically.
 type conflictInjector struct {
 	*memStore
 	remaining int32
 }
 
-func (c *conflictInjector) SaveVersionedState(ctx context.Context, id string, m workflow.Marking, cd map[string]any, expected int64) (int64, error) {
+func (c *conflictInjector) SaveState(ctx context.Context, id string, m workflow.Marking, cd map[string]any, expected int64) (int64, error) {
 	if atomic.AddInt32(&c.remaining, -1) >= 0 {
 		return 0, fmt.Errorf("%w: injected", workflow.ErrConflict)
 	}
-	return c.memStore.SaveVersionedState(ctx, id, m, cd, expected)
+	return c.memStore.SaveState(ctx, id, m, cd, expected)
 }
 
 func TestManager_Execute_RetriesOnConflict(t *testing.T) {
@@ -225,7 +214,7 @@ func TestManager_Execute_RetriesOnConflict(t *testing.T) {
 	ctx := context.Background()
 	def := abDef(t)
 
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	if _, err := mgr.CreateWorkflow(ctx, "wf", def, "a"); err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
@@ -253,7 +242,7 @@ func TestManager_Execute_NoLostUpdates(t *testing.T) {
 	ctx := context.Background()
 	def := abDef(t)
 
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	if _, err := mgr.CreateWorkflow(ctx, "wf", def, "a"); err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
@@ -291,13 +280,13 @@ func TestManager_Execute_NoLostUpdates(t *testing.T) {
 	}
 }
 
-func TestManager_WithoutRegistryCache_FreshLoads(t *testing.T) {
+func TestManager_FreshLoadsByDefault(t *testing.T) {
 	store := newMemStore()
 	ctx := context.Background()
 	def := abDef(t)
 
-	// Default manager caches: two gets return the same instance.
-	cached := workflow.NewManager(workflow.NewRegistry(), store)
+	// Opt-in caching: two gets return the same instance.
+	cached := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithRegistryCache())
 	if _, err := cached.CreateWorkflow(ctx, "wf", def, "a"); err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
@@ -307,8 +296,8 @@ func TestManager_WithoutRegistryCache_FreshLoads(t *testing.T) {
 		t.Fatal("cached manager returned different instances for the same id")
 	}
 
-	// Fresh-load manager returns a new instance each time and reflects saves.
-	fresh := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	// The default manager loads fresh each time and reflects saves.
+	fresh := workflow.NewManager(workflow.NewRegistry(), store)
 	c, _ := fresh.GetWorkflow(ctx, "wf", def)
 	d, _ := fresh.GetWorkflow(ctx, "wf", def)
 	if c == d {
@@ -388,7 +377,7 @@ func TestManager_DefinitionMigration_RemovedPlaceAndReload(t *testing.T) {
 	}
 
 	// Persist an instance resting at v1's "b".
-	mgr1 := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr1 := workflow.NewManager(workflow.NewRegistry(), store)
 	if _, err := mgr1.CreateWorkflow(ctx, "wf", v1, "a"); err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
@@ -407,14 +396,14 @@ func TestManager_DefinitionMigration_RemovedPlaceAndReload(t *testing.T) {
 	// With a handler that actually migrates the persisted marking b -> done:
 	// the handler must be consulted, and the load must see the rewrite.
 	called := false
-	migrating := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache(),
+	migrating := workflow.NewManager(workflow.NewRegistry(), store,
 		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
 			called = true
-			_, _, version, err := store.LoadVersionedState(ctx, id)
+			_, _, version, err := store.LoadState(ctx, id)
 			if err != nil {
 				return err
 			}
-			_, err = store.SaveVersionedState(ctx, id,
+			_, err = store.SaveState(ctx, id,
 				workflow.NewMarking([]workflow.Place{"done"}),
 				map[string]any{"__workflow_def_fingerprint": current}, version)
 			return err

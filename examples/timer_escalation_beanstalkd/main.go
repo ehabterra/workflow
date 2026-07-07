@@ -161,7 +161,7 @@ func main() {
 
 	// A DueStorage backend + WithoutRegistryCache is the multi-replica-safe setup:
 	// every load reads fresh state, and FireDue saves under optimistic concurrency.
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 
 	// --- 2. Definition: loaded from YAML so `after: 72h` is on show. ---
 	def := loadDefinition()

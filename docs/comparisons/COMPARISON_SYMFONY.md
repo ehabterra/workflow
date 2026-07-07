@@ -199,7 +199,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 
 #### Ours
 - **Built-in Storage**: Storage interface with SQLite and PostgreSQL implementations
-- **Automatic Persistence**: Manager can auto-save; optimistic concurrency via `VersionedStorage`
+- **Automatic Persistence**: Manager can auto-save; built-in optimistic concurrency
 - **Pluggable**: Can implement custom storage backends
 
 **Advantage (Ours)**: Built-in persistence, not framework-dependent.
@@ -344,7 +344,7 @@ wf.AddEventListener(workflow.EventBeforeTransition, func(event workflow.Event) e
 ### 2. Built-in Storage ✅
 - Storage interface
 - SQLite and PostgreSQL implementations
-- Automatic persistence with optimistic concurrency (`VersionedStorage`)
+- Automatic persistence with built-in optimistic concurrency
 - Custom fields support
 
 **Status**: Implemented

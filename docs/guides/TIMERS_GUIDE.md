@@ -157,7 +157,7 @@ store, _ := storage.NewSQLiteStorage(db) // due column is on by default ("due_at
 if err := store.EnsureSchema(ctx); err != nil {
     log.Fatal(err)
 }
-mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+mgr := workflow.NewManager(workflow.NewRegistry(), store)
 ```
 
 The Manager keeps the index current on **every** save path (`SaveWorkflow`,
@@ -167,10 +167,10 @@ marking. To disable the index on a table you cannot migrate, pass
 fleet scan is simply unavailable for it.
 
 > **Composing transactions by hand?** Storage-level saves do **not** maintain the
-> due index: `SaveState`, `SaveVersionedState`, `SaveVersionedStateTx`, and
-> `SaveVersionedStateInTx` all leave the due column untouched. If you drive a timed
+> due index: `SaveState`, `SaveStateTx`, and `SaveStateInTx` all leave the due
+> column untouched. If you drive a timed
 > definition's saves manually (e.g. inside `RunInTx`), use
-> `SaveVersionedStateWithDue` / `SaveVersionedStateInTxWithDue` — or just go through
+> `SaveStateWithDue` / `SaveStateInTxWithDue` — or just go through
 > the Manager — so the index commits atomically with the state change.
 
 ### 2. The cron loop

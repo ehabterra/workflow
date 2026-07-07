@@ -27,7 +27,7 @@ func TestManager_VersionedSave_Conflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStorage: %v", err)
 	}
-	if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
+	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 

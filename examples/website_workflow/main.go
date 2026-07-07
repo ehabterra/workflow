@@ -274,9 +274,9 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Apply transition using the helper which handles history automatically
-		err = yaml.ApplyTransitionWithHistory(
+		err = yaml.ApplyTransitionByNameWithHistory(
 			wf,
-			targetTransition.To(),
+			targetTransition.Name(),
 			historyStore,
 			ctx,
 			notes, // Override notes (empty string will use YAML default)

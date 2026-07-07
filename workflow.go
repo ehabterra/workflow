@@ -63,53 +63,45 @@ func (w *Workflow) setClock(now func() time.Time) {
 	w.now = now
 }
 
-// Storage defines the interface for persisting workflow state.
-// It is responsible for loading and saving the workflow's places (state)
-// and its context data (custom fields).
+// Storage defines the interface for persisting workflow state. It is
+// responsible for loading and saving the workflow's marking, its context data,
+// and its optimistic-concurrency version.
+//
+// Versioning is not optional: every row carries a monotonically increasing
+// version, a load returns it, and a save succeeds only if the stored version
+// still matches — two writers racing to save the same workflow can never
+// silently clobber each other; the loser gets ErrConflict. (An unversioned
+// backend would lose updates by design, so the contract does not allow one.)
+//
+// The marking and the version MUST come from one atomic snapshot: reading them
+// separately allows a concurrent commit to pair a stale marking with the new
+// version, which turns the version check into a lost update. The storagetest
+// conformance suite verifies this.
 //
 // Every method takes a context.Context so callers can apply cancellation and
 // deadlines; implementations are expected to honor it (e.g. by using the
 // database/sql *Context methods).
 type Storage interface {
-	// LoadState loads the workflow's marking and its context data for the given ID.
-	LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, err error)
+	// LoadState loads the workflow's marking, context data, and current version
+	// in one atomic snapshot. A never-saved workflow returns ErrWorkflowNotFound.
+	LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, version int64, err error)
 
-	// SaveState saves the workflow's marking and its context data for the given ID.
-	// The full marking is persisted, so data-carrying (colored) tokens round-trip;
-	// simple boolean workflows serialize to the compact place-array form.
-	//
-	// Implementations must persist the ENTIRE context map, so every key set via
-	// SetContext survives a save/load round-trip (JSON-encoded values may come
-	// back with adjusted types, e.g. numbers as float64). Silently persisting
-	// only a subset of keys is a contract violation; the storagetest conformance
-	// suite checks this.
-	SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
-
-	// DeleteState removes the workflow state for the given ID.
-	DeleteState(ctx context.Context, id string) error
-}
-
-// VersionedStorage is an optional interface a Storage backend may implement to
-// support optimistic concurrency control. When the Manager is backed by a
-// VersionedStorage it uses these methods so that two writers racing to save the
-// same workflow cannot silently clobber each other: the second save fails with
-// ErrConflict instead.
-//
-// Each workflow row carries a monotonically increasing version. A caller loads
-// the current version with LoadVersionedState, and passes it back to
-// SaveVersionedState; the save only succeeds if the stored version still matches.
-type VersionedStorage interface {
-	Storage
-
-	// LoadVersionedState loads the workflow's marking, context data, and current
-	// version. A brand-new (never saved) workflow has version 0.
-	LoadVersionedState(ctx context.Context, id string) (marking Marking, context map[string]any, version int64, err error)
-
-	// SaveVersionedState saves the workflow only if the stored version equals
+	// SaveState saves the workflow only if the stored version equals
 	// expectedVersion, returning the new (incremented) version on success. Pass
 	// expectedVersion 0 to create a new workflow. A mismatch — because another
 	// writer saved first, or the row already exists — returns ErrConflict.
-	SaveVersionedState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
+	//
+	// The full marking is persisted, so data-carrying (colored) tokens
+	// round-trip; simple boolean workflows serialize to the compact place-array
+	// form. Implementations must persist the ENTIRE context map, so every key
+	// set via SetContext survives a save/load round-trip (JSON-encoded values
+	// may come back with adjusted types, e.g. numbers as float64). Silently
+	// persisting only a subset of keys is a contract violation; the storagetest
+	// conformance suite checks this.
+	SaveState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
+
+	// DeleteState removes the workflow state for the given ID.
+	DeleteState(ctx context.Context, id string) error
 }
 
 // ListOptions controls pagination for enumerating persisted workflow IDs.
@@ -130,31 +122,31 @@ type ListableStorage interface {
 	ListIDs(ctx context.Context, opts ListOptions) ([]string, error)
 }
 
-// TxSideEffect is a write executed atomically with a versioned state save —
-// typically an audit/history record or an outbox row. The tx argument is
-// backend-specific: the SQL backends pass a *sql.Tx. An effect that returns an
-// error aborts the whole transaction, so the state change and the effect either
-// both commit or both roll back.
+// TxSideEffect is a write executed atomically with a state save — typically an
+// audit/history record or an outbox row. The tx argument is backend-specific:
+// the SQL backends pass a *sql.Tx. An effect that returns an error aborts the
+// whole transaction, so the state change and the effect either both commit or
+// both roll back.
 type TxSideEffect func(ctx context.Context, tx any) error
 
-// TransactionalStorage is an optional interface a VersionedStorage backend may
-// implement to compose a versioned save with additional writes in one atomic
-// transaction. It is what makes "fire a transition + append its history record"
+// TransactionalStorage is an optional interface a Storage backend may implement
+// to compose a state save with additional writes in one atomic transaction. It
+// is what makes "fire a transition + append its history record"
 // crash-consistent: a process dying between the two can never leave the state
 // and the audit log disagreeing. Manager.Execute uses it when side effects are
 // registered via WithTxSideEffect.
 type TransactionalStorage interface {
-	VersionedStorage
+	Storage
 
-	// SaveVersionedStateInTx behaves like SaveVersionedState but runs the save
-	// and every side effect inside a single transaction, committing only if all
-	// succeed. Effects run in order after the state write; each receives the
+	// SaveStateInTx behaves like SaveState but runs the save and every side
+	// effect inside a single transaction, committing only if all succeed.
+	// Effects run in order after the state write; each receives the
 	// backend-specific transaction handle.
-	SaveVersionedStateInTx(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, effects ...TxSideEffect) (newVersion int64, err error)
+	SaveStateInTx(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, effects ...TxSideEffect) (newVersion int64, err error)
 }
 
-// DueStorage is an optional interface a VersionedStorage backend may implement
-// to maintain a per-instance "next due" index and scan the fleet for instances
+// DueStorage is an optional interface a Storage backend may implement to
+// maintain a per-instance "next due" index and scan the fleet for instances
 // whose deadline has elapsed. It is the storage primitive behind host-driven
 // timers (M4): a host cron finds the due instances with ListDue and advances
 // them with Manager.FireDue, turning a fleet-wide deadline ("escalate if not
@@ -167,17 +159,17 @@ type TransactionalStorage interface {
 // due means no timer is currently running for the instance — the backend
 // stores SQL NULL and such an instance never matches ListDue.
 //
-// The interface embeds VersionedStorage because the fleet-timer model is
-// inherently multi-writer (many hosts may scan the same fleet); optimistic
-// concurrency is what keeps concurrent FireDue calls from clobbering each other.
+// The fleet-timer model is inherently multi-writer (many hosts may scan the
+// same fleet); Storage's built-in optimistic concurrency is what keeps
+// concurrent FireDue calls from clobbering each other.
 type DueStorage interface {
-	VersionedStorage
+	Storage
 
-	// SaveVersionedStateWithDue behaves like SaveVersionedState but also records
-	// the instance's next-due time (nil clears it, so a workflow that reaches a
-	// timer-free state drops out of ListDue). The Manager calls it in place of
-	// SaveVersionedState so the due index is maintained on every save.
-	SaveVersionedStateWithDue(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time) (newVersion int64, err error)
+	// SaveStateWithDue behaves like SaveState but also records the instance's
+	// next-due time (nil clears it, so a workflow that reaches a timer-free
+	// state drops out of ListDue). The Manager calls it in place of SaveState
+	// so the due index is maintained on every save.
+	SaveStateWithDue(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time) (newVersion int64, err error)
 
 	// ListDue returns the IDs of instances whose stored next-due time is
 	// non-null and at or before `before`, ordered by due time ascending (then by
@@ -186,23 +178,23 @@ type DueStorage interface {
 	ListDue(ctx context.Context, before time.Time, limit int) ([]string, error)
 }
 
-// TransactionalDueStorage composes a due-aware versioned save with atomic side
-// effects — the transactional-path counterpart of DueStorage.
-// SaveVersionedStateWithDue. A backend that is both a TransactionalStorage and
-// a DueStorage MUST implement it so Manager.Execute keeps the due index current
-// even when it commits state together with a history/outbox effect. Manager.Execute
-// requires it: calling Execute with a WithTxSideEffect option against a timed
-// definition on a backend that is a DueStorage but not a TransactionalDueStorage
-// is rejected (errors.ErrUnsupported), because committing state and effect without
-// updating the due column in the same transaction would silently corrupt the index.
+// TransactionalDueStorage composes a due-aware save with atomic side effects —
+// the transactional-path counterpart of DueStorage.SaveStateWithDue. A backend
+// that is both a TransactionalStorage and a DueStorage MUST implement it so
+// Manager.Execute keeps the due index current even when it commits state
+// together with a history/outbox effect. Manager.Execute requires it: calling
+// Execute with a WithTxSideEffect option against a timed definition on a
+// backend that is a DueStorage but not a TransactionalDueStorage is rejected
+// (errors.ErrUnsupported), because committing state and effect without updating
+// the due column in the same transaction would silently corrupt the index.
 type TransactionalDueStorage interface {
 	DueStorage
 	TransactionalStorage
 
-	// SaveVersionedStateInTxWithDue behaves like SaveVersionedStateInTx but also
-	// records the instance's next-due time (nil clears it), so the state change,
-	// the due-index update, and every side effect commit or roll back together.
-	SaveVersionedStateInTxWithDue(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time, effects ...TxSideEffect) (newVersion int64, err error)
+	// SaveStateInTxWithDue behaves like SaveStateInTx but also records the
+	// instance's next-due time (nil clears it), so the state change, the
+	// due-index update, and every side effect commit or roll back together.
+	SaveStateInTxWithDue(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time, effects ...TxSideEffect) (newVersion int64, err error)
 }
 
 // NewWorkflow creates a workflow instance starting at initialPlace.

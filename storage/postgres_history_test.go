@@ -16,7 +16,7 @@ import (
 
 // TestPostgresHistory verifies the PostgreSQL history dialect end-to-end:
 // schema creation (BIGSERIAL/TIMESTAMPTZ), $N placeholders on save and query,
-// time round-tripping, and atomic state+history via SaveVersionedStateInTx.
+// time round-tripping, and atomic state+history via SaveStateInTx.
 func TestPostgresHistory(t *testing.T) {
 	dsn := postgresDSN(t) // skips when no database is available
 
@@ -89,17 +89,17 @@ func TestPostgresHistory(t *testing.T) {
 	if _, err := db.ExecContext(ctx, store.GenerateSchema()); err != nil {
 		t.Fatalf("create state schema: %v", err)
 	}
-	if _, err := store.SaveVersionedState(ctx, "wf2", workflow.NewMarking([]workflow.Place{"a"}), nil, 0); err != nil {
+	if _, err := store.SaveState(ctx, "wf2", workflow.NewMarking([]workflow.Place{"a"}), nil, 0); err != nil {
 		t.Fatalf("create wf2: %v", err)
 	}
-	_, err = store.SaveVersionedStateInTx(ctx, "wf2", workflow.NewMarking([]workflow.Place{"b"}), nil, 1,
+	_, err = store.SaveStateInTx(ctx, "wf2", workflow.NewMarking([]workflow.Place{"b"}), nil, 1,
 		func(ctx context.Context, tx any) error {
 			return hist.SaveTransitionTx(ctx, tx.(*sql.Tx), &history.TransitionRecord{
 				WorkflowID: "wf2", FromState: "a", ToState: "b", Transition: "go", CreatedAt: at,
 			})
 		})
 	if err != nil {
-		t.Fatalf("SaveVersionedStateInTx: %v", err)
+		t.Fatalf("SaveStateInTx: %v", err)
 	}
 	if recs, err := hist.ListHistory(ctx, "wf2", history.QueryOptions{}); err != nil || len(recs) != 1 {
 		t.Fatalf("wf2 history: %v, %d records, want 1", err, len(recs))

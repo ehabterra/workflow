@@ -104,7 +104,7 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 
 	// Fresh loads on every request: correct across replicas, and the demo is
 	// nowhere near the scale where the registry cache would matter.
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 
 	a := &App{
 		db:         db,

@@ -104,16 +104,18 @@ func TestConcurrentApplyTransition_NoPhantomToken(t *testing.T) {
 // race detector sees any concurrent mutation of live state during a save.
 type marshalingStorage struct{}
 
-func (marshalingStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
-	return nil, nil, workflow.ErrWorkflowNotFound
+func (marshalingStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
+	return nil, nil, 0, workflow.ErrWorkflowNotFound
 }
 
-func (marshalingStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any) error {
+func (marshalingStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
 	if _, err := json.Marshal(marking); err != nil {
-		return err
+		return 0, err
 	}
-	_, err := json.Marshal(ctxData)
-	return err
+	if _, err := json.Marshal(ctxData); err != nil {
+		return 0, err
+	}
+	return expectedVersion + 1, nil
 }
 
 func (marshalingStorage) DeleteState(ctx context.Context, id string) error { return nil }
