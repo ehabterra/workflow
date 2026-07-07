@@ -201,9 +201,6 @@ func TestNewLoaderWithEnv(t *testing.T) {
 	}
 
 	loader := yaml.NewLoaderWithEnv(envBuilder)
-	if loader == nil {
-		t.Fatal("NewLoaderWithEnv() should not return nil")
-	}
 	if loader.EnvBuilder == nil {
 		t.Error("NewLoaderWithEnv() should set EnvBuilder")
 	}
