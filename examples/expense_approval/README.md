@@ -75,12 +75,34 @@ in the *same transaction* as the state save (`app.go: fire`). The
 crash-consistency test injects a failing side effect and proves neither half
 lands. (Timer firings are the documented exception — see the friction log.)
 
+**Guards route, straight from context.** `submit` is an XOR-split decided
+by guard expressions over the workflow context: `amount <= 100.0` sends
+petty cash straight to `approved` (`submit_auto`), anything else into
+parallel review. No engine primitive picks the route — the host tries each
+variant and treats a guard rejection as "not this path" (`routeSubmit`),
+which is friction entry #3.
+
+**Cycles are just arcs too.** `revise` closes the loop: a rejected expense
+returns to `draft`, takes an updated amount, and re-routes through the
+submit guards — possibly straight to auto-approval. The catch is the
+cancellation-regions gap: the host must clear the stranded sibling branch's
+tokens BY HAND (`ClearPlace` × 6 in `Revise`) or round two double-fires and
+inherits round one's stale escalation deadline. That token surgery is the
+top-ranked finding in the friction log.
+
 **Colored tokens where entities flow together.** The payment net
 (`payment.yaml`) is the opposite modeling style: ONE long-lived instance,
 where every approved expense is a token carrying
-`{expense_id, amount, submitter}`. The batch run fires `pay` per token;
-the guard `token.amount <= 5000.0` holds big amounts in `payable` for manual
-review. Totals on the dashboard come from `AggregateTokens`.
+`{expense_id, amount, submitter}`. The batch run fires `pay` per token; the
+guard `token.amount <= 5000.0` holds big amounts in `payable`, and a
+reviewer pays those out individually with the `release` transition (manual
+review, reviewer recorded in the audit trail). Totals come from
+`AggregateTokens`.
+
+**Definitions evolve; the fingerprint notices.** Adding `release`/`revise`
+changed both nets' fingerprints, so the app installs a
+`WithDefinitionMigration` hook that approves the (additive) upgrades —
+and the loader still re-validates every loaded place afterwards.
 
 **What the library refuses to do for you** — and this app does explicitly:
 terminality on rejection (no cancellation regions yet; `ErrTerminal` in
@@ -94,13 +116,16 @@ go test -race ./...
 ```
 
 The tests are the acceptance criteria: escalation via a future-`now` tick
-(no sleeping), webhook redelivery dedup, reject terminality, the payment
-guard, crash consistency (state+history roll back together), concurrent
-approvals under optimistic-concurrency retry, restart resuming the fleet,
-reconcile repairing the documented crash windows (including deleting
-creation-crash drafts), the stranded-branch escalation staying harmless
-after a rejection, tick-vs-approve and batch-vs-batch races, and input
-validation (`Inf`/`NaN` amounts never reach storage).
+(no sleeping), webhook redelivery dedup, reject terminality, guard-routed
+auto-approval and its exact boundary, the revise/resubmit cycle (including
+the stranded-token surgery and a quiet due index afterwards), the payment
+guard plus manual release (idempotent, audited), crash consistency
+(state+history roll back together), concurrent approvals under
+optimistic-concurrency retry, restart resuming the fleet, reconcile
+repairing the documented crash windows (including deleting creation-crash
+drafts), the stranded-branch escalation staying harmless after a rejection,
+tick-vs-approve and batch-vs-batch races, and input validation (`Inf`/`NaN`
+amounts never reach storage).
 
 Set `EXPENSE_POSTGRES_DSN` to also run the lifecycle against PostgreSQL
 (CI does; it drops and recreates the app's tables — use a scratch

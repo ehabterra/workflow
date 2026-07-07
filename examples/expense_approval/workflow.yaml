@@ -1,9 +1,13 @@
 # The expense-approval net: one workflow instance per expense.
 #
-# submit AND-splits into two parallel review branches (legal, finance);
-# finalize AND-joins them. Each pending branch escalates after 72h (M4
-# host-driven timer) but stays approvable/rejectable. mark_paid is fired by
-# the batch payment run (see payment.yaml).
+# submit routes by amount (guards read the workflow context): petty cash
+# (<= 100) auto-approves; everything else AND-splits into two parallel
+# review branches (legal, finance) that finalize AND-joins. Each pending
+# branch escalates after 72h (M4 host-driven timer) but stays
+# approvable/rejectable. revise closes the loop: a rejected expense returns
+# to draft for resubmission (a cycle — the host must clear the stranded
+# sibling branch's token by hand; see docs/DOGFOOD.md). mark_paid is fired
+# by the batch payment run (see payment.yaml).
 #
 # Known modeling friction (docs/DOGFOOD.md): rejection does not cancel the
 # sibling branch (no cancellation regions yet), and "approve from pending OR
@@ -23,9 +27,14 @@ workflow:
     - name: rejected
     - name: paid
   transitions:
+    - name: submit_auto
+      from: [draft]
+      to: [approved]
+      guard: "amount <= 100.0"
     - name: submit
       from: [draft]
       to: [pending_legal, pending_finance]
+      guard: "amount > 100.0"
     - name: legal_approve
       from: [pending_legal]
       to: [legal_ok]
@@ -61,6 +70,9 @@ workflow:
     - name: finalize
       from: [legal_ok, finance_ok]
       to: [approved]
+    - name: revise
+      from: [rejected]
+      to: [draft]
     - name: mark_paid
       from: [approved]
       to: [paid]

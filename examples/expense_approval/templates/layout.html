@@ -161,6 +161,40 @@
   }
   .actions-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: 1rem 0 0; }
 
+  /* Flash feedback after actions: slides in, fades out on its own. */
+  .flash {
+    background: var(--pine-soft); color: var(--pine-deep); border: 1px solid var(--pine);
+    border-radius: 9px; padding: .6rem 1rem; margin: 0 0 1.2rem; font-size: .92rem;
+    animation: flash-in .25s ease-out, flash-out .8s ease-in 6s forwards;
+  }
+  @keyframes flash-in { from { opacity: 0; transform: translateY(-.4rem); } }
+  @keyframes flash-out { to { opacity: 0; visibility: hidden; margin: 0; padding: 0; height: 0; border: 0; } }
+
+  /* Stat chips double as dashboard filters. */
+  a.stat { text-decoration: none; }
+  a.stat:hover { border-color: var(--pine); }
+  .stat.active { border-color: var(--pine); background: var(--pine-soft); color: var(--pine-deep); }
+  .stat.active b { color: var(--pine-deep); }
+
+  .deadline-overdue { color: var(--amber); font-weight: 600; }
+
+  /* Payment status pill on the expense page. */
+  .pay-queued { background: var(--pine-soft); color: var(--pine-deep); }
+  .pay-held { background: var(--amber-soft); color: var(--amber); }
+  .pay-paid { background: var(--sky-soft); color: var(--sky); }
+
+  .btn-release { background: var(--amber); color: #fff; }
+  .btn-release:hover { background: #935e07; }
+
+  /* Acting-as identity in the top bar, injected into every action form. */
+  .whoami { margin-left: auto; display: flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--slate); }
+  .whoami input {
+    width: 9rem; padding: .3rem .5rem; font-size: .85rem;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--card);
+  }
+  .toolbar { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin: 0 0 1rem; }
+  .toolbar .muted a { color: var(--pine); }
+
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
   }
@@ -179,13 +213,37 @@
       <a href="/batch">Payment batch</a>
       <a href="/metrics">Metrics</a>
     </nav>
+    <label class="whoami">acting as
+      <input id="whoami" placeholder="your name" autocomplete="username">
+    </label>
   </div>
 </header>
 <main>
 {{end}}
 
+{{define "flash"}}{{if .}}<div class="flash" role="status">{{.}}</div>{{end}}{{end}}
+
 {{define "foot"}}
 </main>
+<script>
+  // "Acting as" identity: remembered locally, injected into every action
+  // form as the actor field (server defaults sensibly when empty). Plain
+  // inline script — no build step; the app works fully without JS.
+  (function () {
+    var box = document.getElementById('whoami');
+    if (!box) return;
+    box.value = localStorage.getItem('whoami') || '';
+    box.addEventListener('change', function () { localStorage.setItem('whoami', box.value); });
+    document.addEventListener('submit', function (e) {
+      var form = e.target;
+      if (form.method.toLowerCase() !== 'post' || !box.value) return;
+      if (form.querySelector('input[name=actor]')) return; // explicit field wins
+      var actor = document.createElement('input');
+      actor.type = 'hidden'; actor.name = 'actor'; actor.value = box.value;
+      form.appendChild(actor);
+    });
+  })();
+</script>
 </body>
 </html>
 {{end}}

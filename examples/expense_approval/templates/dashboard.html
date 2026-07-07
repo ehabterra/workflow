@@ -1,15 +1,25 @@
 {{template "head" "Dashboard"}}
+{{template "flash" .Flash}}
 <p class="eyebrow">Fleet</p>
 <h1>Expenses</h1>
 <p class="lede">Every expense is one workflow instance; this table is the live marking of the fleet.</p>
 
 <div class="stats">
+  <a class="stat{{if not .Filter}} active{{end}}" href="/">all</a>
   {{range $state, $n := .Stats}}
-  <span class="stat{{if eq $state "escalated"}} warn{{end}}"><b>{{$n}}</b>{{$state}}</span>
+  <a class="stat{{if eq $state "escalated"}} warn{{end}}{{if eq $state $.Filter}} active{{end}}" href="/?state={{$state}}"><b>{{$n}}</b>{{$state}}</a>
   {{end}}
   <span class="stat"><b>{{money .Payment.PayableTotal}}</b>awaiting payout</span>
   <span class="stat"><b>{{money .Payment.PaidOutTotal}}</b>paid out</span>
 </div>
+
+<div class="toolbar">
+  <span class="muted" style="font-size:.85rem">
+    {{if .Refresh}}Auto-refresh on (10s) · <a href="/{{if .Filter}}?state={{.Filter}}{{end}}">turn off</a>
+    {{else}}<a href="/?refresh=10{{if .Filter}}&state={{.Filter}}{{end}}">Auto-refresh</a> to watch escalations live{{end}}
+  </span>
+</div>
+{{if .Refresh}}<meta http-equiv="refresh" content="10">{{end}}
 
 <div class="card table-wrap">
 <table>
@@ -21,10 +31,12 @@
     <td class="num">{{money .Amount}}</td>
     <td><span class="state state-{{stateClass .State}}">{{.State}}</span></td>
     <td class="mono muted">{{range .Places}}{{.}} {{end}}</td>
-    <td class="mono muted">{{if .NextDue}}{{.NextDue.Format "Jan 2, 15:04"}}{{else}}—{{end}}</td>
+    <td class="mono {{if overdue .NextDue}}deadline-overdue{{else}}muted{{end}}">{{deadline .NextDue}}</td>
   </tr>
   {{else}}
-  <tr><td colspan="6" class="empty">No expenses yet — <a href="/expenses/new">submit the first one</a>.</td></tr>
+  <tr><td colspan="6" class="empty">
+    {{if .Filter}}No {{.Filter}} expenses. <a href="/">Show all</a>.{{else}}No expenses yet — <a href="/expenses/new">submit the first one</a>.{{end}}
+  </td></tr>
   {{end}}
 </table>
 </div>
