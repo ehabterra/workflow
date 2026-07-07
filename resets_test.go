@@ -220,7 +220,9 @@ func TestResetArcChangesFingerprint(t *testing.T) {
 	if build(false).Fingerprint() == build(true).Fingerprint() {
 		t.Fatal("adding a reset arc must change the fingerprint")
 	}
-	if build(true).Fingerprint() != build(true).Fingerprint() {
+	first := build(true).Fingerprint()
+	second := build(true).Fingerprint()
+	if first != second {
 		t.Fatal("fingerprint must be stable")
 	}
 }
