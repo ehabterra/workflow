@@ -1,0 +1,19 @@
+{{template "head" "Submit expense"}}
+<p class="eyebrow">New instance</p>
+<h1>Submit an expense</h1>
+<p class="lede">Submitting starts legal and finance review in parallel. Each review escalates if it sits for 3 days.</p>
+
+<form class="card form-card" method="post" action="/expenses">
+  <label>Submitter
+    <input name="submitter" required autofocus placeholder="alice">
+  </label>
+  <label>Description
+    <input name="description" placeholder="Team dinner, client visit…">
+  </label>
+  <label>Amount
+    <span class="hint">Amounts over 5000.00 are approved as usual but held from the payment batch for manual review.</span>
+    <input class="mono" name="amount" type="number" step="0.01" min="0.01" required placeholder="240.75">
+  </label>
+  <div><button class="btn-approve" type="submit">Submit expense</button></div>
+</form>
+{{template "foot"}}

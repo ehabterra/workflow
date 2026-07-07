@@ -19,6 +19,7 @@ package storagetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -516,6 +517,57 @@ func runVersioned(t *testing.T, newStore Factory) {
 		}
 		if _, err := vs.SaveVersionedState(ctx, "wf", mk("c"), nil, 1); !errors.Is(err, workflow.ErrConflict) {
 			t.Fatalf("stale update err = %v, want ErrConflict", err)
+		}
+	})
+
+	// Regression for a lost-update bug found by the M5 dogfood: reading the
+	// marking and the version in two separate queries let a concurrent commit
+	// slip in between, pairing a stale marking with the new version — and a
+	// later save from that snapshot passed the version check and overwrote
+	// the concurrent update. The invariant here makes any skew visible: the
+	// row at version V always holds exactly the marking "p<V>", maintained by
+	// a single writer, so every concurrent load must observe a matching pair.
+	t.Run("Versioned/LoadIsAtomicSnapshot", func(t *testing.T) {
+		ctx := context.Background()
+		vs := versioned(t)
+		if _, err := vs.SaveVersionedState(ctx, "wf", mk("p1"), nil, 0); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		const writes = 300
+		done := make(chan struct{})
+		writeErr := make(chan error, 1)
+		go func() {
+			defer close(done)
+			v := int64(1)
+			for range writes {
+				next := v + 1
+				nv, err := vs.SaveVersionedState(ctx, "wf", mk(workflow.Place(fmt.Sprintf("p%d", next))), nil, v)
+				if err != nil {
+					writeErr <- err
+					return
+				}
+				v = nv
+			}
+		}()
+
+		for {
+			select {
+			case <-done:
+				if len(writeErr) > 0 {
+					t.Fatalf("writer: %v", <-writeErr)
+				}
+				return
+			default:
+			}
+			m, _, version, err := vs.LoadVersionedState(ctx, "wf")
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			places := m.Places()
+			if len(places) != 1 || string(places[0]) != fmt.Sprintf("p%d", version) {
+				t.Fatalf("read skew: marking %v paired with version %d (want [p%d])", places, version, version)
+			}
 		}
 	})
 }

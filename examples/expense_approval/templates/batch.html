@@ -1,0 +1,43 @@
+{{template "head" "Payment batch"}}
+<p class="eyebrow">Colored-token net</p>
+<h1>Payment batch</h1>
+<p class="lede">Approved expenses land here as tokens in <span class="mono">payable</span>. Running the batch pays each token out; the guard <span class="mono">token.amount &le; 5000</span> holds larger ones for manual review.</p>
+
+<div class="actions-row">
+  <form class="inline" method="post" action="/batch/run"><button class="btn-approve" type="submit">Run payment batch</button></form>
+  <form class="inline" method="post" action="/batch/reconcile"><button class="btn-quiet" type="submit">Reconcile</button></form>
+  <span class="muted" style="font-size:.85rem">Reconcile repairs interrupted hand-offs between an expense and this net.</span>
+</div>
+
+<h2>Awaiting payout · {{len .Payable}} token(s) · total <span class="mono">{{money .PayableTotal}}</span></h2>
+<div class="card table-wrap">
+<table>
+  <tr><th>Expense</th><th>Submitter</th><th class="num">Amount</th></tr>
+  {{range .Payable}}
+  <tr>
+    <td><a class="mono" href="/expenses/{{tokenField . "expense_id"}}">{{tokenField . "expense_id"}}</a>{{if held .}}<span class="chip-held">held by guard</span>{{end}}</td>
+    <td>{{tokenField . "submitter"}}</td>
+    <td class="num">{{tokenField . "amount"}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="3" class="empty">Nothing awaiting payout — approved expenses land here.</td></tr>
+  {{end}}
+</table>
+</div>
+
+<h2>Paid out · {{len .PaidOut}} token(s) · total <span class="mono">{{money .PaidOutTotal}}</span></h2>
+<div class="card table-wrap">
+<table>
+  <tr><th>Expense</th><th>Submitter</th><th class="num">Amount</th></tr>
+  {{range .PaidOut}}
+  <tr>
+    <td><a class="mono" href="/expenses/{{tokenField . "expense_id"}}">{{tokenField . "expense_id"}}</a></td>
+    <td>{{tokenField . "submitter"}}</td>
+    <td class="num">{{tokenField . "amount"}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="3" class="empty">No payouts yet — run the batch once something is payable.</td></tr>
+  {{end}}
+</table>
+</div>
+{{template "foot"}}

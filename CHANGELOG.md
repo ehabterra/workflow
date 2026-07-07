@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Lost update under concurrency**: `LoadVersionedState` on both SQL backends
+  read the marking and the optimistic-concurrency version in two separate
+  queries, so a commit landing between them paired a stale marking with the
+  new version — a subsequent save from that snapshot passed the version check
+  and silently overwrote the concurrent update. Found by the dogfood reference
+  system's tick-vs-approve race test (a timer escalation resurrecting an
+  already-approved branch). Both backends now read state, context, and version
+  in one query; the conformance kit gained a `Versioned/LoadIsAtomicSnapshot`
+  stress test that fails on the old implementation.
+
+### Added
+- Dogfood reference system (M5.1): `examples/expense_approval`, a near-real
+  expense-approval web service exercising every advertised feature — parallel
+  legal+finance review (AND-split/join), 72h host-driven escalation timers with
+  a ticker calling `ListDue`/`FireDue`, webhook-resumed waits with the
+  `ErrNotEnabled`/`ErrGuardRejected` split mapped to HTTP semantics, a fleet of
+  SQL-persisted instances (SQLite or PostgreSQL), a crash-consistent audit
+  trail via `Execute` + `WithTxSideEffect`, listener-based firing metrics, a
+  server-rendered UI, and a CPN batch payment net where approved expenses flow
+  as colored tokens held back by an amount guard. Its README doubles as the
+  mental-model tutorial; `docs/DOGFOOD.md` holds the spec.
+- M5 friction log (M5.4, ongoing): `docs/roadmap/FRICTION.md` records every
+  papercut the dogfood build hit (cancellation regions, OR-input transitions,
+  empty-marking persistence, `FireDue` history atomicity, cross-instance
+  recipes) and what the library made easy.
+
 ## [0.8.0] - 2026-07-07
 
 Rolls up all work since v0.0.2: storage truth & hardening (M0), crash-safe ACID

@@ -222,10 +222,6 @@ func TestSetupStorageFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupStorageFromConfig() should not error, got %v", err)
 	}
-	if result == nil {
-		t.Fatal("SetupStorageFromConfig() should not return nil")
-	}
-
 	// Verify result components
 	if result.Storage == nil {
 		t.Error("SetupStorageFromConfig() should set Storage")

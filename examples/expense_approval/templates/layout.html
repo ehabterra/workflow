@@ -1,0 +1,191 @@
+{{define "head"}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}} · Expenses</title>
+<style>
+  :root {
+    --paper: #FAFAF7;
+    --card: #FFFFFF;
+    --ink: #1C2321;
+    --slate: #5C6660;
+    --line: #E2E5DF;
+    --pine: #1B5E4A;
+    --pine-deep: #14483A;
+    --pine-soft: #E3EFE9;
+    --amber: #B45309;
+    --amber-soft: #FBF0DE;
+    --rust: #A03028;
+    --rust-soft: #F9E8E6;
+    --sky: #23577E;
+    --sky-soft: #E2EDF5;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  a { color: var(--pine); }
+  :focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; border-radius: 2px; }
+
+  .topbar { background: var(--card); border-bottom: 1px solid var(--line); }
+  .topbar-inner {
+    max-width: 64rem; margin: 0 auto; padding: .75rem 1.25rem;
+    display: flex; align-items: baseline; gap: 1.75rem; flex-wrap: wrap;
+  }
+  .wordmark { font-weight: 700; letter-spacing: -.02em; font-size: 1rem; color: var(--ink); text-decoration: none; }
+  .wordmark .tag {
+    font: 600 .62rem/1 var(--mono); letter-spacing: .08em; color: var(--pine);
+    border: 1px solid var(--pine); border-radius: 99px; padding: .18rem .45rem;
+    margin-left: .55rem; vertical-align: 2px;
+  }
+  .topbar nav { display: flex; gap: 1.15rem; flex-wrap: wrap; }
+  .topbar nav a { color: var(--slate); text-decoration: none; font-size: .9rem; }
+  .topbar nav a:hover { color: var(--pine); }
+
+  main { max-width: 64rem; margin: 0 auto; padding: 1.9rem 1.25rem 4.5rem; }
+  h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -.018em; margin: .1rem 0 .35rem; }
+  h2 { font-size: .95rem; font-weight: 650; letter-spacing: -.01em; margin: 2.2rem 0 .7rem; }
+  .lede { color: var(--slate); margin: 0 0 1.4rem; }
+  .eyebrow {
+    font: 600 .66rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase;
+    color: var(--slate); margin: 0 0 .35rem;
+  }
+  .mono { font-family: var(--mono); font-size: .86em; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+  .muted { color: var(--slate); }
+
+  /* Cards & tables */
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th {
+    font: 600 .66rem/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--slate); text-align: left; padding: .65rem .85rem;
+    border-bottom: 1px solid var(--line);
+  }
+  th.num { text-align: right; }
+  td { padding: .6rem .85rem; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: color-mix(in srgb, var(--pine-soft) 35%, transparent); }
+  .empty { padding: 2.2rem 1rem; text-align: center; color: var(--slate); }
+
+  /* State chips — the colors mean net semantics: green flows, amber is
+     overdue, rust is stopped, blue is settled. */
+  .state {
+    display: inline-block; font: 600 .72rem/1 var(--mono); letter-spacing: .04em;
+    padding: .28rem .55rem; border-radius: 99px; white-space: nowrap;
+  }
+  .state-in-review { background: var(--pine-soft); color: var(--pine-deep); }
+  .state-approved { background: var(--pine-soft); color: var(--pine-deep); border: 1px solid var(--pine); }
+  .state-paid { background: var(--sky-soft); color: var(--sky); }
+  .state-rejected { background: var(--rust-soft); color: var(--rust); }
+  .state-escalated { background: var(--amber-soft); color: var(--amber); }
+  .state-draft { background: var(--paper); color: var(--slate); border: 1px solid var(--line); }
+
+  /* Summary strip */
+  .stats { display: flex; gap: .6rem; flex-wrap: wrap; margin: 0 0 1.1rem; }
+  .stat {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: .45rem .8rem; font-size: .86rem; color: var(--slate);
+  }
+  .stat b { color: var(--ink); font-family: var(--mono); margin-right: .3rem; }
+  .stat.warn { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }
+  .stat.warn b { color: var(--amber); }
+
+  /* Buttons */
+  button {
+    font: 600 .86rem/1 inherit; font-family: inherit; cursor: pointer;
+    border-radius: 7px; padding: .5rem .9rem; border: 1px solid transparent;
+    transition: background .12s ease, border-color .12s ease;
+  }
+  .btn-approve { background: var(--pine); color: #fff; }
+  .btn-approve:hover { background: var(--pine-deep); }
+  .btn-reject { background: transparent; color: var(--rust); border-color: color-mix(in srgb, var(--rust) 45%, transparent); }
+  .btn-reject:hover { background: var(--rust-soft); border-color: var(--rust); }
+  .btn-quiet { background: var(--card); color: var(--ink); border-color: var(--line); }
+  .btn-quiet:hover { border-color: var(--slate); }
+  form.inline { display: inline; }
+
+  /* The signature: review lanes drawn from the live marking. Each lane is
+     the branch's place chain; the token is the dot sitting where it really
+     is right now. */
+  .net { display: grid; gap: .8rem; margin: 1.2rem 0; }
+  .lane {
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: .8rem 1rem;
+  }
+  .lane-name { font: 600 .66rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--slate); min-width: 4.5rem; }
+  .places { display: flex; align-items: center; gap: 0; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 14rem; }
+  .place { display: flex; align-items: center; font: 500 .78rem/1 var(--mono); color: var(--slate); white-space: nowrap; }
+  .place + .place::before { content: ""; display: inline-block; width: 1.6rem; height: 1px; background: var(--line); margin: 0 .5rem; }
+  .place .dot {
+    display: inline-block; width: .55rem; height: .55rem; border-radius: 50%;
+    border: 1.5px solid var(--line); background: var(--card); margin-right: .4rem;
+  }
+  .place.here { color: var(--ink); font-weight: 600; }
+  .place.here .dot { border-color: var(--pine); background: var(--pine); animation: token 2.4s ease-in-out infinite; }
+  .place.here.warn { color: var(--amber); }
+  .place.here.warn .dot { border-color: var(--amber); background: var(--amber); }
+  .place.done { color: var(--pine-deep); }
+  .place.done .dot { border-color: var(--pine); background: var(--pine-soft); }
+  .lane-actions { display: flex; gap: .5rem; }
+  @keyframes token { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--pine) 18%, transparent); } }
+  /* A closed expense (rejected/paid) shows where tokens stopped, without
+     suggesting activity. */
+  .net.closed .place.here .dot { animation: none; }
+  .net.closed .lane { opacity: .75; }
+
+  .banner { border-radius: 10px; padding: .75rem 1rem; margin: 1.2rem 0; font-size: .92rem; }
+  .banner-rejected { background: var(--rust-soft); color: var(--rust); }
+  .banner-approved { background: var(--pine-soft); color: var(--pine-deep); }
+  .banner-paid { background: var(--sky-soft); color: var(--sky); }
+
+  /* Forms */
+  .form-card { max-width: 26rem; padding: 1.4rem; display: grid; gap: 1rem; }
+  label { display: grid; gap: .3rem; font-size: .88rem; font-weight: 600; }
+  label .hint { font-weight: 400; color: var(--slate); font-size: .82rem; }
+  input {
+    font: inherit; padding: .55rem .7rem; border: 1px solid var(--line);
+    border-radius: 7px; background: var(--card); color: var(--ink); width: 100%;
+  }
+  input:focus { outline: 2px solid var(--pine); outline-offset: 0; border-color: var(--pine); }
+
+  .chip-held {
+    font: 600 .68rem/1 var(--mono); color: var(--amber); background: var(--amber-soft);
+    border-radius: 99px; padding: .22rem .5rem; margin-left: .45rem; white-space: nowrap;
+  }
+  .actions-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: 1rem 0 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 40rem) {
+    .lane { align-items: flex-start; flex-direction: column; gap: .6rem; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="wordmark" href="/">Expenses<span class="tag">PETRI-NET CONSOLE</span></a>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/expenses/new">Submit expense</a>
+      <a href="/batch">Payment batch</a>
+      <a href="/metrics">Metrics</a>
+    </nav>
+  </div>
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}

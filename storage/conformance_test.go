@@ -19,6 +19,10 @@ func TestSQLiteConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open db: %v", err)
 		}
+		// A plain :memory: database exists per connection, so cap the pool at
+		// one conn — otherwise a concurrent subtest's second connection sees
+		// an empty database. Concurrency still interleaves at the pool.
+		db.SetMaxOpenConns(1)
 		t.Cleanup(func() { _ = db.Close() })
 
 		store, err := storage.NewSQLiteStorage(db)

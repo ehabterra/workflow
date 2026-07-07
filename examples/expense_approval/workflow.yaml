@@ -1,0 +1,66 @@
+# The expense-approval net: one workflow instance per expense.
+#
+# submit AND-splits into two parallel review branches (legal, finance);
+# finalize AND-joins them. Each pending branch escalates after 72h (M4
+# host-driven timer) but stays approvable/rejectable. mark_paid is fired by
+# the batch payment run (see payment.yaml).
+#
+# Known modeling friction (docs/DOGFOOD.md): rejection does not cancel the
+# sibling branch (no cancellation regions yet), and "approve from pending OR
+# escalated" needs one transition per source place.
+workflow:
+  name: expense_approval
+  initial_marking: draft
+  places:
+    - name: draft
+    - name: pending_legal
+    - name: pending_finance
+    - name: escalated_legal
+    - name: escalated_finance
+    - name: legal_ok
+    - name: finance_ok
+    - name: approved
+    - name: rejected
+    - name: paid
+  transitions:
+    - name: submit
+      from: [draft]
+      to: [pending_legal, pending_finance]
+    - name: legal_approve
+      from: [pending_legal]
+      to: [legal_ok]
+    - name: finance_approve
+      from: [pending_finance]
+      to: [finance_ok]
+    - name: legal_escalate
+      from: [pending_legal]
+      to: [escalated_legal]
+      after: 72h
+    - name: finance_escalate
+      from: [pending_finance]
+      to: [escalated_finance]
+      after: 72h
+    - name: legal_approve_escalated
+      from: [escalated_legal]
+      to: [legal_ok]
+    - name: finance_approve_escalated
+      from: [escalated_finance]
+      to: [finance_ok]
+    - name: legal_reject
+      from: [pending_legal]
+      to: [rejected]
+    - name: finance_reject
+      from: [pending_finance]
+      to: [rejected]
+    - name: legal_reject_escalated
+      from: [escalated_legal]
+      to: [rejected]
+    - name: finance_reject_escalated
+      from: [escalated_finance]
+      to: [rejected]
+    - name: finalize
+      from: [legal_ok, finance_ok]
+      to: [approved]
+    - name: mark_paid
+      from: [approved]
+      to: [paid]

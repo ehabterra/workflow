@@ -88,6 +88,15 @@ Adds metadata to `transition_history`:
 - `duration_ms` - transition duration in milliseconds
 - `metadata` - JSON metadata for transitions
 
+### 000004_add_due_index.up.sql / .down.sql
+
+Adds the M4 timer due index to `workflow_states`:
+
+- `due_at` - per-instance next-due timestamp, maintained by the `Manager`
+  on every save and scanned by `ListDue`. Required since v0.8.0 (the SQLite
+  backend advertises `workflow.DueStorage`); a table without it fails on
+  save unless the storage opts out with `storage.WithDueColumn("")`.
+
 ## How It Works
 
 ### 1. Migration Execution

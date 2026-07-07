@@ -218,6 +218,17 @@ func (s *SQLiteStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) 
 }
 
 func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
+	marking, ctxData, _, err := s.loadStateVersion(ctx, q, id, false)
+	return marking, ctxData, err
+}
+
+// loadStateVersion loads the marking and context, and — when withVersion is
+// set — the optimistic-concurrency version, all in ONE query. Reading the
+// version in a separate query would allow read skew under concurrency: a
+// marking from version N paired with version N+1 read after a concurrent
+// commit, which makes a later stale save pass the version check and lose
+// the concurrent update.
+func (s *SQLiteStorage) loadStateVersion(ctx context.Context, q querier, id string, withVersion bool) (workflow.Marking, map[string]any, int64, error) {
 	columns := []string{s.stateColumn}
 	if s.contextColumn != "" {
 		columns = append(columns, s.contextColumn)
@@ -229,6 +240,11 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 		colName := strings.Fields(colDef)[0]
 		columns = append(columns, colName)
 		customFieldKeys = append(customFieldKeys, key)
+	}
+	versionIdx := -1
+	if withVersion {
+		versionIdx = len(columns)
+		columns = append(columns, s.versionColumn)
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?",
@@ -248,9 +264,9 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 	err := row.Scan(scanArgs...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
+			return nil, nil, 0, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
 		}
-		return nil, nil, fmt.Errorf("failed to load state: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
 	}
 
 	// Process results
@@ -258,12 +274,21 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 	if rawState, ok := (*scanArgs[0].(*any)).([]byte); ok {
 		stateJSON = rawState
 	} else {
-		return nil, nil, fmt.Errorf("unexpected type for state column")
+		return nil, nil, 0, fmt.Errorf("unexpected type for state column")
 	}
 
 	marking, err := workflow.UnmarshalMarkingJSON(stateJSON)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to unmarshal state: %w", err)
+	}
+
+	var version int64
+	if versionIdx >= 0 {
+		v, ok := (*(scanArgs[versionIdx].(*any))).(int64)
+		if !ok {
+			return nil, nil, 0, fmt.Errorf("unexpected type for version column")
+		}
+		version = v
 	}
 
 	// The context column holds the full context map; custom-field columns are
@@ -273,7 +298,7 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 	if s.contextColumn != "" {
 		context, err = decodeContextJSON(*(scanArgs[1].(*any)))
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 	}
 
@@ -333,7 +358,7 @@ func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (wo
 		}
 	}
 
-	return marking, context, nil
+	return marking, context, version, nil
 }
 
 // ListIDs implements workflow.ListableStorage, returning persisted workflow IDs
@@ -397,18 +422,13 @@ func (s *SQLiteStorage) deleteState(ctx context.Context, q querier, id string) e
 // LoadVersionedState implements workflow.VersionedStorage. It loads the workflow's
 // marking and context data along with its current optimistic-concurrency version.
 // A never-saved workflow returns workflow.ErrWorkflowNotFound.
+//
+// The marking and version come from ONE query: reading them separately would
+// let a concurrent commit slip between the two reads, pairing a stale marking
+// with the new version — and a later save from that snapshot would pass the
+// version check and silently overwrite the concurrent update.
 func (s *SQLiteStorage) LoadVersionedState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
-	marking, ctxData, err := s.loadState(ctx, s.db, id)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-
-	var version int64
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?", s.versionColumn, s.table, s.idColumn)
-	if err := s.db.QueryRowContext(ctx, query, id).Scan(&version); err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to load version: %w", err)
-	}
-	return marking, ctxData, version, nil
+	return s.loadStateVersion(ctx, s.db, id, true)
 }
 
 // SaveVersionedState implements workflow.VersionedStorage. It saves the workflow

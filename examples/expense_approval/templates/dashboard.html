@@ -1,0 +1,31 @@
+{{template "head" "Dashboard"}}
+<p class="eyebrow">Fleet</p>
+<h1>Expenses</h1>
+<p class="lede">Every expense is one workflow instance; this table is the live marking of the fleet.</p>
+
+<div class="stats">
+  {{range $state, $n := .Stats}}
+  <span class="stat{{if eq $state "escalated"}} warn{{end}}"><b>{{$n}}</b>{{$state}}</span>
+  {{end}}
+  <span class="stat"><b>{{money .Payment.PayableTotal}}</b>awaiting payout</span>
+  <span class="stat"><b>{{money .Payment.PaidOutTotal}}</b>paid out</span>
+</div>
+
+<div class="card table-wrap">
+<table>
+  <tr><th>Expense</th><th>Submitter</th><th class="num">Amount</th><th>State</th><th>Marking</th><th>Next deadline</th></tr>
+  {{range .Expenses}}
+  <tr>
+    <td><a class="mono" href="/expenses/{{.ID}}">{{.ID}}</a></td>
+    <td>{{.Submitter}}</td>
+    <td class="num">{{money .Amount}}</td>
+    <td><span class="state state-{{stateClass .State}}">{{.State}}</span></td>
+    <td class="mono muted">{{range .Places}}{{.}} {{end}}</td>
+    <td class="mono muted">{{if .NextDue}}{{.NextDue.Format "Jan 2, 15:04"}}{{else}}—{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="6" class="empty">No expenses yet — <a href="/expenses/new">submit the first one</a>.</td></tr>
+  {{end}}
+</table>
+</div>
+{{template "foot"}}

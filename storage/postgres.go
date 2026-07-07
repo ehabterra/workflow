@@ -150,6 +150,17 @@ func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string
 }
 
 func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, error) {
+	marking, ctxData, _, err := s.loadStateVersion(ctx, q, id, false)
+	return marking, ctxData, err
+}
+
+// loadStateVersion loads the marking and context, and — when withVersion is
+// set — the optimistic-concurrency version, all in ONE query. Reading the
+// version in a separate query would allow read skew under concurrency: a
+// marking from version N paired with version N+1 read after a concurrent
+// commit, which makes a later stale save pass the version check and lose
+// the concurrent update.
+func (s *PostgresStorage) loadStateVersion(ctx context.Context, q querier, id string, withVersion bool) (workflow.Marking, map[string]any, int64, error) {
 	columns := []string{s.stateColumn}
 	if s.contextColumn != "" {
 		columns = append(columns, s.contextColumn)
@@ -159,6 +170,11 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	for key, colDef := range s.customFields {
 		columns = append(columns, firstField(colDef))
 		customKeys = append(customKeys, key)
+	}
+	versionIdx := -1
+	if withVersion {
+		versionIdx = len(columns)
+		columns = append(columns, s.versionColumn)
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = $1", strings.Join(columns, ", "), s.table, s.idColumn)
@@ -174,17 +190,21 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	for i := range customVals {
 		scanArgs[customStart+i] = &customVals[i]
 	}
+	var version int64
+	if versionIdx >= 0 {
+		scanArgs[versionIdx] = &version
+	}
 
 	if err := q.QueryRowContext(ctx, query, id).Scan(scanArgs...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
+			return nil, nil, 0, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
 		}
-		return nil, nil, fmt.Errorf("failed to load state: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
 	}
 
 	marking, err := workflow.UnmarshalMarkingJSON([]byte(stateJSON))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal state: %w", err)
+		return nil, nil, 0, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 
 	// The context column holds the full context map; custom-field columns are
@@ -194,13 +214,13 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	if s.contextColumn != "" {
 		ctxData, err = decodeContextJSON(ctxJSON)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 	}
 	for i, key := range customKeys {
 		ctxData[key] = decodeValue(customVals[i])
 	}
-	return marking, ctxData, nil
+	return marking, ctxData, version, nil
 }
 
 // ListIDs implements workflow.ListableStorage, returning persisted workflow IDs
@@ -263,16 +283,7 @@ func (s *PostgresStorage) deleteState(ctx context.Context, q querier, id string)
 
 // LoadVersionedState implements workflow.VersionedStorage.
 func (s *PostgresStorage) LoadVersionedState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
-	marking, ctxData, err := s.loadState(ctx, s.db, id)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	var version int64
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = $1", s.versionColumn, s.table, s.idColumn)
-	if err := s.db.QueryRowContext(ctx, query, id).Scan(&version); err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to load version: %w", err)
-	}
-	return marking, ctxData, version, nil
+	return s.loadStateVersion(ctx, s.db, id, true)
 }
 
 // SaveVersionedState implements workflow.VersionedStorage. It preserves the due
