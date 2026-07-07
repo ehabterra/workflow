@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Lost update under concurrency**: `LoadVersionedState` on both SQL backends
+  read the marking and the optimistic-concurrency version in two separate
+  queries, so a commit landing between them paired a stale marking with the
+  new version — a subsequent save from that snapshot passed the version check
+  and silently overwrote the concurrent update. Found by the dogfood reference
+  system's tick-vs-approve race test (a timer escalation resurrecting an
+  already-approved branch). Both backends now read state, context, and version
+  in one query; the conformance kit gained a `Versioned/LoadIsAtomicSnapshot`
+  stress test that fails on the old implementation.
+
 ### Added
 - Dogfood reference system (M5.1): `examples/expense_approval`, a near-real
   expense-approval web service exercising every advertised feature — parallel

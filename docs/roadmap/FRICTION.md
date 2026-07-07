@@ -66,6 +66,21 @@ workaround.
    draft token's `EnteredAt`). Wanted: `CreateWorkflow` variants taking
    initial context, or an `Execute` that can create-if-missing.
 
+## Bugs found in the library (the dogfood earning its keep)
+
+- **Lost update via read skew in `LoadVersionedState`** (both SQL backends,
+  fixed during M5.1 hardening). The marking and the version were read in two
+  separate queries; a commit in between paired a stale marking with the new
+  version, and the next save from that snapshot passed the optimistic check
+  and clobbered the concurrent write. Surfaced as a ~1%-flaky dogfood race
+  test where a timer escalation resurrected an already-approved branch —
+  invisible to every single-writer test. Now covered by the conformance
+  kit's `Versioned/LoadIsAtomicSnapshot` (verified to fail on the old code).
+
+- **`examples/migration_example` silently broken since M4**: its migration
+  chain never added `due_at`, and example tests didn't run in CI. Caught the
+  moment the CI examples job started running tests (also added during M5.1).
+
 ## Easy (credit where due)
 
 - The M3.4 error split made webhook semantics one `errors.Is` switch:
