@@ -48,11 +48,6 @@ func TestStorageFactory(t *testing.T) {
 	if store == nil {
 		t.Fatal("Storage is nil")
 	}
-
-	if init == nil {
-		t.Fatal("StorageInit is nil")
-	}
-
 	if init.Schema == "" {
 		t.Error("Schema should not be empty")
 	}

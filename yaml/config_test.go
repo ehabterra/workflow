@@ -22,9 +22,6 @@ workflow:
 	if err != nil {
 		t.Fatalf("LoadConfigFromBytes() with valid YAML should not error, got %v", err)
 	}
-	if config == nil {
-		t.Fatal("LoadConfigFromBytes() should not return nil")
-	}
 	if config.Workflow.Name != "test_workflow" {
 		t.Errorf("LoadConfigFromBytes() workflow name = %s, want 'test_workflow'", config.Workflow.Name)
 	}
