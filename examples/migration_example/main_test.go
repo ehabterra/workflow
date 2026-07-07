@@ -232,9 +232,12 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 		t.Fatalf("Failed to create initial schema: %v", err)
 	}
 
-	// Create storage with initial fields only
+	// Create storage with initial fields only. The old schema predates the
+	// M4 due_at column, so disable the due index until the migrations add
+	// it — exactly what a host upgrading the library would do.
 	sqlStore, err := storage.NewSQLiteStorage(db,
 		storage.WithTable("workflow_states"),
+		storage.WithDueColumn(""),
 		storage.WithCustomFields(map[string]string{
 			"title":   "title TEXT",
 			"content": "content TEXT",
