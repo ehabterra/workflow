@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ehabterra/workflow"
 )
@@ -73,11 +74,28 @@ func NewServer(app *App) (*Server, error) {
 	s.mux.HandleFunc("POST /batch/run", s.runBatch)
 	s.mux.HandleFunc("POST /batch/reconcile", s.reconcile)
 	s.mux.HandleFunc("GET /metrics", s.metrics)
+	s.mux.HandleFunc("GET /healthz", s.healthz)
 	return s, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mux.ServeHTTP(w, r)
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	start := time.Now()
+	s.mux.ServeHTTP(rec, r)
+	if r.URL.Path != "/healthz" { // probes would drown the log
+		log.Printf("%s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+	}
+}
+
+// statusRecorder captures the response code for the request log.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
@@ -228,7 +246,7 @@ func (s *Server) runBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reconcile(w http.ResponseWriter, r *http.Request) {
-	enqueued, marked, err := s.app.Reconcile(r.Context())
+	rep, err := s.app.Reconcile(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -237,7 +255,18 @@ func (s *Server) reconcile(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/batch", http.StatusSeeOther)
 		return
 	}
-	fmt.Fprintf(w, "reconciled: %d enqueued, %d marked paid\n", enqueued, marked)
+	fmt.Fprintf(w, "reconciled: %d enqueued, %d marked paid, %d stale draft(s) deleted\n",
+		rep.Enqueued, rep.Marked, rep.DraftsDeleted)
+}
+
+// healthz answers liveness/readiness probes: 200 when the database
+// responds, 503 otherwise.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.db.PingContext(r.Context()); err != nil {
+		http.Error(w, "database unreachable", http.StatusServiceUnavailable)
+		return
+	}
+	fmt.Fprintln(w, "ok")
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {

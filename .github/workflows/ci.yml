@@ -67,6 +67,26 @@ jobs:
     name: Build examples
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: workflow
+          POSTGRES_PASSWORD: workflow
+          POSTGRES_DB: workflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Lets example test suites with an opt-in Postgres path (e.g.
+      # expense_approval's TestPostgresLifecycle) run it in CI.
+      EXPENSE_POSTGRES_DSN: postgres://workflow:workflow@localhost:5432/workflow?sslmode=disable
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -77,15 +97,16 @@ jobs:
           go-version: '1.25'
 
       # Example modules have their own go.mod and are not covered by the root
-      # `go test ./...`, so build and vet each one to catch breakage early.
-      - name: Build and vet example modules
+      # `go test ./...`, so build, vet, and test each one to catch breakage
+      # early.
+      - name: Build, vet, and test example modules
         run: |
           set -euo pipefail
           fail=0
           for mod in $(find examples -name go.mod -maxdepth 2); do
             dir=$(dirname "$mod")
             echo "::group::$dir"
-            (cd "$dir" && go build ./... && go vet ./...) || fail=1
+            (cd "$dir" && go build ./... && go vet ./... && go test -race ./...) || fail=1
             echo "::endgroup::"
           done
           exit $fail

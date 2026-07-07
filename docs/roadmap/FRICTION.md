@@ -14,7 +14,13 @@ workaround.
    Rejecting one review branch cannot cancel the sibling branch's token; the
    "rejected is terminal" rule had to move into the host (an `ErrTerminal`
    check before every decision). Workaround is fine but every consumer with
-   an OR-outcome AND-split will rewrite it.
+   an OR-outcome AND-split will rewrite it. Follow-on observed while
+   hardening: the stranded branch's **72h timer still fires** on the closed
+   expense — one spurious escalation, then the timer goes quiet (escalated
+   has no further timeout). Harmless here and covered by
+   `TestStrandedBranchEscalatesHarmlessly`, but with a *recurring* or
+   chained timer a rejected instance would stay hot in the due index
+   forever.
 
 2. **"From pending OR escalated" doubles the transition count.** A
    transition's inputs are fixed places, so approve/reject each need a
@@ -51,6 +57,14 @@ workaround.
    re-entrancy). An `AggregateTokens` predicate that calls `wf.GetTokens`
    risks deadlock; had to pre-collect IDs. Needs a doc warning on the
    `token_query.go` API.
+
+8. **Instance creation can't seed context or fire in one save.**
+   `CreateWorkflow(ctx, id, def, place)` persists a bare instance; setting
+   the business context and firing `submit` needs a second save (`Execute`).
+   A crash in between leaves a context-less draft the app must garbage-
+   collect (`Reconcile` deletes them after a grace period, keyed off the
+   draft token's `EnteredAt`). Wanted: `CreateWorkflow` variants taking
+   initial context, or an `Execute` that can create-if-missing.
 
 ## Easy (credit where due)
 

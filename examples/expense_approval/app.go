@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -188,13 +189,23 @@ func (a *App) fire(ctx context.Context, id string, def *workflow.Definition, act
 
 // SubmitExpense creates a new expense instance and fires submit (the
 // AND-split into the two review branches). Returns the new expense ID.
+//
+// Creation is two saves (CreateWorkflow, then the submit Execute); a crash
+// between them leaves a context-less draft that Reconcile deletes. See
+// docs/roadmap/FRICTION.md.
 func (a *App) SubmitExpense(ctx context.Context, submitter, description string, amount float64) (string, error) {
 	submitter = strings.TrimSpace(submitter)
+	description = strings.TrimSpace(description)
 	if submitter == "" {
 		return "", errors.New("submitter is required")
 	}
-	if amount <= 0 {
-		return "", errors.New("amount must be positive")
+	if len(submitter) > 120 || len(description) > 500 {
+		return "", errors.New("submitter or description is too long")
+	}
+	// Reject non-finite and absurd amounts: ParseFloat accepts "Inf" and
+	// "NaN", and +Inf would poison the JSON context on save.
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 || amount > 1e12 {
+		return "", errors.New("amount must be a positive number")
 	}
 	id, err := newExpenseID()
 	if err != nil {
@@ -376,13 +387,17 @@ func (a *App) Tick(ctx context.Context, now time.Time) (fired map[string][]strin
 		return nil, fmt.Errorf("list due: %w", err)
 	}
 	fired = make(map[string][]string)
+	// One broken instance must not starve the rest of the fleet: keep
+	// going and report every failure at the end.
+	var errs []error
 	for _, id := range ids {
 		if id == paymentID {
 			continue // the payment net has no timers
 		}
 		names, err := a.mgr.FireDue(ctx, id, a.expenseDef, now)
 		if err != nil {
-			return fired, fmt.Errorf("fire due %s: %w", id, err)
+			errs = append(errs, fmt.Errorf("fire due %s: %w", id, err))
+			continue
 		}
 		if len(names) == 0 {
 			continue
@@ -397,24 +412,34 @@ func (a *App) Tick(ctx context.Context, now time.Time) (fired map[string][]strin
 				CreatedAt:  now,
 			}
 			if err := a.hist.SaveTransition(ctx, rec); err != nil {
-				return fired, fmt.Errorf("record timer history for %s: %w", id, err)
+				errs = append(errs, fmt.Errorf("record timer history for %s: %w", id, err))
 			}
 		}
 	}
-	return fired, nil
+	return fired, errors.Join(errs...)
 }
 
-// Reconcile repairs the two documented cross-instance crash windows: an
-// approved expense missing from the payment net is enqueued, and an expense
-// with a paid_out token but no mark_paid is advanced.
-func (a *App) Reconcile(ctx context.Context) (enqueued, marked int, err error) {
+// ReconcileReport says what a reconcile pass repaired.
+type ReconcileReport struct {
+	Enqueued      int // approved expenses added to the payment net
+	Marked        int // expenses advanced to paid to match a paid_out token
+	DraftsDeleted int // context-less drafts (creation crash artifacts) removed
+}
+
+// Reconcile repairs the documented crash windows: an approved expense
+// missing from the payment net is enqueued; an expense with a paid_out
+// token but no mark_paid is advanced; and a context-less draft older than
+// draftGrace (a crash between CreateWorkflow and the submit Execute) is
+// deleted. It keeps going past per-instance failures and reports them
+// joined.
+func (a *App) Reconcile(ctx context.Context) (*ReconcileReport, error) {
 	views, err := a.ListExpenses(ctx)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	pay, err := a.mgr.LoadWorkflow(ctx, paymentID, a.paymentDef)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	paidOut := map[string]bool{}
 	for _, tok := range pay.GetTokens("paid_out") {
@@ -422,22 +447,40 @@ func (a *App) Reconcile(ctx context.Context) (enqueued, marked int, err error) {
 			paidOut[id] = true
 		}
 	}
+	rep := &ReconcileReport{}
+	var errs []error
 	for _, v := range views {
 		switch {
 		case v.Has("approved") && paidOut[v.ID]:
 			if err := a.markPaid(ctx, v.ID); err != nil {
-				return enqueued, marked, err
+				errs = append(errs, fmt.Errorf("mark %s paid: %w", v.ID, err))
+				continue
 			}
-			marked++
-		case v.Has("approved") && !paymentHasExpenseLoaded(pay, v.ID):
+			rep.Marked++
+		case v.Has("approved") && !paymentHasExpense(pay, v.ID):
 			if err := a.EnqueueApproved(ctx, v.ID); err != nil {
-				return enqueued, marked, err
+				errs = append(errs, fmt.Errorf("enqueue %s: %w", v.ID, err))
+				continue
 			}
-			enqueued++
+			rep.Enqueued++
+		case v.Has("draft") && v.Amount == 0 && v.DraftedAt != nil && a.now().Sub(*v.DraftedAt) > draftGrace:
+			// A successful SubmitExpense fires submit in the same save that
+			// sets the context, so a lingering context-less draft can only
+			// be a creation crash artifact. The grace period protects a
+			// creation that is in flight right now.
+			if err := a.mgr.DeleteWorkflow(ctx, v.ID); err != nil {
+				errs = append(errs, fmt.Errorf("delete stale draft %s: %w", v.ID, err))
+				continue
+			}
+			rep.DraftsDeleted++
 		}
 	}
-	return enqueued, marked, nil
+	return rep, errors.Join(errs...)
 }
+
+// draftGrace is how old a context-less draft must be before Reconcile
+// treats it as a crash artifact rather than a creation in flight.
+const draftGrace = 5 * time.Minute
 
 // --- read side (dashboard / detail pages) ---
 
@@ -450,6 +493,7 @@ type ExpenseView struct {
 	Places      []string
 	State       string
 	NextDue     *time.Time
+	DraftedAt   *time.Time // when the draft token entered (set only while in draft)
 	History     []history.TransitionRecord
 }
 
@@ -589,6 +633,14 @@ func (a *App) viewOf(id string, wf *workflow.Workflow) *ExpenseView {
 	if due, ok := wf.NextDue(); ok {
 		v.NextDue = &due
 	}
+	if v.Has("draft") {
+		for _, tok := range wf.GetTokens("draft") {
+			if at, ok := tok.EnteredAt(); ok {
+				v.DraftedAt = &at
+				break
+			}
+		}
+	}
 	v.State = stateLabel(v)
 	return v
 }
@@ -656,12 +708,6 @@ func paymentHasExpense(wf *workflow.Workflow, expenseID string) bool {
 		return ok && id == expenseID
 	})
 	return len(found) > 0
-}
-
-// paymentHasExpenseLoaded is paymentHasExpense against an already-loaded
-// instance (Reconcile holds one to avoid N reloads).
-func paymentHasExpenseLoaded(wf *workflow.Workflow, expenseID string) bool {
-	return paymentHasExpense(wf, expenseID)
 }
 
 // memberOf returns a predicate matching exactly the given tokens (by ID).

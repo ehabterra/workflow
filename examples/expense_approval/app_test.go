@@ -229,12 +229,12 @@ func TestReconcileRepairsCrashWindow(t *testing.T) {
 		t.Fatalf("precondition: payment net should be empty, got %d tokens", len(pay.Payable))
 	}
 
-	enqueued, marked, err := app.Reconcile(ctx)
+	rep, err := app.Reconcile(ctx)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if enqueued != 1 || marked != 0 {
-		t.Fatalf("want 1 enqueued / 0 marked, got %d / %d", enqueued, marked)
+	if rep.Enqueued != 1 || rep.Marked != 0 {
+		t.Fatalf("want 1 enqueued / 0 marked, got %d / %d", rep.Enqueued, rep.Marked)
 	}
 	pay, err = app.Payment(ctx)
 	if err != nil {
@@ -245,11 +245,11 @@ func TestReconcileRepairsCrashWindow(t *testing.T) {
 	}
 
 	// Reconcile is idempotent.
-	enqueued, _, err = app.Reconcile(ctx)
+	rep, err = app.Reconcile(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enqueued != 0 {
-		t.Fatalf("second reconcile must be a no-op, enqueued %d", enqueued)
+	if rep.Enqueued != 0 {
+		t.Fatalf("second reconcile must be a no-op, enqueued %d", rep.Enqueued)
 	}
 }

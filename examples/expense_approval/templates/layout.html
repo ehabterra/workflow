@@ -135,6 +135,10 @@
   .place.done .dot { border-color: var(--pine); background: var(--pine-soft); }
   .lane-actions { display: flex; gap: .5rem; }
   @keyframes token { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--pine) 18%, transparent); } }
+  /* A closed expense (rejected/paid) shows where tokens stopped, without
+     suggesting activity. */
+  .net.closed .place.here .dot { animation: none; }
+  .net.closed .lane { opacity: .75; }
 
   .banner { border-radius: 10px; padding: .75rem 1rem; margin: 1.2rem 0; font-size: .92rem; }
   .banner-rejected { background: var(--rust-soft); color: var(--rust); }

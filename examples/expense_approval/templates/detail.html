@@ -12,7 +12,7 @@
 {{end}}
 
 <h2>Review lanes</h2>
-<div class="net">
+<div class="net{{if not .Open}} closed{{end}}">
   {{range $branch := .Branches}}
   {{$stage := $.Branch $branch}}
   <div class="lane">

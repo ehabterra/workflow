@@ -8,15 +8,20 @@
 //	open http://localhost:8080
 //
 // Point it at Postgres instead with -postgres-dsn (or EXPENSE_POSTGRES_DSN).
+// The demo has no authentication or CSRF protection — it is a reference
+// system for the workflow library, not a deployable product.
 package main
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -29,9 +34,14 @@ func main() {
 	postgresDSN := flag.String("postgres-dsn", os.Getenv("EXPENSE_POSTGRES_DSN"), "PostgreSQL DSN; empty = SQLite")
 	escalateAfter := flag.Duration("escalate-after", 0, "override the 72h escalation deadline (e.g. 2m for a live demo)")
 	tick := flag.Duration("tick", 10*time.Second, "escalation tick interval (the host-owned clock)")
+	reconcileEvery := flag.Duration("reconcile", time.Minute, "periodic reconcile interval; 0 disables (manual button still works)")
 	flag.Parse()
 
-	ctx := context.Background()
+	// Shut down cleanly on Ctrl-C / SIGTERM: stop accepting requests,
+	// finish in-flight ones, stop the tickers, close the database. State is
+	// in the database, so a hard kill is also safe — this just exits tidily.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	driver, dsn := "sqlite3", *dbPath+"?_busy_timeout=5000&_journal_mode=WAL"
 	if *postgresDSN != "" {
@@ -49,27 +59,72 @@ func main() {
 	}
 
 	// The host-driven timer loop (M4): the library models time, this ticker
-	// owns the clock. Kill the process and restart it — deadlines survive,
-	// because they live in the database, not in goroutines.
-	go func() {
-		t := time.NewTicker(*tick)
-		defer t.Stop()
-		for now := range t.C {
-			fired, err := app.Tick(ctx, now)
-			if err != nil {
-				log.Printf("tick: %v", err)
-				continue
-			}
-			for id, names := range fired {
-				log.Printf("tick: %s fired %v", id, names)
-			}
+	// owns the clock. Deadlines live in the database, so they survive
+	// restarts.
+	go every(ctx, *tick, func(now time.Time) {
+		fired, err := app.Tick(ctx, now)
+		if err != nil {
+			log.Printf("tick: %v", err)
 		}
-	}()
+		for id, names := range fired {
+			log.Printf("tick: %s fired %v", id, names)
+		}
+	})
 
-	srv, err := NewServer(app)
+	// Periodic self-healing for the documented cross-instance crash
+	// windows (see App.Reconcile).
+	if *reconcileEvery > 0 {
+		go every(ctx, *reconcileEvery, func(time.Time) {
+			rep, err := app.Reconcile(ctx)
+			if err != nil {
+				log.Printf("reconcile: %v", err)
+			}
+			if rep != nil && (rep.Enqueued+rep.Marked+rep.DraftsDeleted) > 0 {
+				log.Printf("reconcile: %d enqueued, %d marked paid, %d stale draft(s) deleted",
+					rep.Enqueued, rep.Marked, rep.DraftsDeleted)
+			}
+		})
+	}
+
+	handler, err := NewServer(app)
 	if err != nil {
 		log.Fatalf("build server: %v", err)
 	}
-	log.Printf("expense approval listening on %s (driver=%s, tick=%s)", *addr, driver, *tick)
-	log.Fatal(http.ListenAndServe(*addr, srv))
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	go func() {
+		log.Printf("expense approval listening on %s (driver=%s, tick=%s)", *addr, driver, *tick)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("serve: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Print("shutting down…")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+	log.Print("bye")
+}
+
+// every runs fn on the interval until the context ends.
+func every(ctx context.Context, interval time.Duration, fn func(now time.Time)) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			fn(now)
+		}
+	}
 }

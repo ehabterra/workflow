@@ -19,6 +19,14 @@ watch escalation happen live (safe for existing data: timeouts are not part
 of the definition fingerprint). Use `-postgres-dsn` (or
 `EXPENSE_POSTGRES_DSN`) to run on PostgreSQL instead of SQLite.
 
+The process is production-shaped where it matters: HTTP timeouts, a request
+log, `GET /healthz` for probes, graceful shutdown on Ctrl-C/SIGTERM (a hard
+kill is also safe — state lives in the database), a periodic reconcile pass
+(`-reconcile`, default 1m) that self-heals the documented crash windows, and
+an escalation tick that survives one broken instance without starving the
+rest of the fleet. It has **no authentication or CSRF protection** — it is a
+reference system for the workflow library, not a deployable product.
+
 Or drive it from the terminal:
 
 ```sh
@@ -89,4 +97,11 @@ The tests are the acceptance criteria: escalation via a future-`now` tick
 (no sleeping), webhook redelivery dedup, reject terminality, the payment
 guard, crash consistency (state+history roll back together), concurrent
 approvals under optimistic-concurrency retry, restart resuming the fleet,
-and reconcile repairing the documented crash windows.
+reconcile repairing the documented crash windows (including deleting
+creation-crash drafts), the stranded-branch escalation staying harmless
+after a rejection, tick-vs-approve and batch-vs-batch races, and input
+validation (`Inf`/`NaN` amounts never reach storage).
+
+Set `EXPENSE_POSTGRES_DSN` to also run the lifecycle against PostgreSQL
+(CI does; it drops and recreates the app's tables — use a scratch
+database).
