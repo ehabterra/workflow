@@ -1,42 +1,59 @@
 {{template "head" .ID}}
-<h1>{{.ID}} <span class="state {{.State}}">{{.State}}</span></h1>
-<p>{{.Description}} — {{money .Amount}} by <strong>{{.Submitter}}</strong></p>
-<p class="muted">Marking: {{range .Places}}{{.}} {{end}}
-{{if .NextDue}}· next deadline {{.NextDue.Format "2006-01-02 15:04"}}{{end}}</p>
+<p class="eyebrow">Expense</p>
+<h1><span class="mono">{{.ID}}</span> <span class="state state-{{stateClass .State}}">{{.State}}</span></h1>
+<p class="lede">{{if .Description}}{{.Description}} — {{end}}<span class="mono">{{money .Amount}}</span> submitted by <strong>{{.Submitter}}</strong>{{if .NextDue}} · next deadline <span class="mono">{{.NextDue.Format "Jan 2, 15:04"}}</span>{{end}}</p>
 
-{{if not (or (.Has "rejected") (.Has "paid"))}}
-<h2>Review actions</h2>
-<p>
-  <form class="inline" method="post" action="/expenses/{{.ID}}/approve">
-    <input type="hidden" name="branch" value="legal">
-    <button type="submit">Approve (legal)</button>
-  </form>
-  <form class="inline" method="post" action="/expenses/{{.ID}}/reject">
-    <input type="hidden" name="branch" value="legal">
-    <button type="submit">Reject (legal)</button>
-  </form>
-  <form class="inline" method="post" action="/expenses/{{.ID}}/approve">
-    <input type="hidden" name="branch" value="finance">
-    <button type="submit">Approve (finance)</button>
-  </form>
-  <form class="inline" method="post" action="/expenses/{{.ID}}/reject">
-    <input type="hidden" name="branch" value="finance">
-    <button type="submit">Reject (finance)</button>
-  </form>
-</p>
+{{if .Has "rejected"}}
+<div class="banner banner-rejected">Rejected — this expense is closed. The review lanes below show where each token stopped.</div>
+{{else if .Has "paid"}}
+<div class="banner banner-paid">Paid out by the payment batch. The audit trail below is the complete record.</div>
+{{else if .Has "approved"}}
+<div class="banner banner-approved">Approved by both reviews — awaiting the next <a href="/batch">payment batch</a>.</div>
 {{end}}
 
+<h2>Review lanes</h2>
+<div class="net">
+  {{range $branch := .Branches}}
+  {{$stage := $.Branch $branch}}
+  <div class="lane">
+    <span class="lane-name">{{$branch}}</span>
+    <ol class="places">
+      <li class="place {{if eq $stage "pending"}}here{{else if or (eq $stage "escalated") (eq $stage "approved")}}done{{end}}"><span class="dot"></span>pending</li>
+      <li class="place {{if eq $stage "escalated"}}here warn{{end}}"><span class="dot"></span>escalated</li>
+      <li class="place {{if eq $stage "approved"}}here{{end}}"><span class="dot"></span>approved</li>
+    </ol>
+    {{if and $.Open (or (eq $stage "pending") (eq $stage "escalated"))}}
+    <div class="lane-actions">
+      <form class="inline" method="post" action="/expenses/{{$.ID}}/approve">
+        <input type="hidden" name="branch" value="{{$branch}}">
+        <button class="btn-approve" type="submit">Approve</button>
+      </form>
+      <form class="inline" method="post" action="/expenses/{{$.ID}}/reject">
+        <input type="hidden" name="branch" value="{{$branch}}">
+        <button class="btn-reject" type="submit">Reject</button>
+      </form>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+<p class="muted" style="font-size:.85rem">Both lanes run in parallel (one AND-split token each); approval joins them. An escalated lane is overdue but still open.</p>
+
 <h2>Audit trail</h2>
+<div class="card table-wrap">
 <table>
   <tr><th>When</th><th>Transition</th><th>From → To</th><th>Actor</th><th>Notes</th></tr>
   {{range .History}}
   <tr>
-    <td class="muted">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
-    <td>{{.Transition}}</td>
-    <td class="muted">{{.FromState}} → {{.ToState}}</td>
+    <td class="mono muted">{{.CreatedAt.Format "Jan 2, 15:04:05"}}</td>
+    <td class="mono">{{.Transition}}</td>
+    <td class="mono muted">{{.FromState}} → {{.ToState}}</td>
     <td>{{.Actor}}</td>
     <td class="muted">{{.Notes}}</td>
   </tr>
+  {{else}}
+  <tr><td colspan="5" class="empty">No transitions recorded yet.</td></tr>
   {{end}}
 </table>
+</div>
 {{template "foot"}}

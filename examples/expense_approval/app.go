@@ -463,6 +463,30 @@ func (v *ExpenseView) Has(place string) bool {
 	return false
 }
 
+// Branch reports where the branch's token sits: "pending", "escalated",
+// "approved", or "" once the branch token has moved on (joined or the
+// expense was rejected). The detail page draws the lanes from this.
+func (v *ExpenseView) Branch(branch string) string {
+	switch {
+	case v.Has(branch + "_ok"):
+		return "approved"
+	case v.Has("escalated_" + branch):
+		return "escalated"
+	case v.Has("pending_" + branch):
+		return "pending"
+	default:
+		return ""
+	}
+}
+
+// Open reports whether review actions still apply.
+func (v *ExpenseView) Open() bool {
+	return !v.Has("rejected") && !v.Has("approved") && !v.Has("paid")
+}
+
+// Branches lists the parallel review branches, in display order.
+func (v *ExpenseView) Branches() []string { return []string{"legal", "finance"} }
+
 // Expense loads one expense for display (no history; see ExpenseWithHistory).
 func (a *App) Expense(ctx context.Context, id string) (*ExpenseView, error) {
 	wf, err := a.mgr.LoadWorkflow(ctx, id, a.expenseDef)

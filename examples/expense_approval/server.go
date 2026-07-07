@@ -30,6 +30,19 @@ type Server struct {
 func NewServer(app *App) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"money": func(v float64) string { return fmt.Sprintf("%.2f", v) },
+		// stateClass turns a state label into a CSS class suffix
+		// ("in review" -> "in-review").
+		"stateClass": func(s string) string { return strings.ReplaceAll(s, " ", "-") },
+		// held mirrors the payment net's guard (token.amount <= 5000.0) so
+		// the batch page can flag tokens the run will hold back.
+		"held": func(t workflow.Token) bool {
+			v, ok := t.Get("amount")
+			if !ok {
+				return false
+			}
+			f, ok := v.(float64)
+			return ok && f > 5000
+		},
 		"tokenField": func(t workflow.Token, key string) string {
 			v, ok := t.Get(key)
 			if !ok {
@@ -85,9 +98,14 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	stats := map[string]int{}
+	for _, v := range views {
+		stats[v.State]++
+	}
 	s.render(w, "dashboard.html", map[string]any{
 		"Expenses": views,
 		"Payment":  payment,
+		"Stats":    stats,
 	})
 }
 
