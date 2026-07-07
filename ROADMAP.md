@@ -175,10 +175,10 @@ instance-per-entity and tokens-in-one-net models get exercised.
 
 | # | Task | Effort | Acceptance |
 |---|------|--------|-----------|
-| M5.1 | **The reference system** — separate module (`examples/expense_approval` or own repo), HTTP layer, Postgres, cron tick, OTel. | L | Runs end-to-end; kill-tests pass; README of the example doubles as the "mental model" tutorial. |
+| M5.1 | **The reference system** — separate module (`examples/expense_approval` or own repo), HTTP layer, Postgres, cron tick, OTel. | ✅ | Runs end-to-end; kill-tests pass; README of the example doubles as the "mental model" tutorial. Ships with listener-based metrics; the OTel contrib is M5.3, extracted from it. Spec: `docs/DOGFOOD.md`. |
 | M5.2 | **`workflowtest` package** — marking assertions, path runner ("apply submit→legal_approve→finance_approve, assert approved"), guard-env harness, fake-clock helpers for `Due`. Built *as the dogfood needs them*. | M | The reference system's tests use only public helpers. |
 | M5.3 | **Observability contrib** — `contrib/otel`: Manager-listener span pair + `firings_total{workflow,transition,result}`; non-erroring **observer listeners** (instrumentation must never block business flow); lifecycle + rejection events as needed. | M | Traces visible in a collector from the reference system. |
-| M5.4 | **Friction log → issues** — every papercut found while building becomes a tracked issue; this list *is* the input to re-prioritizing the parked milestones. | S | Written verdict: what the library made easy, hard, impossible. |
+| M5.4 | **Friction log → issues** — every papercut found while building becomes a tracked issue; this list *is* the input to re-prioritizing the parked milestones. | 🔄 | Written verdict: what the library made easy, hard, impossible. Running log: `docs/roadmap/FRICTION.md` (7 entries from M5.1); graduates to issues at M5 exit. |
 
 **Exit criterion / go-no-go:** the reference system is built **without** bespoke
 persistence or scheduling layers papering over the library. If it still needs them,

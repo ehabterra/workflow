@@ -1,0 +1,30 @@
+{{define "head"}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}}</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #ddd; }
+  nav { margin-bottom: 1.5rem; }
+  nav a { margin-right: 1rem; }
+  .state { padding: .1rem .5rem; border-radius: .6rem; font-size: .85em; background: #eee; }
+  .state.approved { background: #d3f2d3; } .state.paid { background: #c5e3f7; }
+  .state.rejected { background: #f7d0d0; } .state.escalated { background: #ffe6b3; }
+  form.inline { display: inline; }
+  button { cursor: pointer; }
+  .muted { color: #777; }
+</style>
+</head>
+<body>
+<nav><a href="/">Dashboard</a> <a href="/expenses/new">Submit expense</a> <a href="/batch">Payment batch</a> <a href="/metrics">Metrics</a></nav>
+{{end}}
+
+{{define "foot"}}
+</body>
+</html>
+{{end}}

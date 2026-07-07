@@ -1,0 +1,21 @@
+# The payment net: ONE long-lived instance for the whole system (the
+# CPN-flavored component). Every approved expense becomes a colored token in
+# `payable` carrying {expense_id, amount, submitter}; the batch run fires
+# `pay` per token. The guard holds back large amounts for manual review —
+# those tokens simply stay in `payable`.
+#
+# `batch_control` holds a permanent presence token: a persisted marking must
+# contain at least one place, so a net whose real places can all be empty
+# needs an always-marked control place (friction-logged in docs/DOGFOOD.md).
+workflow:
+  name: payment_batch
+  initial_marking: batch_control
+  places:
+    - name: batch_control
+    - name: payable
+    - name: paid_out
+  transitions:
+    - name: pay
+      from: [payable]
+      to: [paid_out]
+      guard: "token.amount <= 5000.0"

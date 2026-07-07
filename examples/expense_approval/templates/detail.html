@@ -1,0 +1,42 @@
+{{template "head" .ID}}
+<h1>{{.ID}} <span class="state {{.State}}">{{.State}}</span></h1>
+<p>{{.Description}} — {{money .Amount}} by <strong>{{.Submitter}}</strong></p>
+<p class="muted">Marking: {{range .Places}}{{.}} {{end}}
+{{if .NextDue}}· next deadline {{.NextDue.Format "2006-01-02 15:04"}}{{end}}</p>
+
+{{if not (or (.Has "rejected") (.Has "paid"))}}
+<h2>Review actions</h2>
+<p>
+  <form class="inline" method="post" action="/expenses/{{.ID}}/approve">
+    <input type="hidden" name="branch" value="legal">
+    <button type="submit">Approve (legal)</button>
+  </form>
+  <form class="inline" method="post" action="/expenses/{{.ID}}/reject">
+    <input type="hidden" name="branch" value="legal">
+    <button type="submit">Reject (legal)</button>
+  </form>
+  <form class="inline" method="post" action="/expenses/{{.ID}}/approve">
+    <input type="hidden" name="branch" value="finance">
+    <button type="submit">Approve (finance)</button>
+  </form>
+  <form class="inline" method="post" action="/expenses/{{.ID}}/reject">
+    <input type="hidden" name="branch" value="finance">
+    <button type="submit">Reject (finance)</button>
+  </form>
+</p>
+{{end}}
+
+<h2>Audit trail</h2>
+<table>
+  <tr><th>When</th><th>Transition</th><th>From → To</th><th>Actor</th><th>Notes</th></tr>
+  {{range .History}}
+  <tr>
+    <td class="muted">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+    <td>{{.Transition}}</td>
+    <td class="muted">{{.FromState}} → {{.ToState}}</td>
+    <td>{{.Actor}}</td>
+    <td class="muted">{{.Notes}}</td>
+  </tr>
+  {{end}}
+</table>
+{{template "foot"}}

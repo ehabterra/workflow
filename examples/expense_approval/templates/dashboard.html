@@ -1,0 +1,17 @@
+{{template "head" "Expenses"}}
+<h1>Expense fleet</h1>
+<p class="muted">{{len .Expenses}} expense(s). Pending payout total: {{money .Payment.PayableTotal}} — paid out: {{money .Payment.PaidOutTotal}}.</p>
+<table>
+  <tr><th>ID</th><th>Submitter</th><th>Amount</th><th>State</th><th>Places</th><th>Next deadline</th></tr>
+  {{range .Expenses}}
+  <tr>
+    <td><a href="/expenses/{{.ID}}">{{.ID}}</a></td>
+    <td>{{.Submitter}}</td>
+    <td>{{money .Amount}}</td>
+    <td><span class="state {{.State}}">{{.State}}</span></td>
+    <td class="muted">{{range .Places}}{{.}} {{end}}</td>
+    <td class="muted">{{if .NextDue}}{{.NextDue.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+{{template "foot"}}

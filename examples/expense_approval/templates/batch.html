@@ -1,0 +1,23 @@
+{{template "head" "Payment batch"}}
+<h1>Payment batch (CPN)</h1>
+<p class="muted">Approved expenses accumulate here as colored tokens; the batch run fires <code>pay</code> per token. The guard <code>token.amount &lt;= 5000</code> holds larger amounts for manual review.</p>
+
+<form class="inline" method="post" action="/batch/run"><button type="submit">Run batch now</button></form>
+<form class="inline" method="post" action="/batch/reconcile"><button type="submit">Reconcile</button></form>
+
+<h2>Payable ({{len .Payable}} token(s), total {{money .PayableTotal}})</h2>
+<table>
+  <tr><th>Expense</th><th>Submitter</th><th>Amount</th></tr>
+  {{range .Payable}}
+  <tr><td>{{tokenField . "expense_id"}}</td><td>{{tokenField . "submitter"}}</td><td>{{tokenField . "amount"}}</td></tr>
+  {{end}}
+</table>
+
+<h2>Paid out ({{len .PaidOut}} token(s), total {{money .PaidOutTotal}})</h2>
+<table>
+  <tr><th>Expense</th><th>Submitter</th><th>Amount</th></tr>
+  {{range .PaidOut}}
+  <tr><td>{{tokenField . "expense_id"}}</td><td>{{tokenField . "submitter"}}</td><td>{{tokenField . "amount"}}</td></tr>
+  {{end}}
+</table>
+{{template "foot"}}
