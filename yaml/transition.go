@@ -4,70 +4,12 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ehabterra/workflow"
 	"github.com/ehabterra/workflow/history"
 )
-
-// ApplyTransitionWithHistory applies a transition and saves history using metadata from the transition.
-// This is the legacy version that uses target places. For new code, prefer ApplyTransitionByNameWithHistory.
-func ApplyTransitionWithHistory(
-	wf *workflow.Workflow,
-	to []workflow.Place,
-	historyStore history.HistoryStore,
-	ctx context.Context,
-	overrideNotes string,
-	overrideActor string,
-	overrideCustomFields map[string]any,
-) error {
-	// Get current places before transition
-	currentPlaces := wf.Marking().Places()
-	if len(currentPlaces) == 0 {
-		return fmt.Errorf("workflow has no current places")
-	}
-
-	// Find the transition being applied
-	definition := wf.Definition()
-	var transition *workflow.Transition
-	for _, t := range definition.AllTransitions() {
-		// Check if this transition matches
-		fromMatch := true
-		for _, fromPlace := range t.From() {
-			found := slices.Contains(currentPlaces, fromPlace)
-			if !found {
-				fromMatch = false
-				break
-			}
-		}
-
-		toMatch := len(t.To()) == len(to)
-		if toMatch {
-			for i, toPlace := range t.To() {
-				if toPlace != to[i] {
-					toMatch = false
-					break
-				}
-			}
-		}
-
-		if fromMatch && toMatch {
-			transition = &t
-			break
-		}
-	}
-
-	if transition == nil {
-		return fmt.Errorf("%w: for places %v -> %v", workflow.ErrTransitionNotFound, currentPlaces, to)
-	}
-
-	// Apply the transition
-	if err := wf.ApplyWithContext(ctx, to); err != nil {
-		return fmt.Errorf("failed to apply transition: %w", err)
-	}
-
-	return saveTransitionHistory(wf, transition, currentPlaces, to, historyStore, ctx, overrideNotes, overrideActor, overrideCustomFields)
-}
 
 // ApplyTransitionByNameWithHistory applies a transition by name and saves history using metadata from the transition.
 // This is the recommended approach for new code as it avoids ambiguity when multiple transitions lead to the same destination.
@@ -124,16 +66,10 @@ func saveTransitionHistory(
 	overrideCustomFields map[string]any,
 ) error {
 
-	// Prepare history record
-	// Store primary state (first place) for backward compatibility
-	fromState := ""
-	if len(currentPlaces) > 0 {
-		fromState = string(currentPlaces[0]) // Use first place as primary state
-	}
-	toState := ""
-	if len(toPlaces) > 0 {
-		toState = string(toPlaces[0]) // Use first place as primary state
-	}
+	// Record the FULL place sets: with parallel branches a single "primary"
+	// place would silently drop the rest of the marking from the audit trail.
+	fromState := joinPlaces(currentPlaces)
+	toState := joinPlaces(toPlaces)
 
 	record := &history.TransitionRecord{
 		WorkflowID: wf.Name(),
@@ -236,4 +172,15 @@ func saveTransitionHistory(
 	}
 
 	return nil
+}
+
+// joinPlaces renders a place set as a stable comma-joined string for the
+// history record's from/to fields.
+func joinPlaces(places []workflow.Place) string {
+	ss := make([]string, len(places))
+	for i, p := range places {
+		ss[i] = string(p)
+	}
+	slices.Sort(ss)
+	return strings.Join(ss, ",")
 }

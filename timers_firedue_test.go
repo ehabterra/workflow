@@ -23,8 +23,8 @@ func newMemDueStore() *memDueStore {
 	return &memDueStore{memStore: newMemStore(), due: make(map[string]*time.Time)}
 }
 
-func (s *memDueStore) SaveVersionedStateWithDue(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, due *time.Time) (int64, error) {
-	v, err := s.SaveVersionedState(ctx, id, m, c, expected)
+func (s *memDueStore) SaveStateWithDue(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, due *time.Time) (int64, error) {
+	v, err := s.SaveState(ctx, id, m, c, expected)
 	if err != nil {
 		return 0, err
 	}
@@ -65,15 +65,15 @@ func (s *memDueStore) storedDue(id string) (*time.Time, bool) {
 }
 
 // partialDueTxStore is a backend that is a TransactionalStorage AND a DueStorage
-// but deliberately NOT a TransactionalDueStorage (no SaveVersionedStateInTxWithDue).
+// but deliberately NOT a TransactionalDueStorage (no SaveStateInTxWithDue).
 // It is the exact shape Manager.Execute must reject for a timed definition with a
 // side effect, since it cannot update the due index atomically with state+effect.
 type partialDueTxStore struct {
 	*memDueStore
 }
 
-func (s *partialDueTxStore) SaveVersionedStateInTx(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, effects ...workflow.TxSideEffect) (int64, error) {
-	v, err := s.SaveVersionedState(ctx, id, m, c, expected)
+func (s *partialDueTxStore) SaveStateInTx(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, effects ...workflow.TxSideEffect) (int64, error) {
+	v, err := s.SaveState(ctx, id, m, c, expected)
 	if err != nil {
 		return 0, err
 	}
@@ -136,7 +136,7 @@ func seedSubmitted(t *testing.T, mgr *workflow.Manager, id string, def *workflow
 func TestFireDue_FiresDueTransitionAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	def := escalationDef(t, 72*time.Hour, "")
-	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore(), workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore())
 	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
 
 	// Before the deadline nothing fires.
@@ -177,7 +177,7 @@ func TestFireDue_FiresDueTransitionAndIsIdempotent(t *testing.T) {
 func TestFireDue_SkipsGuardRejectedTransition(t *testing.T) {
 	ctx := context.Background()
 	def := escalationDef(t, 72*time.Hour, "getContext('ready', false) == true")
-	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore(), workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore())
 	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, map[string]any{"ready": false})
 
 	now := fireDueEpoch.Add(72 * time.Hour)
@@ -228,7 +228,7 @@ func TestFireDue_ProducedTokensStartFreshTimers(t *testing.T) {
 		t.Fatalf("NewDefinition: %v", err)
 	}
 	ctx := context.Background()
-	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore(), workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore())
 
 	wf, err := workflow.NewWorkflow("wf", def, "a", workflow.WithClock(at(fireDueEpoch)))
 	if err != nil {
@@ -272,7 +272,7 @@ func TestFireDue_FiresMultipleIndependentDue(t *testing.T) {
 		t.Fatalf("NewDefinition: %v", err)
 	}
 	ctx := context.Background()
-	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore(), workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore())
 
 	wf, err := workflow.NewWorkflowFromMarking("wf", def, workflow.NewMarking([]workflow.Place{"p1", "p2"}), workflow.WithClock(at(fireDueEpoch)))
 	if err != nil {
@@ -300,7 +300,7 @@ func TestExecute_RejectsPartialDueBackendWithEffect(t *testing.T) {
 	ctx := context.Background()
 	def := escalationDef(t, 72*time.Hour, "")
 	store := &partialDueTxStore{memDueStore: newMemDueStore()}
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
 
 	// A timed definition + WithTxSideEffect on a DueStorage that is not a
@@ -340,10 +340,10 @@ func TestFireDue_SkipsSaveWhenGuardBlockedIndexCorrect(t *testing.T) {
 	ctx := context.Background()
 	def := escalationDef(t, 72*time.Hour, "getContext('ready', false) == true")
 	store := newMemStore()
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, map[string]any{"ready": false})
 
-	_, _, v0, err := store.LoadVersionedState(ctx, "wf")
+	_, _, v0, err := store.LoadState(ctx, "wf")
 	if err != nil {
 		t.Fatalf("load initial version: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestFireDue_SkipsSaveWhenGuardBlockedIndexCorrect(t *testing.T) {
 		}
 	}
 
-	_, _, v1, err := store.LoadVersionedState(ctx, "wf")
+	_, _, v1, err := store.LoadState(ctx, "wf")
 	if err != nil {
 		t.Fatalf("load final version: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestFireDue_SelfHealsStaleDueIndex(t *testing.T) {
 	ctx := context.Background()
 	def := escalationDef(t, 72*time.Hour, "")
 	store := newMemDueStore()
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
 
 	// Advance to an approved (timer-free) state — the due index is correctly cleared.
@@ -388,7 +388,7 @@ func TestFireDue_SelfHealsStaleDueIndex(t *testing.T) {
 	store.due["wf"] = &stale
 	store.dmu.Unlock()
 
-	_, _, vBefore, err := store.LoadVersionedState(ctx, "wf")
+	_, _, vBefore, err := store.LoadState(ctx, "wf")
 	if err != nil {
 		t.Fatalf("load version before: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestFireDue_SelfHealsStaleDueIndex(t *testing.T) {
 	if d, _ := store.storedDue("wf"); d != nil {
 		t.Fatalf("stored due = %v, want nil (index self-healed)", d)
 	}
-	_, _, vAfter, err := store.LoadVersionedState(ctx, "wf")
+	_, _, vAfter, err := store.LoadState(ctx, "wf")
 	if err != nil {
 		t.Fatalf("load version after: %v", err)
 	}
@@ -436,7 +436,7 @@ func BenchmarkFireDue(b *testing.B) {
 		b.Fatalf("NewDefinition: %v", err)
 	}
 	store := newMemStore()
-	mgr := workflow.NewManager(workflow.NewRegistry(), store, workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
 	now := fireDueEpoch.Add(72 * time.Hour)
 
 	b.ReportAllocs()
@@ -462,7 +462,7 @@ func BenchmarkFireDue(b *testing.B) {
 func TestFireDue_UnsupportedStorageForListDue(t *testing.T) {
 	// memStore is versioned but not a DueStorage: FireDue still works (it rides
 	// Execute), but Manager.ListDue reports the missing capability.
-	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore(), workflow.WithoutRegistryCache())
+	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore())
 	if _, err := mgr.ListDue(context.Background(), fireDueEpoch, 0); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("ListDue on non-DueStorage backend = %v, want ErrUnsupported", err)
 	}

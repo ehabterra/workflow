@@ -177,7 +177,7 @@ func main() {
 	log.Println("\n=== Verifying data persistence ===")
 
 	// Load workflow and verify all fields are preserved
-	loadedPlaces, loadedCtx, err := sqlStore.LoadState(context.Background(), "doc-1")
+	loadedPlaces, loadedCtx, _, err := sqlStore.LoadState(context.Background(), "doc-1")
 	if err != nil {
 		log.Fatalf("Failed to load state: %v", err)
 	}

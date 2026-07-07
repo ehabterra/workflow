@@ -64,7 +64,7 @@ very end — but *broken* README snippets are bugs and get fixed now (M3.9).
 - **Colored Petri Nets (M2, merged)**: unified `Marking` (boolean = uncolored token),
   `Token` value type, per-token firing (`ApplyTransitionForToken`), token-aware guards
   (`token.amount > 1000`), queries/aggregation, adaptive persisted format (old rows load).
-- Storage: SQLite + Postgres with **optimistic concurrency** (`VersionedStorage`,
+- Storage: SQLite + Postgres with **optimistic concurrency** (built into `Storage`,
   `ErrConflict`), transactional building blocks (`RunInTx`, `*Tx` methods), and an
   exported **conformance kit** (`storagetest.Run`) — a real strength.
 - History/audit (SQLite), YAML config with **strict decoding** + polymorphic

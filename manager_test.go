@@ -16,42 +16,48 @@ import (
 type MockStorage struct {
 	states   map[string][]byte
 	contexts map[string]map[string]any
+	versions map[string]int64
 }
 
 func NewMockStorage() *MockStorage {
 	return &MockStorage{
 		states:   make(map[string][]byte),
 		contexts: make(map[string]map[string]any),
+		versions: make(map[string]int64),
 	}
 }
 
-func (m *MockStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
+func (m *MockStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
 	data, ok := m.states[id]
 	if !ok {
-		return nil, nil, fmt.Errorf("workflow not found")
+		return nil, nil, 0, fmt.Errorf("%w: %s", workflow.ErrWorkflowNotFound, id)
 	}
 	marking, err := workflow.UnmarshalMarkingJSON(data)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	contextData := m.contexts[id]
 	if contextData == nil {
 		contextData = map[string]any{}
 	}
-	return marking, contextData, nil
+	return marking, contextData, m.versions[id], nil
 }
 
-func (m *MockStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, context map[string]any) error {
+func (m *MockStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, context map[string]any, expectedVersion int64) (int64, error) {
+	if m.versions[id] != expectedVersion {
+		return 0, fmt.Errorf("%w: %s (expected version %d)", workflow.ErrConflict, id, expectedVersion)
+	}
 	data, err := json.Marshal(marking)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	m.states[id] = data
 	if context == nil {
 		context = map[string]any{}
 	}
 	m.contexts[id] = context
-	return nil
+	m.versions[id] = expectedVersion + 1
+	return m.versions[id], nil
 }
 
 func (m *MockStorage) DeleteState(ctx context.Context, id string) error {
@@ -74,7 +80,7 @@ func TestNewManager(t *testing.T) {
 func TestManager_CreateWorkflow(t *testing.T) {
 	registry := workflow.NewRegistry()
 	storage := NewMockStorage()
-	manager := workflow.NewManager(registry, storage)
+	manager := workflow.NewManager(registry, storage, workflow.WithRegistryCache())
 
 	// Create a simple workflow definition
 	places := []workflow.Place{"draft", "review", "published"}
@@ -106,7 +112,7 @@ func TestManager_CreateWorkflow(t *testing.T) {
 	}
 
 	// Verify initial state was saved
-	m, _, err := storage.LoadState(context.Background(), id)
+	m, _, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Failed to load workflow state: %v", err)
 	}
@@ -119,7 +125,7 @@ func TestManager_CreateWorkflow(t *testing.T) {
 func TestManager_GetWorkflow(t *testing.T) {
 	registry := workflow.NewRegistry()
 	storage := NewMockStorage()
-	manager := workflow.NewManager(registry, storage)
+	manager := workflow.NewManager(registry, storage, workflow.WithRegistryCache())
 
 	// Create a simple workflow definition
 	places := []workflow.Place{"draft", "review", "published"}
@@ -183,7 +189,7 @@ func TestManager_SaveWorkflow(t *testing.T) {
 	}
 
 	// Verify the state was saved
-	m, _, err := storage.LoadState(context.Background(), id)
+	m, _, _, err := storage.LoadState(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Failed to load workflow state: %v", err)
 	}
@@ -226,7 +232,7 @@ func TestManager_DeleteWorkflow(t *testing.T) {
 	}
 
 	// Verify workflow state was removed from storage
-	_, _, err = storage.LoadState(context.Background(), id)
+	_, _, _, err = storage.LoadState(context.Background(), id)
 	if err == nil {
 		t.Error("Expected error when getting deleted workflow from storage")
 	}
@@ -235,7 +241,7 @@ func TestManager_DeleteWorkflow(t *testing.T) {
 func TestManager_LoadWorkflow(t *testing.T) {
 	registry := workflow.NewRegistry()
 	storage := NewMockStorage()
-	manager := workflow.NewManager(registry, storage)
+	manager := workflow.NewManager(registry, storage, workflow.WithRegistryCache())
 
 	// Create a simple workflow definition
 	places := []workflow.Place{"draft", "review", "published"}
@@ -253,7 +259,7 @@ func TestManager_LoadWorkflow(t *testing.T) {
 	// Create a workflow and save its state
 	id := "test_workflow"
 	initialPlace := workflow.Place("draft")
-	err = storage.SaveState(context.Background(), id, workflow.NewMarking([]workflow.Place{initialPlace}), nil)
+	_, err = storage.SaveState(context.Background(), id, workflow.NewMarking([]workflow.Place{initialPlace}), seedContext(definition, nil), 0)
 	if err != nil {
 		t.Fatalf("Failed to save workflow state: %v", err)
 	}
@@ -288,7 +294,7 @@ func TestManager_LoadWorkflow(t *testing.T) {
 func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 	registry := workflow.NewRegistry()
 	storage := NewMockStorage()
-	manager := workflow.NewManager(registry, storage)
+	manager := workflow.NewManager(registry, storage, workflow.WithRegistryCache())
 
 	places := []workflow.Place{"draft", "review", "published"}
 	definition, err := workflow.NewDefinition(places, []workflow.Transition{})
@@ -318,7 +324,7 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 	manager2 := workflow.NewManager(workflow.NewRegistry(), storage2)
 
 	// Save empty state (should cause error when loading)
-	err = storage2.SaveState(context.Background(), "empty_workflow", workflow.NewMarking(nil), nil)
+	_, err = storage2.SaveState(context.Background(), "empty_workflow", workflow.NewMarking(nil), nil, 0)
 	if err != nil {
 		t.Fatalf("Failed to save empty state: %v", err)
 	}
@@ -337,7 +343,7 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 		"key2": 42,
 		"key3": true,
 	}
-	err = storage3.SaveState(context.Background(), "workflow_with_context", workflow.NewMarking([]workflow.Place{initialPlace}), contextData)
+	_, err = storage3.SaveState(context.Background(), "workflow_with_context", workflow.NewMarking([]workflow.Place{initialPlace}), seedContext(definition, contextData), 0)
 	if err != nil {
 		t.Fatalf("Failed to save workflow with context: %v", err)
 	}
@@ -362,7 +368,7 @@ func TestManager_LoadWorkflow_EdgeCases(t *testing.T) {
 func TestManager_CreateWorkflow_EdgeCases(t *testing.T) {
 	registry := workflow.NewRegistry()
 	storage := NewMockStorage()
-	manager := workflow.NewManager(registry, storage)
+	manager := workflow.NewManager(registry, storage, workflow.WithRegistryCache())
 
 	places := []workflow.Place{"draft", "review", "published"}
 	definition, err := workflow.NewDefinition(places, []workflow.Transition{})
@@ -582,7 +588,7 @@ func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
 	}
 
 	// Save state with empty places
-	err = storage.SaveState(context.Background(), "empty_places", workflow.NewMarking(nil), nil)
+	_, err = storage.SaveState(context.Background(), "empty_places", workflow.NewMarking(nil), seedContext(def, nil), 0)
 	if err != nil {
 		t.Fatalf("SaveState() failed: %v", err)
 	}
@@ -600,14 +606,25 @@ func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
 // ErrorStorage is a mock storage that always returns an error
 type ErrorStorage struct{}
 
-func (e *ErrorStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, error) {
-	return nil, nil, fmt.Errorf("storage error")
+func (e *ErrorStorage) LoadState(ctx context.Context, id string) (workflow.Marking, map[string]any, int64, error) {
+	return nil, nil, 0, fmt.Errorf("storage error")
 }
 
-func (e *ErrorStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, context map[string]any) error {
-	return fmt.Errorf("storage error")
+func (e *ErrorStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, context map[string]any, expectedVersion int64) (int64, error) {
+	return 0, fmt.Errorf("storage error")
 }
 
 func (e *ErrorStorage) DeleteState(ctx context.Context, id string) error {
 	return fmt.Errorf("storage error")
+}
+
+// seedContext returns ctxData stamped with the definition fingerprint under
+// the Manager's reserved key, the way every Manager save writes it — required
+// for a directly-seeded row to pass the strict load check.
+func seedContext(def *workflow.Definition, ctxData map[string]any) map[string]any {
+	if ctxData == nil {
+		ctxData = map[string]any{}
+	}
+	ctxData["__workflow_def_fingerprint"] = def.Fingerprint()
+	return ctxData
 }

@@ -18,10 +18,10 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// saveVersionedInTx runs a versioned state save and the given side effects in
+// saveStateInTx runs a versioned state save and the given side effects in
 // one RunInTx transaction, returning the new version. It backs the
 // workflow.TransactionalStorage implementations of both SQL backends.
-func saveVersionedInTx(ctx context.Context, db *sql.DB, effects []workflow.TxSideEffect, save func(*sql.Tx) (int64, error)) (int64, error) {
+func saveStateInTx(ctx context.Context, db *sql.DB, effects []workflow.TxSideEffect, save func(*sql.Tx) (int64, error)) (int64, error) {
 	var newVersion int64
 	err := RunInTx(ctx, db, func(tx *sql.Tx) error {
 		v, err := save(tx)
@@ -79,10 +79,10 @@ func scanIDs(rows *sql.Rows, queryErr error) ([]string, error) {
 //
 // The same *sql.DB must back both stores for their writes to share the transaction.
 //
-// Note: composing a versioned save manually here (via SaveVersionedStateTx) does
+// Note: composing a versioned save manually here (via SaveStateTx) does
 // NOT maintain the due index — the storage-level Tx saves leave the due column
 // untouched. For a timed definition, drive saves through the Manager, or use
-// SaveVersionedStateInTxWithDue, so the due index commits atomically with state.
+// SaveStateInTxWithDue, so the due index commits atomically with state.
 func RunInTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) (err error) {
 	if db == nil {
 		return errors.New("storage: RunInTx requires a non-nil *sql.DB")

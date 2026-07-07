@@ -1,6 +1,7 @@
 package yaml
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -96,7 +97,7 @@ func (b *SQLiteStorageBuilder) Build(config map[string]any) (workflow.Storage, *
 	return store, &StorageInit{
 		Schema: schema,
 		InitFunc: func() error {
-			return storage.Initialize(db, schema)
+			return store.EnsureSchema(context.Background())
 		},
 	}, nil
 }

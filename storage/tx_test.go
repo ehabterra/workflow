@@ -34,7 +34,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStorage: %v", err)
 	}
-	if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
+	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatalf("init state schema: %v", err)
 	}
 
@@ -49,7 +49,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 
 	// --- Success path: both writes commit together. ---
 	err = storage.RunInTx(ctx, db, func(tx *sql.Tx) error {
-		if err := store.SaveStateTx(ctx, tx, "wf1", workflow.NewMarking([]workflow.Place{"review"}), nil); err != nil {
+		if _, err := store.SaveStateTx(ctx, tx, "wf1", workflow.NewMarking([]workflow.Place{"review"}), nil, 0); err != nil {
 			return err
 		}
 		return hist.SaveTransitionTx(ctx, tx, rec)
@@ -58,7 +58,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 		t.Fatalf("RunInTx (success): %v", err)
 	}
 
-	m, _, err := store.LoadState(ctx, "wf1")
+	m, _, _, err := store.LoadState(ctx, "wf1")
 	if err != nil {
 		t.Fatalf("LoadState after commit: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 	wantErr := errors.New("boom: simulated crash mid-transition")
 	err = storage.RunInTx(ctx, db, func(tx *sql.Tx) error {
 		// This state change moves wf1 to "done"...
-		if err := store.SaveStateTx(ctx, tx, "wf1", workflow.NewMarking([]workflow.Place{"done"}), nil); err != nil {
+		if _, err := store.SaveStateTx(ctx, tx, "wf1", workflow.NewMarking([]workflow.Place{"done"}), nil, 1); err != nil {
 			return err
 		}
 		// ...but the transition record fails to persist, aborting the whole tx.
@@ -89,7 +89,7 @@ func TestRunInTx_AtomicStateAndHistory(t *testing.T) {
 	}
 
 	// State must be unchanged: still "review", not "done".
-	m, _, err = store.LoadState(ctx, "wf1")
+	m, _, _, err = store.LoadState(ctx, "wf1")
 	if err != nil {
 		t.Fatalf("LoadState after rollback: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestRunInTx_RollsBackOnPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStorage: %v", err)
 	}
-	if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
+	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
@@ -140,13 +140,13 @@ func TestRunInTx_RollsBackOnPanic(t *testing.T) {
 			t.Fatal("expected panic to propagate out of RunInTx")
 		}
 		// The write inside the panicking tx must not have committed.
-		if _, _, err := store.LoadState(ctx, "wfP"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
+		if _, _, _, err := store.LoadState(ctx, "wfP"); !errors.Is(err, workflow.ErrWorkflowNotFound) {
 			t.Fatalf("state after panic rollback err = %v, want ErrWorkflowNotFound", err)
 		}
 	}()
 
 	_ = storage.RunInTx(ctx, db, func(tx *sql.Tx) error {
-		if err := store.SaveStateTx(ctx, tx, "wfP", workflow.NewMarking([]workflow.Place{"x"}), nil); err != nil {
+		if _, err := store.SaveStateTx(ctx, tx, "wfP", workflow.NewMarking([]workflow.Place{"x"}), nil, 0); err != nil {
 			return err
 		}
 		panic("simulated crash")

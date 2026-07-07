@@ -33,7 +33,7 @@ Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflo
 
 * **Mathematically Sound:** Our Petri Net core gives parallel paths and merging logic precise token semantics, which makes complex flows analyzable. A static validator/deadlock checker is planned but not yet shipped, so correctness of a given definition is still up to you today.
 * **Thread-Safe Registry:** The workflow registry uses proper locking to safely handle concurrent access from multiple goroutines.
-* **Audit Trail Ready:** Our pluggable history layer can record every transition, letting you track exactly who did what and when. Recording is opt-in: use the `yaml.ApplyTransitionWithHistory` helper or call the history store from your own event hooks — transitions are not logged automatically.
+* **Audit Trail Ready:** Our pluggable history layer can record every transition, letting you track exactly who did what and when. Recording is opt-in: use the `yaml.ApplyTransitionByNameWithHistory` helper or call the history store from your own event hooks — transitions are not logged automatically.
 
 ### 📊 Easy to Understand (Visualization)
 
@@ -57,18 +57,21 @@ The package provides a flexible, context-aware storage interface for persisting 
 
 ```go
 type Storage interface {
-    // LoadState loads the workflow's marking and its context data for the given ID.
-    LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, err error)
+    // LoadState loads the workflow's marking, context data, and current
+    // optimistic-concurrency version in one atomic snapshot.
+    LoadState(ctx context.Context, id string) (marking Marking, context map[string]any, version int64, err error)
 
-    // SaveState saves the workflow's marking and its context data for the given ID.
-    SaveState(ctx context.Context, id string, marking Marking, context map[string]any) error
+    // SaveState saves the workflow only if the stored version equals
+    // expectedVersion (0 creates), returning the new version. A stale writer
+    // gets ErrConflict instead of silently overwriting a concurrent save.
+    SaveState(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64) (int64, error)
 
     // DeleteState removes the workflow state for the given ID.
     DeleteState(ctx context.Context, id string) error
 }
 ```
 
-You can implement your own storage backend by implementing this interface. The package includes SQLite and PostgreSQL implementations with options for custom fields (both also implement `VersionedStorage` for optimistic concurrency and expose `SaveStateTx`/`LoadStateTx` for transactional use):
+Optimistic concurrency is part of the contract, not an optional add-on: two writers racing to save the same workflow can never silently clobber each other. You can implement your own storage backend by implementing this interface. The package includes SQLite and PostgreSQL implementations with options for custom fields (both also expose `SaveStateTx`/`LoadStateTx` for transactional use):
 
 ```go
 import (
@@ -86,16 +89,16 @@ store, err := storage.NewSQLiteStorage(db,
 )
 if err != nil { panic(err) }
 
-// Generate and initialize the schema
-if err := storage.Initialize(db, store.GenerateSchema()); err != nil { panic(err) }
+// Create (or idempotently migrate) the schema
+if err := store.EnsureSchema(ctx); err != nil { panic(err) }
 
-// Save the marking together with context data
+// Save the marking together with context data (expectedVersion 0 creates)
 marking := workflow.NewMarking([]workflow.Place{"draft"})
-err = store.SaveState(ctx, "my-workflow", marking, map[string]any{"title": "My Doc", "owner": "alice"})
+_, err = store.SaveState(ctx, "my-workflow", marking, map[string]any{"title": "My Doc", "owner": "alice"}, 0)
 
-// Load the marking and context data
-loaded, data, err := store.LoadState(ctx, "my-workflow")
-fmt.Println(loaded.Places(), data["title"], data["owner"])
+// Load the marking, context data, and version
+loaded, data, version, err := store.LoadState(ctx, "my-workflow")
+fmt.Println(loaded.Places(), data["title"], data["owner"], version)
 ```
 
 ## History Layer
@@ -113,7 +116,7 @@ type HistoryStore interface {
 }
 ```
 
-Note that history is **opt-in**: transitions are not recorded automatically. Call `SaveTransition` yourself (for example from an `EventAfterTransition` listener), or use the `yaml.ApplyTransitionWithHistory` helper, which applies a transition and records it in one call.
+Note that history is **opt-in**: transitions are not recorded automatically. Call `SaveTransition` yourself (for example from an `EventAfterTransition` listener), or use the `yaml.ApplyTransitionByNameWithHistory` helper, which applies a transition and records it in one call.
 
 ### SQLite History Example
 
@@ -162,7 +165,7 @@ for _, rec := range records {
 * [x] Storage interface for persistence
 * [x] SQLite storage implementation
 * [x] PostgreSQL storage implementation
-* [x] Optimistic concurrency (`VersionedStorage`) and transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
+* [x] Optimistic concurrency built into the `Storage` contract, plus transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
 * [x] Colored Petri Nets (CPN): multiple data-carrying tokens per place, per-token firing, and token-aware guards — see [docs/guides/CPN_GUIDE.md](docs/guides/CPN_GUIDE.md)
 * [x] Host-driven timers: declare durations (`after: 72h`), the host owns the clock — timeouts and escalation with no internal scheduler — see [docs/guides/TIMERS_GUIDE.md](docs/guides/TIMERS_GUIDE.md)
 * [x] Support for parallel transitions and branching
@@ -182,7 +185,7 @@ We're starting with the basics of Petri Nets and adding layers of powerful featu
 | :--- | :--- | :--- |
 | **Smart Tokens (Colored Petri Nets - CPN)** — ✅ **shipped** | How do you process a batch of 100 orders within one workflow instance? | **Tokens carry data.** Tokens carry attributes (like an order ID), allowing one process to manage multiple concurrent items. See [docs/guides/CPN_GUIDE.md](docs/guides/CPN_GUIDE.md). |
 | **Nested Workflows (HCPN)** | My process has 100 steps—it's too big to manage. | **Modularity.** You can define a complex sub-flow (like "Payment Verification") once and drop it into any main process as a single, clean step. |
-| **Crash-Safe Storage (ACID)** — ✅ **shipped** | What if the server dies during a critical step? | **Data Integrity.** Optimistic concurrency (`VersionedStorage`), transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`), and an atomic execute helper (`Manager.Execute` with `WithTxSideEffect`) commit a state change and its history record in one transaction. |
+| **Crash-Safe Storage (ACID)** — ✅ **shipped** | What if the server dies during a critical step? | **Data Integrity.** Optimistic concurrency built into the storage contract, transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`), and an atomic execute helper (`Manager.Execute` with `WithTxSideEffect`) commit a state change and its history record in one transaction. |
 | **Undo Button (Compensation/Rollback)** | I need a way to reliably "undo" a previous action if a later step fails (e.g., refunding a charge). | **Error Recovery.** We'll track the history of completed tasks precisely, enabling safe, structured rollbacks. |
 | **Advanced Synchronization** | When two parallel paths finish, how do I make the third step wait only for the *first* path, but cancel the second one? | **Complex Merging.** We're implementing advanced logic (like nested AND/OR/XOR conditions and discriminators) for robust handling of parallel flows. |
 
@@ -594,7 +597,7 @@ func main() {
         }),
     )
     if err != nil { panic(err) }
-    if err := storage.Initialize(db, store.GenerateSchema()); err != nil { panic(err) }
+    if err := store.EnsureSchema(ctx); err != nil { panic(err) }
 
     // Define workflow
     definition, err := workflow.NewDefinition(
@@ -622,7 +625,7 @@ func main() {
     if err := manager.SaveWorkflow(ctx, "my-workflow", wf); err != nil { panic(err) }
 
     // Load marking and context data from storage
-    marking, data, err := store.LoadState(ctx, "my-workflow")
+    marking, data, _, err := store.LoadState(ctx, "my-workflow")
     if err != nil { panic(err) }
     fmt.Printf("Current places: %v, Title: %v\n", marking.Places(), data["title"])
 
@@ -638,7 +641,7 @@ func main() {
 
 ### Using the Workflow Manager
 
-The workflow manager provides a straightforward interface for creating, loading, and saving workflows. It handles the coordination between the registry (in-memory cache) and storage (database persistence):
+The workflow manager provides a straightforward interface for creating, loading, and saving workflows. It loads fresh from storage by default (correct in every deployment shape) and can optionally cache instances in the registry for single-process setups:
 
 ```go
 ctx := context.Background()
@@ -652,12 +655,14 @@ store, err := storage.NewSQLiteStorage(db)
 if err != nil {
     panic(err)
 }
-if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
+if err := store.EnsureSchema(ctx); err != nil {
     panic(err)
 }
 registry := workflow.NewRegistry()
 
-// Create a workflow manager (options like WithoutRegistryCache are available)
+// Create a workflow manager. Every load reads fresh from storage; add
+// workflow.WithRegistryCache() to serve repeat loads from the in-process
+// registry (single-process deployments only).
 manager := workflow.NewManager(registry, store)
 
 // Create a new workflow

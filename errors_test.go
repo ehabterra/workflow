@@ -76,11 +76,11 @@ func TestSentinelErrors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSQLiteStorage: %v", err)
 		}
-		if err := storage.Initialize(db, store.GenerateSchema()); err != nil {
+		if err := store.EnsureSchema(context.Background()); err != nil {
 			t.Fatalf("Initialize: %v", err)
 		}
 
-		_, _, err = store.LoadState(context.Background(), "does-not-exist")
+		_, _, _, err = store.LoadState(context.Background(), "does-not-exist")
 		if !errors.Is(err, workflow.ErrWorkflowNotFound) {
 			t.Fatalf("got %v, want wrap of ErrWorkflowNotFound", err)
 		}

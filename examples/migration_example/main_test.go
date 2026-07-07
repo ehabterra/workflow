@@ -85,7 +85,7 @@ func TestMigrationWorkflow(t *testing.T) {
 	}
 
 	// Test: Load workflow and verify all fields are preserved
-	loadedPlaces, loadedCtx, err := sqlStore.LoadState(context.Background(), "test-1")
+	loadedPlaces, loadedCtx, _, err := sqlStore.LoadState(context.Background(), "test-1")
 	if err != nil {
 		t.Fatalf("Failed to load state: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestMigrationWorkflow(t *testing.T) {
 	}
 
 	// Verify state changed
-	loadedPlaces, _, err = sqlStore.LoadState(context.Background(), "test-1")
+	loadedPlaces, _, _, err = sqlStore.LoadState(context.Background(), "test-1")
 	if err != nil {
 		t.Fatalf("Failed to load state after transition: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	}
 
 	// Step 4: Verify old workflow still loads correctly
-	loadedPlaces, loadedCtx, err := sqlStoreNew.LoadState(context.Background(), "old-wf")
+	loadedPlaces, loadedCtx, _, err := sqlStoreNew.LoadState(context.Background(), "old-wf")
 	if err != nil {
 		t.Fatalf("Failed to load old workflow: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestMigrationBackwardCompatibility(t *testing.T) {
 	}
 
 	// Step 6: Verify new fields are saved
-	_, loadedCtx, err = sqlStoreNew.LoadState(context.Background(), "old-wf")
+	_, loadedCtx, _, err = sqlStoreNew.LoadState(context.Background(), "old-wf")
 	if err != nil {
 		t.Fatalf("Failed to load workflow after update: %v", err)
 	}

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- **Versioning is now part of the `Storage` contract** (the library is pre-1.0
+  with no compatibility guarantees; an unversioned backend loses updates by
+  design, so the contract no longer allows one). `LoadState` returns
+  `(marking, context, version, error)` in one atomic snapshot; `SaveState`
+  takes `expectedVersion` (0 creates) and returns the new version. The
+  `VersionedStorage` interface and the `LoadVersionedState`/`SaveVersionedState*`
+  method family are gone — the `Versioned` prefix is dropped everywhere
+  (`SaveStateTx`, `SaveStateInTx`, `SaveStateWithDue`, `SaveStateInTxWithDue`).
+- **Fresh loads are the Manager default.** The registry cache is now opt-in via
+  `WithRegistryCache()` (single-process optimization); `WithoutRegistryCache()`
+  is gone. Fresh loads are correct in every deployment shape and optimistic
+  concurrency protects the saves.
+- **A persisted instance without a definition fingerprint no longer loads
+  silently.** Every save stamps one, so a missing fingerprint is treated as a
+  mismatch: `ErrDefinitionMismatch`, or the `WithDefinitionMigration` handler
+  with an empty `storedFingerprint`.
+- Removed legacy surface: the `history.SQLiteHistory` alias (use `SQLHistory`
+  via `NewSQLiteHistory`/`NewPostgresHistory`), `storage.Initialize` (use
+  `EnsureSchema`), and yaml's by-target-places `ApplyTransitionWithHistory`
+  (use `ApplyTransitionByNameWithHistory`). yaml history records now store the
+  full comma-joined place sets in from/to instead of a lossy "primary" place,
+  and template value lookup is string-keys-only (`WithTemplateValue`) — the
+  typed-key fallback could never match and has been removed.
+
 ### Fixed
 - **Lost update under concurrency**: `LoadVersionedState` on both SQL backends
   read the marking and the optimistic-concurrency version in two separate

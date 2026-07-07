@@ -127,7 +127,7 @@ See [CPN_GUIDE.md](../guides/CPN_GUIDE.md) for the full guide.
 - ✅ **PostgreSQL**: Implemented
 - ⏳ **MySQL**: Not planned yet (the interface allows it)
 - ✅ **Token persistence**: Implemented — the full marking, including token data, round-trips through storage
-- ✅ **Long-running processes**: Persistent state plus optimistic concurrency (`VersionedStorage`) and transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
+- ✅ **Long-running processes**: Persistent state plus built-in optimistic concurrency and transactional building blocks (`RunInTx`, `SaveStateTx`/`LoadStateTx`)
 
 ### 5. Configuration & Definition
 
