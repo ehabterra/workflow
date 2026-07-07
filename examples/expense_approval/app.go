@@ -12,7 +12,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,6 +43,15 @@ const paymentID = "payment-batch"
 // cancellation regions yet — see docs/DOGFOOD.md), so terminality is a host
 // rule enforced here.
 var ErrTerminal = errors.New("expense is already rejected")
+
+// ErrNotPayable is returned by ReleasePayment for an expense with no token in
+// the payment net's payable place (and none already paid out).
+var ErrNotPayable = errors.New("nothing to release")
+
+// payGuardLimit mirrors the payment net's pay guard (token.amount <= 5000.0):
+// amounts above it are held for manual release. Kept in one place so the UI
+// and PaymentStatus agree with the YAML guard.
+const payGuardLimit = 5000.0
 
 // schemaEnsurer is what both SQL storage backends provide beyond
 // workflow.Storage; the app only needs it at startup.
@@ -104,7 +115,18 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 
 	// Fresh loads on every request: correct across replicas, and the demo is
 	// nowhere near the scale where the registry cache would matter.
-	mgr := workflow.NewManager(workflow.NewRegistry(), store)
+	//
+	// The migration hook approves definition upgrades for both nets: every
+	// change so far has been additive (new transitions — release, revise,
+	// submit routing; no place was removed), so persisted markings stay
+	// valid — and the loader still validates every loaded place after the
+	// hook approves, so a marking that genuinely no longer fits fails
+	// anyway. A host removing places would need real migration logic here.
+	mgr := workflow.NewManager(workflow.NewRegistry(), store,
+		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
+			log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): additive change, approving", id, stored, current)
+			return nil
+		}))
 
 	a := &App{
 		db:         db,
@@ -261,16 +283,79 @@ func (a *App) SubmitExpense(ctx context.Context, submitter, description string, 
 	if _, err := a.mgr.CreateWorkflow(ctx, id, a.expenseDef, "draft"); err != nil {
 		return "", fmt.Errorf("create expense: %w", err)
 	}
-	_, err = a.fire(ctx, id, a.expenseDef, submitter, func(r *stepRecorder) error {
+	fired, err := a.fire(ctx, id, a.expenseDef, submitter, func(r *stepRecorder) error {
 		r.wf.SetContext("submitter", submitter)
 		r.wf.SetContext("description", description)
 		r.wf.SetContext("amount", amount)
-		return r.apply(ctx, "submit")
+		return routeSubmit(ctx, r)
 	})
 	if err != nil {
 		return "", err
 	}
+	// The petty-cash fast path lands directly in approved: queue it for the
+	// payment batch (crash window repaired by Reconcile, as with finalize).
+	if slices.Contains(fired, "submit_auto") {
+		if err := a.EnqueueApproved(ctx, id); err != nil {
+			log.Printf("enqueue auto-approved %s: %v (Reconcile will repair)", id, err)
+		}
+	}
 	return id, nil
+}
+
+// routeSubmit fires whichever submit variant the amount guard enables — the
+// XOR-split. There is no engine primitive for "fire the one enabled
+// transition out of this place" (friction-logged), so the host tries each
+// variant and treats a guard rejection as "not this route".
+func routeSubmit(ctx context.Context, r *stepRecorder) error {
+	var lastErr error
+	for _, name := range []string{"submit_auto", "submit"} {
+		err := r.apply(ctx, name)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, workflow.ErrTransitionNotAllowed) {
+			return err
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("no submit route accepted the expense: %w", lastErr)
+}
+
+// Revise closes the loop on a rejection: the submitter updates the expense
+// and resubmits. The net's revise transition moves rejected back to draft —
+// but the sibling branch's stranded token (no cancellation regions) must be
+// cleared BY HAND here, or round two would double-fire reviews and inherit a
+// stale escalation deadline. This token surgery is exactly the friction the
+// cancellation-regions milestone exists for (docs/roadmap/FRICTION.md).
+func (a *App) Revise(ctx context.Context, id, actor, description string, amount float64) ([]string, error) {
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 || amount > 1e12 {
+		return nil, errors.New("amount must be a positive number")
+	}
+	fired, err := a.fire(ctx, id, a.expenseDef, actor, func(r *stepRecorder) error {
+		if !hasPlace(r.wf, "rejected") {
+			return fmt.Errorf("%w: only a rejected expense can be revised", workflow.ErrNotEnabled)
+		}
+		if err := r.apply(ctx, "revise"); err != nil {
+			return err
+		}
+		for _, p := range []workflow.Place{"pending_legal", "pending_finance", "escalated_legal", "escalated_finance", "legal_ok", "finance_ok"} {
+			r.wf.ClearPlace(p) // cancel the stranded round-one review tokens
+		}
+		r.wf.SetContext("amount", amount)
+		if description = strings.TrimSpace(description); description != "" {
+			r.wf.SetContext("description", description)
+		}
+		return routeSubmit(ctx, r)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(fired, "submit_auto") {
+		if err := a.EnqueueApproved(ctx, id); err != nil {
+			log.Printf("enqueue auto-approved %s: %v (Reconcile will repair)", id, err)
+		}
+	}
+	return fired, nil
 }
 
 // Approve fires the branch's approve transition (from pending or escalated,
@@ -392,6 +477,68 @@ func (a *App) RunBatch(ctx context.Context, actor string) (*BatchResult, error) 
 	}
 	res.Elapsed = a.now().Sub(start)
 	return res, nil
+}
+
+// ReleasePayment is the manual-review path for a guard-held token: a reviewer
+// pays out one expense's token explicitly, bypassing the batch guard, with
+// the reviewer recorded in the audit trail. Releasing an expense that is not
+// in payable returns ErrNotPayable (already paid = redelivery no-op for the
+// caller to map; never enqueued = genuine error).
+func (a *App) ReleasePayment(ctx context.Context, expenseID, actor string) error {
+	released := false
+	_, err := a.fire(ctx, paymentID, a.paymentDef, actor, func(r *stepRecorder) error {
+		released = false
+		for _, tok := range r.wf.GetTokens("payable") {
+			if id, ok := tokenExpenseID(tok); ok && id == expenseID {
+				amount, _ := tok.Get("amount")
+				if err := r.applyForToken(ctx, "release", tok, fmt.Sprintf("expense %s (%v) released by reviewer", expenseID, amount)); err != nil {
+					return err
+				}
+				released = true
+				return nil
+			}
+		}
+		// Not in payable: distinguish "already paid out" from "never there".
+		for _, tok := range r.wf.GetTokens("paid_out") {
+			if id, ok := tokenExpenseID(tok); ok && id == expenseID {
+				return nil // already paid: idempotent no-op
+			}
+		}
+		return fmt.Errorf("%w: expense %s has no payable token", ErrNotPayable, expenseID)
+	})
+	if err != nil {
+		return err
+	}
+	if released {
+		return a.markPaid(ctx, expenseID)
+	}
+	return nil
+}
+
+// PaymentStatus reports where an expense stands in the payment net:
+// "queued", "held" (guard will hold it; needs manual release), "paid", or ""
+// (not enqueued).
+func (a *App) PaymentStatus(ctx context.Context, expenseID string) (string, error) {
+	wf, err := a.mgr.LoadWorkflow(ctx, paymentID, a.paymentDef)
+	if err != nil {
+		return "", err
+	}
+	for _, tok := range wf.GetTokens("payable") {
+		if id, ok := tokenExpenseID(tok); ok && id == expenseID {
+			if v, ok := tok.Get("amount"); ok {
+				if amt, ok := v.(float64); ok && amt > payGuardLimit {
+					return "held", nil
+				}
+			}
+			return "queued", nil
+		}
+	}
+	for _, tok := range wf.GetTokens("paid_out") {
+		if id, ok := tokenExpenseID(tok); ok && id == expenseID {
+			return "paid", nil
+		}
+	}
+	return "", nil
 }
 
 func (a *App) markPaid(ctx context.Context, id string) error {

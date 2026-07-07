@@ -1,7 +1,8 @@
 {{template "head" "Payment batch"}}
+{{template "flash" .Flash}}
 <p class="eyebrow">Colored-token net</p>
 <h1>Payment batch</h1>
-<p class="lede">Approved expenses land here as tokens in <span class="mono">payable</span>. Running the batch pays each token out; the guard <span class="mono">token.amount &le; 5000</span> holds larger ones for manual review.</p>
+<p class="lede">Approved expenses land here as tokens in <span class="mono">payable</span>. Running the batch pays each token out; the guard <span class="mono">token.amount &le; 5000</span> holds larger ones for manual review — release those individually below.</p>
 
 <div class="actions-row">
   <form class="inline" method="post" action="/batch/run"><button class="btn-approve" type="submit">Run payment batch</button></form>
@@ -9,27 +10,35 @@
   <span class="muted" style="font-size:.85rem">Reconcile repairs interrupted hand-offs between an expense and this net.</span>
 </div>
 
-<h2>Awaiting payout · {{len .Payable}} token(s) · total <span class="mono">{{money .PayableTotal}}</span></h2>
+<h2>Awaiting payout · {{len .P.Payable}} token(s) · total <span class="mono">{{money .P.PayableTotal}}</span></h2>
 <div class="card table-wrap">
 <table>
-  <tr><th>Expense</th><th>Submitter</th><th class="num">Amount</th></tr>
-  {{range .Payable}}
+  <tr><th>Expense</th><th>Submitter</th><th class="num">Amount</th><th>Review</th></tr>
+  {{range .P.Payable}}
   <tr>
     <td><a class="mono" href="/expenses/{{tokenField . "expense_id"}}">{{tokenField . "expense_id"}}</a>{{if held .}}<span class="chip-held">held by guard</span>{{end}}</td>
     <td>{{tokenField . "submitter"}}</td>
     <td class="num">{{tokenField . "amount"}}</td>
+    <td>
+      {{if held .}}
+      <form class="inline" method="post" action="/payments/{{tokenField . "expense_id"}}/release"
+            onsubmit="return confirm('Release {{tokenField . "amount"}} to {{tokenField . "submitter"}}? This bypasses the batch guard and is recorded in the audit trail.')">
+        <button class="btn-release" type="submit">Review &amp; release</button>
+      </form>
+      {{else}}<span class="muted">next batch run</span>{{end}}
+    </td>
   </tr>
   {{else}}
-  <tr><td colspan="3" class="empty">Nothing awaiting payout — approved expenses land here.</td></tr>
+  <tr><td colspan="4" class="empty">Nothing awaiting payout — approved expenses land here.</td></tr>
   {{end}}
 </table>
 </div>
 
-<h2>Paid out · {{len .PaidOut}} token(s) · total <span class="mono">{{money .PaidOutTotal}}</span></h2>
+<h2>Paid out · {{len .P.PaidOut}} token(s) · total <span class="mono">{{money .P.PaidOutTotal}}</span></h2>
 <div class="card table-wrap">
 <table>
   <tr><th>Expense</th><th>Submitter</th><th class="num">Amount</th></tr>
-  {{range .PaidOut}}
+  {{range .P.PaidOut}}
   <tr>
     <td><a class="mono" href="/expenses/{{tokenField . "expense_id"}}">{{tokenField . "expense_id"}}</a></td>
     <td>{{tokenField . "submitter"}}</td>

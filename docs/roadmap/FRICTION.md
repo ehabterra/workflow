@@ -92,6 +92,45 @@ workaround.
 - `WithClock`/explicit-`now` design meant zero sleeps anywhere in the tests.
 - The strict YAML loader caught every schema typo with a line number.
 
+## What is missing — ranked (the M5 answer)
+
+The dogfood app now exercises guards-from-context routing (XOR-split),
+cycles (revise/resubmit), per-token manual release, AND-split/join,
+timers, and the CPN batch — deliberately probing the library's limits.
+Priority order for what the library needs next, from what actually hurt:
+
+1. **Cancellation regions** (entries 1, and now the revise cycle). The
+   workaround graduated from "host checks a flag" to **host-side token
+   surgery**: `Revise` must `ClearPlace` six places by hand or round two
+   double-fires reviews and inherits round one's stale escalation deadline.
+   Every consumer with reject/timeout semantics on parallel branches will
+   have to reinvent this. Highest priority by a wide margin.
+
+2. **OR-input transitions** (entry 2). The escalation feature doubled the
+   approve/reject transitions; with the revise loop the duplication now
+   also infects every host-side action helper (`applyFirst` chains).
+
+3. **XOR-split routing primitive** (new). Guard-routed alternatives out of
+   one place (petty cash vs. review) work, but the host must try each
+   variant and interpret guard rejections (`routeSubmit`). An engine-level
+   "fire the enabled one of these" (free-choice conflict resolution) — or
+   just a documented recipe — belongs in the library.
+
+4. **`FireDue` side effects** (entry 4). Timer audit records are still
+   at-least-once while every interactive fire is exactly-once. Grows worse
+   as timers multiply.
+
+5. **Additive-change detection for fingerprints** (new). Adding `release`,
+   `revise`, and submit routing changed both nets' fingerprints; the
+   migration hook can only see two opaque hashes, so the host approves
+   blindly (safe here because the loader re-validates places — but the
+   hook can't distinguish "new transition added" from "place renamed").
+   A structural diff (places added/removed, transitions added/removed)
+   handed to the migration hook would make upgrade hooks trustworthy.
+
+6. **Creation seed** (entry 8) and **cross-instance recipes** (entry 5) —
+   real but tolerable with documented patterns.
+
 ## Verdict so far
 
 No bespoke persistence or scheduling layer was needed — the M5 exit

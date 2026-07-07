@@ -1,8 +1,9 @@
 # The payment net: ONE long-lived instance for the whole system (the
 # CPN-flavored component). Every approved expense becomes a colored token in
 # `payable` carrying {expense_id, amount, submitter}; the batch run fires
-# `pay` per token. The guard holds back large amounts for manual review —
-# those tokens simply stay in `payable`.
+# `pay` per token. The guard holds back large amounts — those tokens stay in
+# `payable` until a reviewer fires `release` on them individually (manual
+# review, actor recorded in the audit trail).
 #
 # `batch_control` holds a permanent presence token: a persisted marking must
 # contain at least one place, so a net whose real places can all be empty
@@ -19,3 +20,9 @@ workflow:
       from: [payable]
       to: [paid_out]
       guard: "token.amount <= 5000.0"
+    - name: release
+      from: [payable]
+      to: [paid_out]
+      metadata:
+        manual: true
+        description: reviewer-approved payout of a guard-held token

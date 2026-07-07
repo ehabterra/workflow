@@ -25,7 +25,7 @@ import (
 func TestStrandedBranchEscalatesHarmlessly(t *testing.T) {
 	app, _ := newTestApp(t)
 	ctx := context.Background()
-	id := mustSubmit(t, app, "alice", 100)
+	id := mustSubmit(t, app, "alice", 150)
 
 	if _, err := app.Reject(ctx, id, "legal", "lawyer"); err != nil {
 		t.Fatalf("reject: %v", err)

@@ -1,20 +1,25 @@
-{{template "head" .ID}}
+{{template "head" .V.ID}}
+{{template "flash" .Flash}}
 <p class="eyebrow">Expense</p>
-<h1><span class="mono">{{.ID}}</span> <span class="state state-{{stateClass .State}}">{{.State}}</span></h1>
-<p class="lede">{{if .Description}}{{.Description}} — {{end}}<span class="mono">{{money .Amount}}</span> submitted by <strong>{{.Submitter}}</strong>{{if .NextDue}} · next deadline <span class="mono">{{.NextDue.Format "Jan 2, 15:04"}}</span>{{end}}</p>
+<h1><span class="mono">{{.V.ID}}</span> <span class="state state-{{stateClass .V.State}}">{{.V.State}}</span>
+{{if .PayStatus}}<span class="state pay-{{.PayStatus}}">payment: {{.PayStatus}}</span>{{end}}</h1>
+<p class="lede">{{if .V.Description}}{{.V.Description}} — {{end}}<span class="mono">{{money .V.Amount}}</span> submitted by <strong>{{.V.Submitter}}</strong>{{if .V.NextDue}} · deadline <span class="mono">{{deadline .V.NextDue}}</span>{{end}}</p>
 
-{{if .Has "rejected"}}
-<div class="banner banner-rejected">Rejected — this expense is closed. The review lanes below show where each token stopped.</div>
-{{else if .Has "paid"}}
+{{if .V.Has "rejected"}}
+<div class="banner banner-rejected">Rejected — revise it below to resubmit, or leave it closed. The lanes show where each token stopped.</div>
+{{else if .V.Has "paid"}}
 <div class="banner banner-paid">Paid out by the payment batch. The audit trail below is the complete record.</div>
-{{else if .Has "approved"}}
-<div class="banner banner-approved">Approved by both reviews — awaiting the next <a href="/batch">payment batch</a>.</div>
+{{else if .V.Has "approved"}}
+<div class="banner banner-approved">Approved
+{{- if eq .PayStatus "held"}} — the payment guard is holding this amount; <a href="/batch">release it on the batch page</a>.
+{{- else if eq .PayStatus "queued"}} — awaiting the next <a href="/batch">payment batch</a>.
+{{- else}} by both reviews.{{end}}</div>
 {{end}}
 
 <h2>Review lanes</h2>
-<div class="net{{if not .Open}} closed{{end}}">
-  {{range $branch := .Branches}}
-  {{$stage := $.Branch $branch}}
+<div class="net{{if not .V.Open}} closed{{end}}">
+  {{range $branch := .V.Branches}}
+  {{$stage := $.V.Branch $branch}}
   <div class="lane">
     <span class="lane-name">{{$branch}}</span>
     <ol class="places">
@@ -22,13 +27,13 @@
       <li class="place {{if eq $stage "escalated"}}here warn{{end}}"><span class="dot"></span>escalated</li>
       <li class="place {{if eq $stage "approved"}}here{{end}}"><span class="dot"></span>approved</li>
     </ol>
-    {{if and $.Open (or (eq $stage "pending") (eq $stage "escalated"))}}
+    {{if and $.V.Open (or (eq $stage "pending") (eq $stage "escalated"))}}
     <div class="lane-actions">
-      <form class="inline" method="post" action="/expenses/{{$.ID}}/approve">
+      <form class="inline" method="post" action="/expenses/{{$.V.ID}}/approve">
         <input type="hidden" name="branch" value="{{$branch}}">
         <button class="btn-approve" type="submit">Approve</button>
       </form>
-      <form class="inline" method="post" action="/expenses/{{$.ID}}/reject">
+      <form class="inline" method="post" action="/expenses/{{$.V.ID}}/reject" onsubmit="return confirm('Reject this expense ({{$branch}})? The submitter will have to revise and resubmit.')">
         <input type="hidden" name="branch" value="{{$branch}}">
         <button class="btn-reject" type="submit">Reject</button>
       </form>
@@ -37,13 +42,27 @@
   </div>
   {{end}}
 </div>
-<p class="muted" style="font-size:.85rem">Both lanes run in parallel (one AND-split token each); approval joins them. An escalated lane is overdue but still open.</p>
+<p class="muted" style="font-size:.85rem">Petty cash (≤ 100.00) skips review entirely; both lanes run in parallel otherwise, and approval joins them. An escalated lane is overdue but still open.</p>
+
+{{if .V.Has "rejected"}}
+<h2>Revise &amp; resubmit</h2>
+<form class="card form-card" method="post" action="/expenses/{{.V.ID}}/revise">
+  <label>Amount
+    <span class="hint">Update the amount — ≤ 100.00 auto-approves; over 5000.00 will be held by the payment guard.</span>
+    <input class="mono" name="amount" type="number" step="0.01" min="0.01" value="{{money .V.Amount}}" required>
+  </label>
+  <label>Description
+    <input name="description" value="{{.V.Description}}">
+  </label>
+  <div><button class="btn-approve" type="submit">Resubmit for review</button></div>
+</form>
+{{end}}
 
 <h2>Audit trail</h2>
 <div class="card table-wrap">
 <table>
   <tr><th>When</th><th>Transition</th><th>From → To</th><th>Actor</th><th>Notes</th></tr>
-  {{range .History}}
+  {{range .V.History}}
   <tr>
     <td class="mono muted">{{.CreatedAt.Format "Jan 2, 15:04:05"}}</td>
     <td class="mono">{{.Transition}}</td>

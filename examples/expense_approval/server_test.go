@@ -36,25 +36,21 @@ func postForm(t *testing.T, url string, form url.Values) (int, string) {
 
 func submitViaHTTP(t *testing.T, ts *httptest.Server, submitter, amount string) string {
 	t.Helper()
-	// Don't follow the redirect: the Location header carries the new ID.
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
-	resp, err := client.PostForm(ts.URL+"/expenses", url.Values{
+	// API callers (no html Accept header) get a plain-text confirmation
+	// carrying the new ID: "Expense exp-xxxxxxxx submitted".
+	code, body := postForm(t, ts.URL+"/expenses", url.Values{
 		"submitter":   {submitter},
 		"description": {"via http"},
 		"amount":      {amount},
 	})
-	if err != nil {
-		t.Fatalf("submit: %v", err)
+	if code != http.StatusOK {
+		t.Fatalf("submit: status %d: %s", code, body)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("submit: status %d: %s", resp.StatusCode, body)
+	fields := strings.Fields(body)
+	if len(fields) < 2 || !strings.HasPrefix(fields[1], "exp-") {
+		t.Fatalf("submit response has no expense id: %q", body)
 	}
-	loc := resp.Header.Get("Location")
-	return strings.TrimPrefix(loc, "/expenses/")
+	return fields[1]
 }
 
 // TestFullLifecycle drives the real HTTP surface end to end: submit →
@@ -105,14 +101,14 @@ func TestFullLifecycle(t *testing.T) {
 // approval is a 200 no-op, not an error and not a double fire.
 func TestWebhookRedelivery(t *testing.T) {
 	ts, _ := newTestServer(t)
-	id := submitViaHTTP(t, ts, "bob", "80")
+	id := submitViaHTTP(t, ts, "bob", "800")
 
 	code, _ := postForm(t, ts.URL+"/expenses/"+id+"/approve", url.Values{"branch": {"legal"}})
 	if code != http.StatusOK {
 		t.Fatalf("first delivery: %d", code)
 	}
 	code, body := postForm(t, ts.URL+"/expenses/"+id+"/approve", url.Values{"branch": {"legal"}})
-	if code != http.StatusOK || !strings.Contains(body, "already processed") {
+	if code != http.StatusOK || !strings.Contains(body, "Already processed") {
 		t.Fatalf("redelivery must be a 200 no-op, got %d %q", code, body)
 	}
 }
@@ -121,7 +117,7 @@ func TestWebhookRedelivery(t *testing.T) {
 // closed — later decisions on either branch get 409.
 func TestRejectIsTerminal(t *testing.T) {
 	ts, _ := newTestServer(t)
-	id := submitViaHTTP(t, ts, "carol", "60")
+	id := submitViaHTTP(t, ts, "carol", "600")
 
 	code, body := postForm(t, ts.URL+"/expenses/"+id+"/reject", url.Values{"branch": {"legal"}})
 	if code != http.StatusOK || !strings.Contains(body, "legal_reject") {
