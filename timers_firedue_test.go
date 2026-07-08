@@ -85,6 +85,60 @@ func (s *partialDueTxStore) SaveStateInTx(ctx context.Context, id string, m work
 	return v, nil
 }
 
+// txDueStore is a full in-memory TransactionalDueStorage: state, due index,
+// and side effects commit together, and an effect error rolls the whole save
+// back — mirroring the real SQL backends' transaction semantics.
+type txDueStore struct {
+	*memDueStore
+}
+
+func (s *txDueStore) SaveStateInTx(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, effects ...workflow.TxSideEffect) (int64, error) {
+	return s.saveWithRollback(ctx, id, m, c, expected, nil, false, effects)
+}
+
+func (s *txDueStore) SaveStateInTxWithDue(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, due *time.Time, effects ...workflow.TxSideEffect) (int64, error) {
+	return s.saveWithRollback(ctx, id, m, c, expected, due, true, effects)
+}
+
+func (s *txDueStore) saveWithRollback(ctx context.Context, id string, m workflow.Marking, c map[string]any, expected int64, due *time.Time, setDue bool, effects []workflow.TxSideEffect) (int64, error) {
+	// Snapshot the raw row + due entry so an effect error can restore them.
+	s.mu.Lock()
+	prevRow, existed := s.rows[id]
+	s.mu.Unlock()
+	prevDue, hadDue := s.storedDue(id)
+
+	var v int64
+	var err error
+	if setDue {
+		v, err = s.SaveStateWithDue(ctx, id, m, c, expected, due)
+	} else {
+		v, err = s.SaveState(ctx, id, m, c, expected)
+	}
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range effects {
+		if err := e(ctx, nil); err != nil {
+			s.mu.Lock()
+			if existed {
+				s.rows[id] = prevRow
+			} else {
+				delete(s.rows, id)
+			}
+			s.mu.Unlock()
+			s.dmu.Lock()
+			if hadDue {
+				s.due[id] = prevDue
+			} else {
+				delete(s.due, id)
+			}
+			s.dmu.Unlock()
+			return 0, err
+		}
+	}
+	return v, nil
+}
+
 // fireDueEpoch is a fixed reference time so every FireDue test is deterministic
 // without ever sleeping.
 var fireDueEpoch = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
@@ -465,5 +519,139 @@ func TestFireDue_UnsupportedStorageForListDue(t *testing.T) {
 	mgr := workflow.NewManager(workflow.NewRegistry(), newMemStore())
 	if _, err := mgr.ListDue(context.Background(), fireDueEpoch, 0); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("ListDue on non-DueStorage backend = %v, want ErrUnsupported", err)
+	}
+}
+
+// TestFireDueTxSideEffect_ReceivesStepsInTx: the FireDue-scoped effect runs
+// inside the save's transaction WITH the fired steps in hand — transition
+// plus the marking on each side — which is what makes timer audit records
+// exactly-once (friction #4).
+func TestFireDueTxSideEffect_ReceivesStepsInTx(t *testing.T) {
+	ctx := context.Background()
+	def := escalationDef(t, 72*time.Hour, "")
+	store := &txDueStore{memDueStore: newMemDueStore()}
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
+	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
+
+	var got [][]workflow.FiredStep
+	fired, err := mgr.FireDue(ctx, "wf", def, fireDueEpoch.Add(72*time.Hour),
+		workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error {
+			got = append(got, steps)
+			return nil
+		}))
+	if err != nil {
+		t.Fatalf("FireDue: %v", err)
+	}
+	if len(fired) != 1 || fired[0] != "escalate" {
+		t.Fatalf("fired = %v, want [escalate]", fired)
+	}
+	if len(got) != 1 {
+		t.Fatalf("effect invocations = %d, want exactly 1", len(got))
+	}
+	steps := got[0]
+	if len(steps) != 1 || steps[0].Transition != "escalate" {
+		t.Fatalf("steps = %+v, want one escalate step", steps)
+	}
+	if len(steps[0].Before) != 1 || steps[0].Before[0] != "submitted" {
+		t.Fatalf("step.Before = %v, want [submitted]", steps[0].Before)
+	}
+	if len(steps[0].After) != 1 || steps[0].After[0] != "escalated" {
+		t.Fatalf("step.After = %v, want [escalated]", steps[0].After)
+	}
+}
+
+// TestFireDueTxSideEffect_SkippedWhenNothingFires: a pass that fires nothing
+// (including the due-index self-heal save) has no steps to record, so the
+// effect is never invoked.
+func TestFireDueTxSideEffect_SkippedWhenNothingFires(t *testing.T) {
+	ctx := context.Background()
+	def := escalationDef(t, 72*time.Hour, "")
+	store := &txDueStore{memDueStore: newMemDueStore()}
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
+	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
+
+	invoked := 0
+	fired, err := mgr.FireDue(ctx, "wf", def, fireDueEpoch.Add(time.Hour),
+		workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error {
+			invoked++
+			return nil
+		}))
+	if err != nil {
+		t.Fatalf("FireDue(before deadline): %v", err)
+	}
+	if len(fired) != 0 || invoked != 0 {
+		t.Fatalf("fired %v, effect invoked %d times — want none/0 before the deadline", fired, invoked)
+	}
+}
+
+// TestFireDueTxSideEffect_EffectErrorRollsBack is the exactly-once guarantee:
+// when the audit write fails, the state change rolls back with it, the timer
+// stays due, and the next pass re-fires and re-records — never a firing
+// without its record or a record without its firing.
+func TestFireDueTxSideEffect_EffectErrorRollsBack(t *testing.T) {
+	ctx := context.Background()
+	def := escalationDef(t, 72*time.Hour, "")
+	store := &txDueStore{memDueStore: newMemDueStore()}
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
+	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
+
+	boom := errors.New("history write failed")
+	fail := true
+	var recorded []string
+	effect := workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error {
+		if fail {
+			return boom
+		}
+		for _, s := range steps {
+			recorded = append(recorded, s.Transition)
+		}
+		return nil
+	})
+
+	deadline := fireDueEpoch.Add(72 * time.Hour)
+	if _, err := mgr.FireDue(ctx, "wf", def, deadline, effect); !errors.Is(err, boom) {
+		t.Fatalf("FireDue with failing effect = %v, want the effect's error", err)
+	}
+
+	// The firing rolled back with the record: still submitted, still due.
+	wf, err := mgr.LoadWorkflow(ctx, "wf", def)
+	if err != nil {
+		t.Fatalf("LoadWorkflow: %v", err)
+	}
+	if !wf.Marking().HasPlace("submitted") {
+		t.Fatalf("marking = %v, want the firing rolled back to [submitted]", wf.CurrentPlaces())
+	}
+	if due, err := mgr.ListDue(ctx, deadline, 0); err != nil || len(due) != 1 || due[0] != "wf" {
+		t.Fatalf("ListDue after rollback = %v (%v), want [wf] still due", due, err)
+	}
+
+	// The next pass re-fires and records exactly once.
+	fail = false
+	fired, err := mgr.FireDue(ctx, "wf", def, deadline, effect)
+	if err != nil {
+		t.Fatalf("FireDue(retry): %v", err)
+	}
+	if len(fired) != 1 || fired[0] != "escalate" {
+		t.Fatalf("retry fired = %v, want [escalate]", fired)
+	}
+	if len(recorded) != 1 || recorded[0] != "escalate" {
+		t.Fatalf("recorded = %v, want exactly one escalate record", recorded)
+	}
+}
+
+// TestExecuteRejectsFireDueTxSideEffect: only FireDue knows what fired, so
+// plain Execute refuses the option instead of silently invoking the effect
+// with nothing.
+func TestExecuteRejectsFireDueTxSideEffect(t *testing.T) {
+	ctx := context.Background()
+	def := escalationDef(t, 72*time.Hour, "")
+	store := &txDueStore{memDueStore: newMemDueStore()}
+	mgr := workflow.NewManager(workflow.NewRegistry(), store)
+	seedSubmitted(t, mgr, "wf", def, fireDueEpoch, nil)
+
+	err := mgr.Execute(ctx, "wf", def, func(wf *workflow.Workflow) error { return nil },
+		workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error { return nil }))
+	if !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("Execute with a FireDue-scoped effect = %v, want ErrUnsupported", err)
 	}
 }

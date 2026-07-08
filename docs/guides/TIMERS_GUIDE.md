@@ -205,6 +205,31 @@ deadlines are measured from one consistent instant.
 limit. To page a very large backlog, drain a batch with `FireDue` before rescanning,
 or raise `before` in steps.
 
+### Exactly-once audit records for timer firings
+
+To record each firing in a history/audit table, don't write it after `FireDue`
+returns — a crash between the state commit and your write loses the record. Use
+`WithFireDueTxSideEffect`, which runs *inside* the save's transaction with the
+fired steps in hand (transition plus the marking on each side), so the state
+change and its record commit or roll back together:
+
+```go
+fired, err := mgr.FireDue(ctx, id, def, now,
+    workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error {
+        for _, s := range steps {
+            if err := hist.SaveTransitionTx(ctx, tx.(*sql.Tx), &history.TransitionRecord{
+                WorkflowID: id, Transition: s.Transition, Actor: "timer", CreatedAt: now,
+            }); err != nil {
+                return err
+            }
+        }
+        return nil
+    }))
+```
+
+The effect is skipped when the pass fires nothing, and it requires a
+`TransactionalStorage` backend (the SQLite and Postgres backends qualify).
+
 ### Guards don't lose to the clock (and vice versa)
 
 A timer says *when* a transition may fire; a **guard** still says *whether* it may.

@@ -607,9 +607,11 @@ func (a *App) markPaid(ctx context.Context, id string) error {
 // their due transitions. Wired to a time.Ticker in main and to a fake clock
 // in tests — same code path.
 //
-// History for timer firings is written after the state commit (FireDue owns
-// its transaction and returns the fired names only afterwards), so unlike
-// interactive fires it is at-least-once, not atomic — friction-logged.
+// History for timer firings commits in the SAME transaction as the state
+// change (WithFireDueTxSideEffect hands the fired steps to the effect inside
+// FireDue's save), so timer fires are exactly-once, just like interactive
+// fires — this replaced the post-hoc at-least-once write that was friction
+// entry #4.
 func (a *App) Tick(ctx context.Context, now time.Time) (fired map[string][]string, err error) {
 	ids, err := a.mgr.ListDue(ctx, now, 0)
 	if err != nil {
@@ -623,26 +625,30 @@ func (a *App) Tick(ctx context.Context, now time.Time) (fired map[string][]strin
 		if id == paymentID {
 			continue // the payment net has no timers
 		}
-		names, err := a.mgr.FireDue(ctx, id, a.expenseDef, now)
+		names, err := a.mgr.FireDue(ctx, id, a.expenseDef, now,
+			workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error {
+				for _, s := range steps {
+					rec := &history.TransitionRecord{
+						WorkflowID: id,
+						FromState:  placesString(s.Before),
+						ToState:    placesString(s.After),
+						Transition: s.Transition,
+						Actor:      "timer",
+						Notes:      "fired by escalation tick",
+						CreatedAt:  now,
+					}
+					if err := a.hist.SaveTransitionTx(ctx, tx.(*sql.Tx), rec); err != nil {
+						return err
+					}
+				}
+				return nil
+			}))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("fire due %s: %w", id, err))
 			continue
 		}
-		if len(names) == 0 {
-			continue
-		}
-		fired[id] = names
-		for _, name := range names {
-			rec := &history.TransitionRecord{
-				WorkflowID: id,
-				Transition: name,
-				Actor:      "timer",
-				Notes:      "fired by escalation tick",
-				CreatedAt:  now,
-			}
-			if err := a.hist.SaveTransition(ctx, rec); err != nil {
-				errs = append(errs, fmt.Errorf("record timer history for %s: %w", id, err))
-			}
+		if len(names) > 0 {
+			fired[id] = names
 		}
 	}
 	return fired, errors.Join(errs...)
