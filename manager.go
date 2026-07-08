@@ -154,22 +154,25 @@ func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *De
 	// context or guard environment.
 	delete(wfContext, defFingerprintKey)
 
-	// Validate that the loaded marking has at least one place.
-	places := loaded.Places()
-	if len(places) == 0 {
-		return nil, fmt.Errorf("%w: loaded state has no places", ErrInvalidWorkflow)
-	}
-
 	// Validate EVERY loaded place against the definition, not just the first:
 	// a stale marking referencing a place removed from the definition must fail
 	// loudly rather than load into an instance that can never fire.
+	places := loaded.Places()
 	for _, p := range places {
 		if !definition.Place(p) {
 			return nil, fmt.Errorf("%w: loaded marking references place %q not in the definition", ErrDefinitionMismatch, p)
 		}
 	}
 
-	wf, err := NewWorkflow(id, definition, places[0])
+	// A marking with ZERO places is valid: a pure token-pool net's places are
+	// all legitimately empty between batches, and its persisted state must
+	// round-trip (see NewWorkflowFromMarking).
+	var wf *Workflow
+	if len(places) == 0 {
+		wf, err = NewWorkflowFromMarking(id, definition, loaded)
+	} else {
+		wf, err = NewWorkflow(id, definition, places[0])
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow: %w", err)
 	}
@@ -450,12 +453,28 @@ func (m *Manager) CreateWorkflow(ctx context.Context, id string, definition *Def
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow: %w", err)
 	}
+	return m.saveCreated(ctx, id, definition, wf)
+}
+
+// CreateWorkflowFromMarking creates and saves a new workflow instance whose
+// starting state is the given marking: several places, data-carrying (colored)
+// tokens, or — for a pure token-pool net — no marked places at all (an empty
+// marking is valid and persists as such; see NewWorkflowFromMarking).
+func (m *Manager) CreateWorkflowFromMarking(ctx context.Context, id string, definition *Definition, initial Marking) (*Workflow, error) {
+	wf, err := NewWorkflowFromMarking(id, definition, initial)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workflow: %w", err)
+	}
+	return m.saveCreated(ctx, id, definition, wf)
+}
+
+// saveCreated persists a freshly constructed instance. The save inserts at
+// version 1 and fails with ErrConflict if a workflow with this id already
+// exists. A timer-bearing workflow's initial marking is already stamped, so
+// its first deadline is indexed from creation.
+func (m *Manager) saveCreated(ctx context.Context, id string, definition *Definition, wf *Workflow) (*Workflow, error) {
 	wf.SetManager(m)
 
-	// Save initial state. This inserts at version 1 and fails with ErrConflict
-	// if a workflow with this id already exists. A timer-bearing workflow's
-	// initial marking is already stamped, so its first deadline is indexed from
-	// creation.
 	marking, ctxData := wf.snapshotState()
 	ctxData = contextForSave(ctxData, definition)
 	due := m.dueForSave(definition, marking)

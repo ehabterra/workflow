@@ -181,9 +181,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("workflow name is required")
 	}
 
-	if len(c.Workflow.InitialMarking.Places) == 0 {
-		return fmt.Errorf("initial_marking is required")
-	}
+	// initial_marking may be omitted: a pure token-pool net (all places
+	// legitimately empty between batches) starts with an empty marking. An
+	// ordinary start-to-finish workflow should declare one — an empty start
+	// there is a dead instance.
 
 	if len(c.Workflow.Transitions) == 0 {
 		return fmt.Errorf("at least one transition is required")

@@ -3,7 +3,6 @@ package workflow_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -587,19 +586,21 @@ func TestManager_LoadWorkflow_EmptyPlaces(t *testing.T) {
 		t.Fatalf("NewDefinition() failed: %v", err)
 	}
 
-	// Save state with empty places
+	// Save state with no marked places — valid for a pure token-pool net,
+	// whose places are all legitimately empty between batches.
 	_, err = storage.SaveState(context.Background(), "empty_places", workflow.NewMarking(nil), seedContext(def, nil), 0)
 	if err != nil {
 		t.Fatalf("SaveState() failed: %v", err)
 	}
 
-	// Try to load workflow with empty places - should return error
-	_, err = manager.LoadWorkflow(context.Background(), "empty_places", def)
-	if err == nil {
-		t.Error("LoadWorkflow() with empty places should return error")
+	// The empty marking loads as-is (it used to be rejected with
+	// "loaded state has no places").
+	wf, err := manager.LoadWorkflow(context.Background(), "empty_places", def)
+	if err != nil {
+		t.Fatalf("LoadWorkflow() with an empty marking should succeed, got: %v", err)
 	}
-	if err != nil && !errors.Is(err, workflow.ErrInvalidWorkflow) {
-		t.Errorf("LoadWorkflow() error = %v, want it to wrap ErrInvalidWorkflow", err)
+	if places := wf.Marking().Places(); len(places) != 0 {
+		t.Errorf("expected an empty marking, got %v", places)
 	}
 }
 

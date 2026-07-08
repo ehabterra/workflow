@@ -5,21 +5,16 @@
 # `payable` until a reviewer fires `release` on them individually (manual
 # review, actor recorded in the audit trail).
 #
-# `batch_control` holds a permanent presence token: a persisted marking must
-# contain at least one place, so a net whose real places can all be empty
-# needs an always-marked control place (friction-logged in docs/DOGFOOD.md).
+# There is deliberately no initial_marking: a pure token-pool net starts
+# EMPTY, and between batches every place is legitimately empty again. An
+# empty marking persists and reloads fine, so the always-marked
+# `batch_control` anchor place this net once needed is gone (friction
+# entry #3, fixed in the library; see docs/roadmap/SHARED_POOL_MODELING.md).
 workflow:
   name: payment_batch
-  initial_marking: batch_control
   places:
-    # diagram_group boxes the always-marked control anchor separately from the
-    # region colored expense tokens actually flow through.
-    - name: batch_control
-      metadata: {diagram_group: Control}
     - name: payable
-      metadata: {diagram_group: Token flow}
     - name: paid_out
-      metadata: {diagram_group: Token flow}
   transitions:
     - name: pay
       from: [payable]

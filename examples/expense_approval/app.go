@@ -116,14 +116,19 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 	// Fresh loads on every request: correct across replicas, and the demo is
 	// nowhere near the scale where the registry cache would matter.
 	//
-	// The migration hook approves definition upgrades for both nets: every
-	// change so far has been additive (new transitions — release, revise,
-	// submit routing; no place was removed), so persisted markings stay
-	// valid — and the loader still validates every loaded place after the
-	// hook approves, so a marking that genuinely no longer fits fails
-	// anyway. A host removing places would need real migration logic here.
+	// The migration hook approves definition upgrades for both nets. Expense-
+	// net changes have all been additive (new transitions — release, revise,
+	// submit routing), so persisted markings stay valid — and the loader still
+	// validates every loaded place after the hook approves, so a marking that
+	// genuinely no longer fits fails anyway. The payment net is the exception:
+	// it REMOVED a place (the batch_control anchor, obsolete now that an empty
+	// marking persists), which is the one change approval alone cannot cover —
+	// a stored marking still holding the anchor token needs rewriting first.
 	mgr := workflow.NewManager(workflow.NewRegistry(), store,
 		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
+			if id == paymentID {
+				return migratePaymentAnchor(ctx, store, id, stored, current)
+			}
 			log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): additive change, approving", id, stored, current)
 			return nil
 		}))
@@ -146,16 +151,51 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 		return nil
 	})
 
-	// The payment net exists exactly once; create it on first boot.
+	// The payment net exists exactly once; create it on first boot. A pool
+	// net starts EMPTY — tokens only exist while expenses await payment.
 	if _, err := mgr.LoadWorkflow(ctx, paymentID, paymentDef); err != nil {
 		if !errors.Is(err, workflow.ErrWorkflowNotFound) {
 			return nil, fmt.Errorf("load payment net: %w", err)
 		}
-		if _, err := mgr.CreateWorkflow(ctx, paymentID, paymentDef, "batch_control"); err != nil {
+		if _, err := mgr.CreateWorkflowFromMarking(ctx, paymentID, paymentDef, workflow.NewMarking(nil)); err != nil {
 			return nil, fmt.Errorf("create payment net: %w", err)
 		}
 	}
 	return a, nil
+}
+
+// migratePaymentAnchor upgrades a payment-net instance persisted before the
+// batch_control anchor place was deleted from payment.yaml (the library now
+// round-trips an empty marking, so the always-marked anchor is obsolete).
+// Removing a PLACE is the one definition change approve-and-revalidate cannot
+// wave through — the stale marking still references it and would fail the
+// loader's place validation — so this is real migration logic: strip the
+// anchor token from the stored marking, in storage, before the manager
+// reloads. Idempotent: an already-clean marking is approved untouched, so
+// the hook firing again before the next save restamps the fingerprint is
+// harmless.
+func migratePaymentAnchor(ctx context.Context, store workflow.Storage, id, stored, current string) error {
+	marking, wfCtx, version, err := store.LoadState(ctx, id)
+	if err != nil {
+		return fmt.Errorf("payment anchor migration: load: %w", err)
+	}
+	if !marking.HasPlace("batch_control") {
+		log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): marking already clean, approving", id, stored, current)
+		return nil
+	}
+	if err := marking.RemovePlace("batch_control"); err != nil {
+		return fmt.Errorf("payment anchor migration: %w", err)
+	}
+	if _, err := store.SaveState(ctx, id, marking, wfCtx, version); err != nil {
+		if errors.Is(err, workflow.ErrConflict) {
+			// A concurrent replica migrated first; the caller reloads and
+			// will observe its write.
+			return nil
+		}
+		return fmt.Errorf("payment anchor migration: save: %w", err)
+	}
+	log.Printf("payment net %s migrated (fingerprint %.8s… -> %.8s…): batch_control anchor stripped from the stored marking", id, stored, current)
+	return nil
 }
 
 func loadDefinition(raw []byte) (*workflow.Definition, error) {

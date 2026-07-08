@@ -113,6 +113,40 @@ func Run(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("EmptyMarkingRoundTrip", func(t *testing.T) {
+		// A pure token-pool net's places are all legitimately empty between
+		// batches, so a marking with ZERO places must persist and reload
+		// (not be rejected or mangled into "not found").
+		ctx := context.Background()
+		store := newStore(t)
+		if _, err := store.SaveState(ctx, "pool", mk(), nil, 0); err != nil {
+			t.Fatalf("SaveState(empty marking): %v", err)
+		}
+		m, _, version, err := store.LoadState(ctx, "pool")
+		if err != nil {
+			t.Fatalf("LoadState(empty marking): %v", err)
+		}
+		if places := m.Places(); len(places) != 0 {
+			t.Fatalf("places = %v, want none", places)
+		}
+		if version != 1 {
+			t.Fatalf("version = %d, want 1", version)
+		}
+		// Draining a marking back to empty on an existing row works too.
+		if _, err := store.SaveState(ctx, "pool", mk("payable"), nil, 1); err != nil {
+			t.Fatalf("SaveState(one place): %v", err)
+		}
+		if _, err := store.SaveState(ctx, "pool", mk(), nil, 2); err != nil {
+			t.Fatalf("SaveState(drained back to empty): %v", err)
+		}
+		if m, _, _, err = store.LoadState(ctx, "pool"); err != nil {
+			t.Fatalf("LoadState(drained): %v", err)
+		}
+		if places := m.Places(); len(places) != 0 {
+			t.Fatalf("places after drain = %v, want none", places)
+		}
+	})
+
 	t.Run("ColoredTokensRoundTrip", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)

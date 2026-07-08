@@ -10,7 +10,7 @@
 <div class="card diagram-card"><pre class="mermaid">{{.Expense}}</pre></div>
 
 <h2>Payment net — one long-lived colored-token instance (live)</h2>
-<p class="muted" style="font-size:.85rem">Live: the marking is highlighted and token badges (⬤×N) show what each place holds right now — amounts are in the tables on the batch page. The always-marked <span class="mono">Control</span> anchor is boxed apart from the <span class="mono">Token flow</span> region.</p>
+<p class="muted" style="font-size:.85rem">Live: the marking is highlighted and token badges (⬤×N) show what each place holds right now — amounts are in the tables on the batch page. A pool net starts <em>empty</em> — every place may legitimately be unmarked (no always-on anchor token); tokens appear only as approved expenses flow through.</p>
 <div class="card diagram-card"><pre class="mermaid">{{.Payment}}</pre></div>
 
 {{template "mermaidjs"}}

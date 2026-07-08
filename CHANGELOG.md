@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Empty markings persist** — friction log #3. A marking with zero marked
+  places is now a valid state end-to-end: `NewWorkflowFromMarking` accepts an
+  empty (non-nil) marking, the new **`Manager.CreateWorkflowFromMarking`**
+  creates and saves an instance from any marking (multi-place, colored
+  tokens, or empty), loading no longer rejects a stored state with no places,
+  and YAML may omit `initial_marking` entirely. This is what a pure
+  token-pool net needs — all its places are legitimately empty between
+  batches — so the dogfood deleted its always-marked `batch_control` anchor
+  place and instead shows real place-removal migration in its
+  `WithDefinitionMigration` hook (strip the anchor from stored markings
+  before the manager reloads). The storagetest conformance kit gained
+  `EmptyMarkingRoundTrip`. Design context in
+  `docs/roadmap/SHARED_POOL_MODELING.md`.
 - **OR-input (merge) transitions** — friction log #2. `from_any: true` in
   YAML (`Transition.SetFromAny` in Go) makes a transition enabled when ANY
   ONE of its input places is marked; firing consumes exactly the first

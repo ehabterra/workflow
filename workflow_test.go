@@ -646,10 +646,10 @@ func TestWorkflow_Diagram(t *testing.T) {
 		}
 		got := wf.Diagram()
 		for _, want := range []string{
-			"t_fork --> p_branch1",        // AND-split fans out of one node…
-			"t_fork --> p_branch2",        //   (outputs are always "produce all")
-			"p_branch1 -->|all| t_merge",  // …and the AND-join fans in, labeled "all"
-			"p_branch2 -->|all| t_merge",  //   (symmetric with "either" for OR-inputs)
+			"t_fork --> p_branch1",       // AND-split fans out of one node…
+			"t_fork --> p_branch2",       //   (outputs are always "produce all")
+			"p_branch1 -->|all| t_merge", // …and the AND-join fans in, labeled "all"
+			"p_branch2 -->|all| t_merge", //   (symmetric with "either" for OR-inputs)
 			"t_merge --> p_end",
 		} {
 			if !strings.Contains(got, want) {

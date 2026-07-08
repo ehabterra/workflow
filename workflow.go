@@ -238,6 +238,12 @@ func WithClock(now func() time.Time) WorkflowOption {
 // given marking. Use it when the initial state has multiple places or
 // data-carrying (colored) tokens; NewWorkflow is the single-place shorthand.
 //
+// An EMPTY marking (zero marked places) is valid: a pure token-pool net —
+// one whose places are all legitimately empty between batches — starts with
+// nothing marked and fires nothing until tokens arrive. For an ordinary
+// start-to-finish workflow an empty start is a dead instance; declare an
+// initial place there.
+//
 // The marking is adopted (owned by the workflow), and every place it occupies
 // must be defined in the workflow. When the definition has timed transitions,
 // tokens without an entry time are stamped at construction (so a fresh marking
@@ -255,9 +261,6 @@ func NewWorkflowFromMarking(name string, definition *Definition, initial Marking
 	}
 
 	places := initial.Places()
-	if len(places) == 0 {
-		return nil, fmt.Errorf("%w: initial marking has no places", ErrInvalidMarking)
-	}
 	for _, p := range places {
 		if !definition.Place(p) {
 			return nil, fmt.Errorf("%w: initial place %s is not defined in the workflow", ErrInvalidPlace, p)

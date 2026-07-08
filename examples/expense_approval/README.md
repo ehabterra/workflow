@@ -118,12 +118,19 @@ where every approved expense is a token carrying
 guard `token.amount <= 5000.0` holds big amounts in `payable`, and a
 reviewer pays those out individually with the `release` transition (manual
 review, reviewer recorded in the audit trail). Totals come from
-`AggregateTokens`.
+`AggregateTokens`. The net starts **empty** — a marking with zero places is
+a valid persisted state (`CreateWorkflowFromMarking` with an empty marking),
+so no always-marked anchor place is needed and tokens exist only for
+expenses actually flowing through.
 
 **Definitions evolve; the fingerprint notices.** Adding `release`/`revise`
 changed both nets' fingerprints, so the app installs a
 `WithDefinitionMigration` hook that approves the (additive) upgrades —
-and the loader still re-validates every loaded place afterwards.
+and the loader still re-validates every loaded place afterwards. Deleting
+the payment net's `batch_control` anchor place is the one change approval
+alone can't cover: the hook runs real migration logic
+(`migratePaymentAnchor`), stripping the anchor from the stored marking
+before the manager reloads.
 
 **What the library refuses to do for you** — and this app does explicitly:
 terminality on rejection (no cancellation regions yet; `ErrTerminal` in
