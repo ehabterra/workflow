@@ -12,9 +12,13 @@ import (
 	"github.com/ehabterra/workflow"
 )
 
-// Compile-time assertion that PostgresStorage satisfies the full storage
-// contract, including the host-driven-timer (M4) due index.
-var _ workflow.TransactionalDueStorage = (*PostgresStorage)(nil)
+// Compile-time assertions that PostgresStorage satisfies the full storage
+// contract, including the host-driven-timer (M4) due index and the
+// cross-instance token read-model.
+var (
+	_ workflow.TransactionalDueStorage = (*PostgresStorage)(nil)
+	_ workflow.TokenQueryStorage       = (*PostgresStorage)(nil)
+)
 
 // PostgresStorage is a PostgreSQL-backed implementation of workflow.Storage and
 // It mirrors SQLiteStorage but uses PostgreSQL syntax
@@ -67,15 +71,40 @@ func (s *PostgresStorage) GenerateSchema() string {
 	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s);", s.table, strings.Join(columns, ", "))
 }
 
-// EnsureSchema creates the state table if it does not exist and idempotently
-// applies the migrations this library version needs — currently the M4 due
-// index: it adds the due column to a pre-existing table (ADD COLUMN IF NOT
-// EXISTS) and creates the supporting index. It is safe to call on every process
-// start against both fresh and pre-existing tables, and is the recommended
-// one-call setup for backends that use Manager.FireDue.
+// GenerateTokenSchema returns the CREATE statements (table + indexes) for the
+// token table — the normalized one-row-per-token form of the marking behind
+// workflow.TokenQueryStorage — for use with a separate migration tool.
+// EnsureSchema applies the same statements itself. Empty when the token table
+// is disabled (WithTokenTable("")).
+func (s *PostgresStorage) GenerateTokenSchema() string {
+	if !s.tokensEnabled() {
+		return ""
+	}
+	return strings.Join(tokenTableDDL(s.tokensTable(), "BIGSERIAL PRIMARY KEY"), "\n")
+}
+
+// EnsureSchema creates the state table (and the token table, unless disabled)
+// if they do not exist and idempotently applies the migrations this library
+// version needs — currently the M4 due index: it adds the due column to a
+// pre-existing table (ADD COLUMN IF NOT EXISTS) and creates the supporting
+// index. It is safe to call on every process start against both fresh and
+// pre-existing tables, and is the recommended one-call setup for backends
+// that use Manager.FireDue.
+//
+// Upgrading a pre-token-table database: EnsureSchema creates the (empty)
+// token table; existing rows keep their marking blob and remain loadable, and
+// each instance is normalized on its next save. Run BackfillTokenStates once
+// to migrate eagerly so ListPlaceTokens sees not-yet-saved instances.
 func (s *PostgresStorage) EnsureSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, s.GenerateSchema()); err != nil {
 		return fmt.Errorf("create table: %w", err)
+	}
+	if s.tokensEnabled() {
+		for _, stmt := range tokenTableDDL(s.tokensTable(), "BIGSERIAL PRIMARY KEY") {
+			if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("create token table: %w", err)
+			}
+		}
 	}
 	if s.dueColumn == "" {
 		return nil
@@ -106,20 +135,34 @@ func (s *PostgresStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string
 }
 
 func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, int64, error) {
-	columns := []string{s.stateColumn}
+	columns := []string{"w." + s.stateColumn}
 	if s.contextColumn != "" {
-		columns = append(columns, s.contextColumn)
+		columns = append(columns, "w."+s.contextColumn)
 	}
 	customStart := len(columns)
 	customKeys := make([]string, 0, len(s.customFields))
 	for key, colDef := range s.customFields {
-		columns = append(columns, firstField(colDef))
+		columns = append(columns, "w."+firstField(colDef))
 		customKeys = append(customKeys, key)
 	}
 	versionIdx := len(columns)
-	columns = append(columns, s.versionColumn)
+	columns = append(columns, "w."+s.versionColumn)
 
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = $1", strings.Join(columns, ", "), s.table, s.idColumn)
+	// The token rows join into the SAME statement as the instance row: one
+	// statement is one snapshot (even at READ COMMITTED), so the marking,
+	// context, and version can never disagree — the read-skew class of bug
+	// the single-query contract exists to prevent.
+	tokens := s.tokensEnabled()
+	tokenIdx := len(columns)
+	var query string
+	if tokens {
+		columns = append(columns, "tk.place", "tk.token")
+		query = fmt.Sprintf("SELECT %s FROM %s w LEFT JOIN %s tk ON tk.workflow_id = w.%s WHERE w.%s = $1 ORDER BY tk.seq",
+			strings.Join(columns, ", "), s.table, s.tokensTable(), s.idColumn, s.idColumn)
+	} else {
+		query = fmt.Sprintf("SELECT %s FROM %s w WHERE w.%s = $1",
+			strings.Join(columns, ", "), s.table, s.idColumn)
+	}
 
 	var stateJSON string
 	scanArgs := make([]any, len(columns))
@@ -134,15 +177,46 @@ func (s *PostgresStorage) loadState(ctx context.Context, q querier, id string) (
 	}
 	var version int64
 	scanArgs[versionIdx] = &version
-
-	if err := q.QueryRowContext(ctx, query, id).Scan(scanArgs...); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, 0, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
-		}
-		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+	var tokPlace, tokJSON sql.NullString
+	if tokens {
+		scanArgs[tokenIdx] = &tokPlace
+		scanArgs[tokenIdx+1] = &tokJSON
 	}
 
-	marking, err := workflow.UnmarshalMarkingJSON([]byte(stateJSON))
+	rows, err := q.QueryContext(ctx, query, id)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	found := false
+	var tokenPlaces, tokenJSONs []string
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+		}
+		found = true
+		if tokens && tokPlace.Valid && tokJSON.Valid {
+			tokenPlaces = append(tokenPlaces, tokPlace.String)
+			tokenJSONs = append(tokenJSONs, tokJSON.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+	}
+	if !found {
+		return nil, nil, 0, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
+	}
+
+	// A NON-empty state blob is authoritative — a legacy row (or one written
+	// by a pre-token-table binary) that has not been normalized yet. New
+	// saves blank the blob and keep the marking in token rows only.
+	var marking workflow.Marking
+	if tokens && stateJSON == "" {
+		marking, err = markingFromTokenJSON(tokenPlaces, tokenJSONs)
+	} else {
+		marking, err = workflow.UnmarshalMarkingJSON([]byte(stateJSON))
+	}
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
@@ -205,9 +279,15 @@ func dueValuePg(due *time.Time) any {
 	return due.UTC()
 }
 
-// DeleteState removes a workflow's state.
+// DeleteState removes a workflow's state (and its token rows).
 func (s *PostgresStorage) DeleteState(ctx context.Context, id string) error {
-	return s.deleteState(ctx, s.db, id)
+	if !s.tokensEnabled() {
+		return s.deleteState(ctx, s.db, id)
+	}
+	// The instance row and its token rows must go together.
+	return RunInTx(ctx, s.db, func(tx *sql.Tx) error {
+		return s.deleteState(ctx, tx, id)
+	})
 }
 
 // DeleteStateTx behaves like DeleteState but writes through the provided transaction.
@@ -216,9 +296,36 @@ func (s *PostgresStorage) DeleteStateTx(ctx context.Context, tx *sql.Tx, id stri
 }
 
 func (s *PostgresStorage) deleteState(ctx context.Context, q querier, id string) error {
+	if s.tokensEnabled() {
+		del := fmt.Sprintf("DELETE FROM %s WHERE workflow_id = $1", s.tokensTable())
+		if _, err := q.ExecContext(ctx, del, id); err != nil {
+			return err
+		}
+	}
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = $1", s.table, s.idColumn)
 	_, err := q.ExecContext(ctx, query, id)
 	return err
+}
+
+// ListPlaceTokens implements workflow.TokenQueryStorage: every token currently
+// resting in the given place across ALL workflow instances, in stable (seq)
+// order — the cross-instance read-model for shared token pools. It returns an
+// error wrapping errors.ErrUnsupported when the token table is disabled.
+func (s *PostgresStorage) ListPlaceTokens(ctx context.Context, place workflow.Place, opts workflow.ListOptions) ([]workflow.PlacedToken, error) {
+	return listPlaceTokens(ctx, s.db, s.config, true, place, opts)
+}
+
+// BackfillTokenStates migrates every pre-token-table row (marking JSON still
+// in the state column) into token rows, one instance per transaction, and
+// reports how many were migrated. Instances normalize organically on their
+// next save anyway; run this once after an upgrade so ListPlaceTokens also
+// sees instances that have not saved since. Idempotent and safe under
+// concurrent writers (a racing save wins and normalizes the row itself).
+func (s *PostgresStorage) BackfillTokenStates(ctx context.Context) (int, error) {
+	if !s.tokensEnabled() {
+		return 0, fmt.Errorf("token table disabled (empty token table name): %w", errors.ErrUnsupported)
+	}
+	return backfillTokens(ctx, s.db, s.config, true)
 }
 
 // SaveState implements workflow.Storage. It preserves the due
@@ -226,7 +333,14 @@ func (s *PostgresStorage) deleteState(ctx context.Context, q querier, id string)
 // index; for a timed definition, use SaveStateWithDue or go through the
 // Manager so the index stays current.
 func (s *PostgresStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
+	if !s.tokensEnabled() {
+		return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
+	}
+	// The version-guarded instance write and the token rows must commit
+	// atomically, so the non-Tx path opens its own transaction.
+	return saveStateInTx(ctx, s.db, nil, func(tx *sql.Tx) (int64, error) {
+		return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
+	})
 }
 
 // SaveStateTx behaves like SaveState but writes through the
@@ -252,7 +366,12 @@ func (s *PostgresStorage) SaveStateInTx(ctx context.Context, id string, marking 
 // versioned state and records the instance's next-due time (nil clears it) in
 // the due-index column.
 func (s *PostgresStorage) SaveStateWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (int64, error) {
-	return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
+	if !s.tokensEnabled() {
+		return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
+	}
+	return saveStateInTx(ctx, s.db, nil, func(tx *sql.Tx) (int64, error) {
+		return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, due, true)
+	})
 }
 
 // SaveStateInTxWithDue implements workflow.TransactionalDueStorage: the
@@ -264,10 +383,20 @@ func (s *PostgresStorage) SaveStateInTxWithDue(ctx context.Context, id string, m
 	})
 }
 
+// saveState writes the instance row (version-guarded) and, when the token
+// table is enabled, mirrors the marking into token rows and blanks the state
+// blob. The caller must pass a transaction as q whenever the token table is
+// enabled, so the instance row and its token rows commit atomically.
 func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, setDue bool) (int64, error) {
-	stateJSON, err := json.Marshal(marking)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal state: %w", err)
+	// With the token table enabled the blob is blanked — the marking lives in
+	// token rows only (an empty blob is what marks a normalized row on load).
+	var stateVal string
+	if !s.tokensEnabled() {
+		stateJSON, err := json.Marshal(marking)
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal state: %w", err)
+		}
+		stateVal = string(stateJSON)
 	}
 	customCols, customVals := s.customColumns(ctxData, encodeValuePg)
 	if s.contextColumn != "" {
@@ -287,7 +416,7 @@ func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, m
 
 	if expectedVersion <= 0 {
 		columns := append([]string{s.idColumn, s.stateColumn, s.versionColumn}, customCols...)
-		values := append([]any{id, string(stateJSON), int64(1)}, customVals...)
+		values := append([]any{id, stateVal, int64(1)}, customVals...)
 		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING;",
 			s.table, strings.Join(columns, ", "), strings.Join(pgPlaceholders(len(values)), ", "), s.idColumn)
 
@@ -302,6 +431,11 @@ func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, m
 		if n == 0 {
 			return 0, fmt.Errorf("%w: workflow %s already exists (expected version 0)", workflow.ErrConflict, id)
 		}
+		if s.tokensEnabled() {
+			if err := replaceTokens(ctx, q, s.tokensTable(), true, id, marking); err != nil {
+				return 0, err
+			}
+		}
 		return 1, nil
 	}
 
@@ -309,7 +443,7 @@ func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, m
 		fmt.Sprintf("%s = $1", s.stateColumn),
 		fmt.Sprintf("%s = %s + 1", s.versionColumn, s.versionColumn),
 	}
-	args := []any{string(stateJSON)}
+	args := []any{stateVal}
 	n := 1
 	for i, col := range customCols {
 		n++
@@ -333,6 +467,11 @@ func (s *PostgresStorage) saveState(ctx context.Context, q querier, id string, m
 	}
 	if affected == 0 {
 		return 0, fmt.Errorf("%w: workflow %s (expected version %d)", workflow.ErrConflict, id, expectedVersion)
+	}
+	if s.tokensEnabled() {
+		if err := replaceTokens(ctx, q, s.tokensTable(), true, id, marking); err != nil {
+			return 0, err
+		}
 	}
 	return expectedVersion + 1, nil
 }

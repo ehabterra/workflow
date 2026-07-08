@@ -5,14 +5,14 @@
 # `payable` until a reviewer fires `release` on them individually (manual
 # review, actor recorded in the audit trail).
 #
-# `batch_control` holds a permanent presence token: a persisted marking must
-# contain at least one place, so a net whose real places can all be empty
-# needs an always-marked control place (friction-logged in docs/DOGFOOD.md).
+# There is deliberately no initial_marking: a pure token-pool net starts
+# EMPTY, and between batches every place is legitimately empty again. An
+# empty marking persists and reloads fine, so the always-marked
+# `batch_control` anchor place this net once needed is gone (friction
+# entry #3, fixed in the library; see docs/roadmap/SHARED_POOL_MODELING.md).
 workflow:
   name: payment_batch
-  initial_marking: batch_control
   places:
-    - name: batch_control
     - name: payable
     - name: paid_out
   transitions:
@@ -20,9 +20,11 @@ workflow:
       from: [payable]
       to: [paid_out]
       guard: "token.amount <= 5000.0"
+      metadata: {diagram_class: auto}
     - name: release
       from: [payable]
       to: [paid_out]
       metadata:
         manual: true
+        diagram_class: person
         description: reviewer-approved payout of a guard-held token

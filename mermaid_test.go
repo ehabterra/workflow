@@ -33,18 +33,12 @@ func TestDiagramWithGuards(t *testing.T) {
 
 	diagram := wf.Diagram()
 
-	// Check that guards are included in the diagram
-	// Look for common guard indicators: role, permission, in place, or context conditions
-	hasGuardInfo := strings.Contains(diagram, "role:") ||
-		strings.Contains(diagram, "roles:") ||
-		strings.Contains(diagram, "permission:") ||
-		strings.Contains(diagram, "in place:") ||
-		strings.Contains(diagram, "==") ||
-		strings.Contains(diagram, "!=")
-
-	if !hasGuardInfo {
-		t.Logf("Diagram output:\n%s", diagram)
-		t.Error("Diagram should contain guard information")
+	// Guards appear VISIBLY on the routing edges, prettified: ❰ role manager ❱.
+	for _, want := range []string{"❰ role manager ❱", "❰ role admin or role manager ❱", "❰ role admin and can_reject = true ❱"} {
+		if !strings.Contains(diagram, want) {
+			t.Logf("Diagram output:\n%s", diagram)
+			t.Errorf("Diagram should contain guard label %q", want)
+		}
 	}
 
 	// Check that transition names are present

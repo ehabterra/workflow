@@ -59,7 +59,7 @@
 {{end}}
 
 <h2>Live diagram</h2>
-<p class="muted" style="font-size:.85rem">The instance's own marking, rendered from <span class="mono">Workflow.Diagram()</span> — current places are highlighted.</p>
+{{template "diagram-legend"}}
 <div class="card diagram-card"><pre class="mermaid">{{.Diagram}}</pre></div>
 
 <h2>Audit trail</h2>

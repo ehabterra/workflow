@@ -27,7 +27,29 @@ type config struct {
 	// customFields maps a context key to a full SQL column definition.
 	// Example: {"document_id": "document_id TEXT", "approver": "approver TEXT"}
 	customFields map[string]string
+
+	// tokenTable names the child table that stores the marking normalized as
+	// one row per token (workflow_id, place, token_id, token JSON) instead of
+	// a single JSON blob in the state column. It is what makes markings
+	// queryable across instances (TokenQueryStorage) and keeps a busy pool
+	// place from growing one row's blob without bound. tokenTableSet
+	// distinguishes "default" (derive "<table>_tokens") from an explicit
+	// override, including the empty name that disables normalization.
+	tokenTable    string
+	tokenTableSet bool
 }
+
+// tokensTable returns the token table name: the explicit override when set
+// (empty = normalization disabled), otherwise "<table>_tokens".
+func (c config) tokensTable() string {
+	if c.tokenTableSet {
+		return c.tokenTable
+	}
+	return c.table + "_tokens"
+}
+
+// tokensEnabled reports whether markings are normalized into the token table.
+func (c config) tokensEnabled() bool { return c.tokensTable() != "" }
 
 func defaultConfig() config {
 	return config{
@@ -87,6 +109,18 @@ func WithContextColumn(name string) Option {
 // the Manager keeps working but a fleet timer scan is unavailable for it.
 func WithDueColumn(name string) Option {
 	return func(c *config) { c.dueColumn = name }
+}
+
+// WithTokenTable sets the name of the child table that stores the marking as
+// one row per token (the normalized form behind workflow.TokenQueryStorage).
+// Default: "<table>_tokens".
+//
+// Pass an empty name to disable normalization — the backend then persists the
+// whole marking as a JSON blob in the state column, exactly as pre-token-table
+// versions did, and no longer advertises TokenQueryStorage. Useful for a
+// hand-managed schema that has not (yet) gained the token table.
+func WithTokenTable(name string) Option {
+	return func(c *config) { c.tokenTable = name; c.tokenTableSet = true }
 }
 
 // WithCustomFields defines the schema for additional application-specific data.

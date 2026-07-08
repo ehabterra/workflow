@@ -41,11 +41,34 @@ workaround.
    as "try the next source place". An OR-input transition (or place
    wildcard/region) would collapse this.
 
-3. **A marking with zero places cannot persist** (`loaded state has no
-   places` on load). A pure token-pool net whose real places can all be
-   empty needs an always-marked `batch_control` place as an anchor. Cheap,
-   but undiscoverable until it bites at reload time — should at least be
-   documented, or empty markings allowed for token nets.
+3. ✅ **SHIPPED: empty markings persist** (was: a marking with zero places
+   cannot persist). A marking whose places are all empty now saves, loads,
+   and round-trips: `NewWorkflowFromMarking` and the new
+   `Manager.CreateWorkflowFromMarking` accept an empty start, YAML may omit
+   `initial_marking`, and the conformance kit's `EmptyMarkingRoundTrip`
+   covers every backend. The dogfood deleted its `batch_control` anchor —
+   and, since dropping a place is the one definition change
+   approve-and-revalidate can't wave through, its migration hook grew real
+   migration logic (`migratePaymentAnchor` strips the anchor from stored
+   markings; `TestPaymentAnchorMigration`). Original finding kept below.
+
+   **Original entry**: a pure token-pool net whose real places can all be
+   empty needs an always-marked `batch_control` place as an anchor
+   (`loaded state has no places` on load). Cheap, but undiscoverable until
+   it bites at reload time — should at least be documented, or empty
+   markings allowed for token nets.
+
+   → Graduated into a wider design discussion: the anchor is a symptom of
+   modeling a shared cross-instance pool as a single hot marking. Options
+   (singleton pool / per-instance + read-model / sharded batches / queue /
+   native shared place), pros-cons, research (fusion vs substitution,
+   rcwf static places, proclets, WF-net soundness, Camunda/Temporal/saga),
+   and open questions are in [`SHARED_POOL_MODELING.md`](./SHARED_POOL_MODELING.md).
+   The empty-marking fix above was step 1 of that doc's chosen direction
+   ("B via storage-only"); step 2 — normalizing the marking into a token
+   child table with a cross-instance read-model
+   (`workflow.TokenQueryStorage` / `Manager.ListPlaceTokens`) — has shipped
+   too, closing the doc's open work (see its §9.6 for the as-built shape).
 
 4. **`FireDue` cannot join a caller transaction.** Interactive fires get
    atomic state+history via `Execute` + `WithTxSideEffect`, but `FireDue`

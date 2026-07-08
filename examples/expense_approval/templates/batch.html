@@ -10,6 +10,10 @@
   <span class="muted" style="font-size:.85rem">Reconcile repairs interrupted hand-offs between an expense and this net.</span>
 </div>
 
+<h2>Live token flow</h2>
+{{template "diagram-legend"}}
+<div class="card diagram-card"><pre class="mermaid">{{.Diagram}}</pre></div>
+
 <h2>Awaiting payout · {{len .P.Payable}} token(s) · total <span class="mono">{{money .P.PayableTotal}}</span></h2>
 <div class="card table-wrap">
 <table>
@@ -49,4 +53,5 @@
   {{end}}
 </table>
 </div>
+{{template "mermaidjs"}}
 {{template "foot"}}

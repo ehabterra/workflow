@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Normalized token storage + cross-instance token queries.** The SQL
+  backends now persist a marking as one row per token in a child table
+  (`<state_table>_tokens`: workflow_id, place, token_id, full token JSON)
+  instead of a single JSON blob in the state column — same whole-marking
+  overwrite, same per-instance optimistic version, so the atomic
+  load→fire→save contract is unchanged, but the marking becomes queryable:
+  the new **`workflow.TokenQueryStorage`** optional capability (exposed as
+  **`Manager.ListPlaceTokens`**) answers "every token in place P across ALL
+  instances" — the shared-pool read-model — with one indexed query. Loads
+  stay single-snapshot (the token rows LEFT JOIN into the instance-row
+  query); saves write instance row + token rows in one transaction.
+  Compatibility is self-healing: legacy rows (marking JSON still in the
+  state column) load as-is and normalize on their next save, or eagerly via
+  the new `BackfillTokenStates` helper (the dogfood runs it at boot);
+  `storage.WithTokenTable("")` opts out entirely and restores the old blob
+  format. `EnsureSchema` creates the table; `GenerateTokenSchema` emits the
+  DDL for migration tools (see `examples/migration_example`'s new 000005
+  migration). Conformance: the kit gained `Tokens/ListPlaceTokens`. Design:
+  `docs/roadmap/SHARED_POOL_MODELING.md` §9 ("B via storage-only", simple
+  flavor; per-token delta concurrency deliberately deferred).
+- **Empty markings persist** — friction log #3. A marking with zero marked
+  places is now a valid state end-to-end: `NewWorkflowFromMarking` accepts an
+  empty (non-nil) marking, the new **`Manager.CreateWorkflowFromMarking`**
+  creates and saves an instance from any marking (multi-place, colored
+  tokens, or empty), loading no longer rejects a stored state with no places,
+  and YAML may omit `initial_marking` entirely. This is what a pure
+  token-pool net needs — all its places are legitimately empty between
+  batches — so the dogfood deleted its always-marked `batch_control` anchor
+  place and instead shows real place-removal migration in its
+  `WithDefinitionMigration` hook (strip the anchor from stored markings
+  before the manager reloads). The storagetest conformance kit gained
+  `EmptyMarkingRoundTrip`. Design context in
+  `docs/roadmap/SHARED_POOL_MODELING.md`.
 - **OR-input (merge) transitions** — friction log #2. `from_any: true` in
   YAML (`Transition.SetFromAny` in Go) makes a transition enabled when ANY
   ONE of its input places is marked; firing consumes exactly the first
@@ -24,11 +57,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing fires, the last blocking error tells the caller whether nothing
   was enabled or a guard refused. Guard-routed alternatives out of one
   place (auto-approve vs. review) become one call.
-- **Diagrams in the dogfood UI**: a `/diagrams` page renders both nets from
-  `Workflow.Diagram()` (so they can never drift from the executed code),
-  and each expense page embeds its LIVE diagram with the current marking
-  highlighted (client-side Mermaid; the raw source stays readable without
-  JS).
+- **Rich Mermaid renderer, in the library**: `Workflow.Diagram()` was
+  rewritten as a flowchart designed for technical and non-technical readers,
+  and `Definition.Diagram()` (structure-only) is new. Places are stadium
+  nodes with the classic ◉ entry marker and a distinct terminal style;
+  transitions are rectangles color-typed by nature — ⏱ timed transitions
+  (derived from `TimeoutAfter`, amber with dashed edges) and a documented
+  `diagram_class` metadata key ("person", "auto", or any host classDef) for
+  actor typing the engine cannot know. Guards appear visibly on the routing
+  edges, prettified (`❰ amount ≤ 100 ❱`); reset arcs are dotted red
+  "cancels" edges. Splits and merges route through gateway diamonds with
+  the BPMN symbols: a multi-input transition joins through ◇+ (parallel
+  gateway, AND-join) or ◇× (exclusive gateway, OR-input: exactly one
+  consumed), and a multi-output transition forks through ◇+ (outputs
+  always all fire); XOR-splits stay as guard-labeled alternative edges
+  out of the choosing place.
+  Places may name a region via a `diagram_group` metadata key; same-group
+  places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
+  (the dogfood boxes the expense net's Legal/Finance review lanes). On a live
+  instance the current marking is highlighted and colored-token places carry
+  ⬤×N badges. The old stateDiagram output (and its HTML tooltip spans) is
+  gone. The dogfood embeds these diagrams on `/diagrams`, every expense page,
+  and the batch page, with an HTML legend.
+- **Per-place metadata on `Definition`** (`SetPlaceMetadata` /
+  `PlaceMetadata`): places are bare strings and cannot carry their own
+  metadata like transitions, so a Definition-level side-table now holds it.
+  It is cosmetic (currently diagram hints) and excluded from `Fingerprint`,
+  so it never invalidates persisted instances. The YAML loader now attaches
+  place `metadata:` to the Definition instead of dropping it in
+  `LoadDefinition`.
 - **Cancellation regions via reset arcs** — the top-ranked finding of the M5
   friction log. A transition can declare places it CLEARS when it fires:
   `Transition.SetResets("b", "c")` in Go, `resets: [b, c]` in YAML. Firing

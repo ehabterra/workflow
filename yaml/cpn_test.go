@@ -3,6 +3,7 @@ package yaml_test
 import (
 	"testing"
 
+	"github.com/ehabterra/workflow"
 	"github.com/ehabterra/workflow/yaml"
 )
 
@@ -140,15 +141,38 @@ workflow:
 	}
 }
 
-func TestValidate_InitialMarkingRequired(t *testing.T) {
-	const bad = `
+// initial_marking may be omitted entirely: a pure token-pool net starts with
+// an EMPTY marking (every place legitimately empty between batches) and only
+// fires once tokens arrive.
+func TestLoadWorkflow_NoInitialMarkingStartsEmpty(t *testing.T) {
+	const pool = `
 workflow:
-  name: bad
+  name: payment_pool
   transitions:
-    - {name: t, from: [a], to: [b]}
+    - {name: pay, from: [payable], to: [paid_out]}
 `
-	if _, err := yaml.LoadConfigFromBytes([]byte(bad)); err == nil {
-		t.Fatal("expected error when initial_marking is missing")
+	cfg, err := yaml.LoadConfigFromBytes([]byte(pool))
+	if err != nil {
+		t.Fatalf("a pool net without initial_marking must be valid, got: %v", err)
+	}
+
+	wf, err := yaml.NewLoader().LoadWorkflow(cfg, "pool-1")
+	if err != nil {
+		t.Fatalf("LoadWorkflow: %v", err)
+	}
+	if places := wf.Marking().Places(); len(places) != 0 {
+		t.Fatalf("expected an empty starting marking, got %v", places)
+	}
+
+	// The empty pool is inert until a token arrives, then fires normally.
+	if _, err := wf.CreateToken("payable", workflow.TokenData{"amount": 10.0}); err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+	if err := wf.ApplyTransition("pay"); err != nil {
+		t.Fatalf("ApplyTransition(pay): %v", err)
+	}
+	if got := wf.TokenCount("paid_out"); got != 1 {
+		t.Fatalf("paid_out token count = %d, want 1", got)
 	}
 }
 

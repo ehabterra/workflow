@@ -35,6 +35,7 @@ func TestPostgresHistory(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", histTable))
 		_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", stateTable))
+		_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s_tokens", stateTable))
 	})
 
 	hist := history.NewPostgresHistory(db, history.WithTable(histTable),
@@ -86,7 +87,7 @@ func TestPostgresHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPostgresStorage: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, store.GenerateSchema()); err != nil {
+	if err := store.EnsureSchema(ctx); err != nil {
 		t.Fatalf("create state schema: %v", err)
 	}
 	if _, err := store.SaveState(ctx, "wf2", workflow.NewMarking([]workflow.Place{"a"}), nil, 0); err != nil {

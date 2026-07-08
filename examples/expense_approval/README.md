@@ -93,9 +93,18 @@ the transition count. And the submit XOR-split is resolved by the library:
 `ApplyAny("submit_auto", "submit")` fires whichever route the amount guard
 allows.
 
-**The diagrams cannot drift.** `/diagrams` renders both nets from
-`Workflow.Diagram()` — the same structures the engine fires — and each
-expense page embeds its live diagram with the current marking highlighted.
+**The diagrams cannot drift.** `/diagrams`, the expense pages, and the
+batch page render the nets with the library's own Mermaid renderer
+(`Definition.Diagram` / `Workflow.Diagram`): entry markers, transition
+nodes color-typed by who fires them (declared per transition with the
+`diagram_class` metadata — person / automatic; ⏱ timers are derived),
+guards visible on the routing edges, dotted "cancels" reset arcs,
+splits and merges routed through gateway diamonds with the BPMN
+symbols — `◇+` (parallel: every branch) or `◇×` (exclusive/OR-input:
+exactly one) — the two parallel review lanes boxed as `subgraph`
+regions (via a `diagram_group` place metadata), the live marking
+highlighted, and ⬤×N token badges on colored-token places — with a
+legend for non-technical readers.
 
 **Rejection cancels the sibling branch — declaratively.** Each reject
 transition carries reset arcs (`resets: [pending_finance, …]`): firing it
@@ -111,12 +120,19 @@ where every approved expense is a token carrying
 guard `token.amount <= 5000.0` holds big amounts in `payable`, and a
 reviewer pays those out individually with the `release` transition (manual
 review, reviewer recorded in the audit trail). Totals come from
-`AggregateTokens`.
+`AggregateTokens`. The net starts **empty** — a marking with zero places is
+a valid persisted state (`CreateWorkflowFromMarking` with an empty marking),
+so no always-marked anchor place is needed and tokens exist only for
+expenses actually flowing through.
 
 **Definitions evolve; the fingerprint notices.** Adding `release`/`revise`
 changed both nets' fingerprints, so the app installs a
 `WithDefinitionMigration` hook that approves the (additive) upgrades —
-and the loader still re-validates every loaded place afterwards.
+and the loader still re-validates every loaded place afterwards. Deleting
+the payment net's `batch_control` anchor place is the one change approval
+alone can't cover: the hook runs real migration logic
+(`migratePaymentAnchor`), stripping the anchor from the stored marking
+before the manager reloads.
 
 **What the library refuses to do for you** — and this app does explicitly:
 terminality on rejection (no cancellation regions yet; `ErrTerminal` in

@@ -58,6 +58,7 @@ const payGuardLimit = 5000.0
 type schemaEnsurer interface {
 	workflow.Storage
 	EnsureSchema(ctx context.Context) error
+	BackfillTokenStates(ctx context.Context) (int, error)
 }
 
 // App wires storage, history, and the two workflow definitions into the
@@ -96,6 +97,15 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 	if err := store.EnsureSchema(ctx); err != nil {
 		return nil, fmt.Errorf("ensure state schema: %w", err)
 	}
+	// Eagerly normalize any pre-token-table rows (marking blob → token rows).
+	// Instances would normalize on their next save anyway, but the token
+	// read-model (Manager.ListPlaceTokens) should see the whole fleet from
+	// the first request. Idempotent: 0 on every boot after the first.
+	if n, err := store.BackfillTokenStates(ctx); err != nil {
+		return nil, fmt.Errorf("backfill token rows: %w", err)
+	} else if n > 0 {
+		log.Printf("normalized %d pre-upgrade instance markings into token rows", n)
+	}
 	if err := hist.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("ensure history schema: %w", err)
 	}
@@ -116,14 +126,19 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 	// Fresh loads on every request: correct across replicas, and the demo is
 	// nowhere near the scale where the registry cache would matter.
 	//
-	// The migration hook approves definition upgrades for both nets: every
-	// change so far has been additive (new transitions — release, revise,
-	// submit routing; no place was removed), so persisted markings stay
-	// valid — and the loader still validates every loaded place after the
-	// hook approves, so a marking that genuinely no longer fits fails
-	// anyway. A host removing places would need real migration logic here.
+	// The migration hook approves definition upgrades for both nets. Expense-
+	// net changes have all been additive (new transitions — release, revise,
+	// submit routing), so persisted markings stay valid — and the loader still
+	// validates every loaded place after the hook approves, so a marking that
+	// genuinely no longer fits fails anyway. The payment net is the exception:
+	// it REMOVED a place (the batch_control anchor, obsolete now that an empty
+	// marking persists), which is the one change approval alone cannot cover —
+	// a stored marking still holding the anchor token needs rewriting first.
 	mgr := workflow.NewManager(workflow.NewRegistry(), store,
 		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
+			if id == paymentID {
+				return migratePaymentAnchor(ctx, store, id, stored, current)
+			}
 			log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): additive change, approving", id, stored, current)
 			return nil
 		}))
@@ -146,16 +161,51 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 		return nil
 	})
 
-	// The payment net exists exactly once; create it on first boot.
+	// The payment net exists exactly once; create it on first boot. A pool
+	// net starts EMPTY — tokens only exist while expenses await payment.
 	if _, err := mgr.LoadWorkflow(ctx, paymentID, paymentDef); err != nil {
 		if !errors.Is(err, workflow.ErrWorkflowNotFound) {
 			return nil, fmt.Errorf("load payment net: %w", err)
 		}
-		if _, err := mgr.CreateWorkflow(ctx, paymentID, paymentDef, "batch_control"); err != nil {
+		if _, err := mgr.CreateWorkflowFromMarking(ctx, paymentID, paymentDef, workflow.NewMarking(nil)); err != nil {
 			return nil, fmt.Errorf("create payment net: %w", err)
 		}
 	}
 	return a, nil
+}
+
+// migratePaymentAnchor upgrades a payment-net instance persisted before the
+// batch_control anchor place was deleted from payment.yaml (the library now
+// round-trips an empty marking, so the always-marked anchor is obsolete).
+// Removing a PLACE is the one definition change approve-and-revalidate cannot
+// wave through — the stale marking still references it and would fail the
+// loader's place validation — so this is real migration logic: strip the
+// anchor token from the stored marking, in storage, before the manager
+// reloads. Idempotent: an already-clean marking is approved untouched, so
+// the hook firing again before the next save restamps the fingerprint is
+// harmless.
+func migratePaymentAnchor(ctx context.Context, store workflow.Storage, id, stored, current string) error {
+	marking, wfCtx, version, err := store.LoadState(ctx, id)
+	if err != nil {
+		return fmt.Errorf("payment anchor migration: load: %w", err)
+	}
+	if !marking.HasPlace("batch_control") {
+		log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): marking already clean, approving", id, stored, current)
+		return nil
+	}
+	if err := marking.RemovePlace("batch_control"); err != nil {
+		return fmt.Errorf("payment anchor migration: %w", err)
+	}
+	if _, err := store.SaveState(ctx, id, marking, wfCtx, version); err != nil {
+		if errors.Is(err, workflow.ErrConflict) {
+			// A concurrent replica migrated first; the caller reloads and
+			// will observe its write.
+			return nil
+		}
+		return fmt.Errorf("payment anchor migration: save: %w", err)
+	}
+	log.Printf("payment net %s migrated (fingerprint %.8s… -> %.8s…): batch_control anchor stripped from the stored marking", id, stored, current)
+	return nil
 }
 
 func loadDefinition(raw []byte) (*workflow.Definition, error) {
@@ -661,24 +711,32 @@ func (a *App) Reconcile(ctx context.Context) (*ReconcileReport, error) {
 // treats it as a crash artifact rather than a creation in flight.
 const draftGrace = 5 * time.Minute
 
-// NetDiagrams renders the Mermaid diagrams of both nets' STRUCTURE (a
-// throwaway unstarted instance per net; no fleet state).
-func (a *App) NetDiagrams() (expense, payment string, err error) {
-	ewf, err := workflow.NewWorkflow("expense-structure", a.expenseDef, "draft")
+// DiagramExpenseStructure renders the expense net via the library's Mermaid
+// renderer, as a fresh instance: the entry marker and the draft place light
+// up exactly the way every new expense starts.
+func (a *App) DiagramExpenseStructure() string {
+	wf, err := workflow.NewWorkflow("structure", a.expenseDef, "draft")
 	if err != nil {
-		return "", "", err
+		return a.expenseDef.Diagram() // structure-only fallback
 	}
-	pwf, err := workflow.NewWorkflow("payment-structure", a.paymentDef, "batch_control")
-	if err != nil {
-		return "", "", err
-	}
-	return ewf.Diagram(), pwf.Diagram(), nil
+	return wf.Diagram()
 }
 
-// ExpenseDiagram renders one expense's LIVE Mermaid diagram — the marking's
-// current places are highlighted.
-func (a *App) ExpenseDiagram(ctx context.Context, id string) (string, error) {
+// DiagramExpenseLive renders one expense's net with its current marking
+// highlighted.
+func (a *App) DiagramExpenseLive(ctx context.Context, id string) (string, error) {
 	wf, err := a.mgr.LoadWorkflow(ctx, id, a.expenseDef)
+	if err != nil {
+		return "", err
+	}
+	return wf.Diagram(), nil
+}
+
+// DiagramPaymentLive renders the payment net with the current marking and
+// per-place colored-token count badges (the library renderer draws them;
+// amounts live in the tables below the diagram).
+func (a *App) DiagramPaymentLive(ctx context.Context) (string, error) {
+	wf, err := a.mgr.LoadWorkflow(ctx, paymentID, a.paymentDef)
 	if err != nil {
 		return "", err
 	}
