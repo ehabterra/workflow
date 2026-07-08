@@ -18,15 +18,14 @@ import (
 //     only the host knows WHO fires a transition.
 //   - Guard expressions appear visibly on the routing edges: ❰ amount ≤ 100 ❱.
 //   - Reset arcs (cancellation regions) are dotted red "cancels" edges.
-//   - Fork/join gateway bars — Mermaid's native fork/join shape, the thin
-//     filled bar from UML/statecharts — make split/merge semantics explicit:
-//     a multi-input transition joins through a bar whose outgoing edge SAYS
-//     the semantics — "all" (AND-join, every input required) or "any"
-//     (OR-input/FromAny, exactly one consumed) — and a multi-output
-//     transition forks through a bar (outputs are always "produce all").
-//     XOR-splits need no bar: they are alternative guarded transitions out
-//     of one place, so the place is the choice point and the guards label
-//     the routes.
+//   - Fork/join gateway diamonds (the BPMN gateway idiom) make split/merge
+//     semantics explicit AND visible: a multi-input transition joins through
+//     a diamond that SAYS its semantics — ◇all (AND-join, every input
+//     required) or ◇any (OR-input/FromAny, exactly one consumed) — and a
+//     multi-output transition forks through a ◇all diamond (outputs are
+//     always "produce all"). XOR-splits need no gateway: they are
+//     alternative guarded transitions out of one place, so the place is the
+//     choice point and the guards label the routes.
 //   - On a live instance (Workflow.Diagram), the current marking is
 //     highlighted and places holding colored tokens carry a ⬤×N badge.
 //
@@ -238,11 +237,10 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
 		}
 		fmt.Fprintf(&b, "    %s[\"%s\"]\n    class %s %s\n", id, label, id, class)
 
-		// Fork/join gateway bars: Mermaid's native fork/join shape (the thin
-		// filled bar from UML/statecharts). A multi-input transition joins
-		// through a bar whose outgoing edge SAYS the semantics: "all"
-		// (AND-join — every input must be marked) or "any" (OR-input/FromAny
-		// — exactly one input is consumed). A single input needs no bar.
+		// Fork/join gateway diamonds, in the BPMN idiom: the diamond marks a
+		// gateway and the word inside it IS the semantics — "all" (AND-join:
+		// every input must be marked) or "any" (OR-input/FromAny: exactly
+		// one input is consumed). A single input needs no gateway.
 		timed := class == "timer"
 		countEdge := func() {
 			if timed {
@@ -256,12 +254,12 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
 			if t.FromAny() {
 				word = "any"
 			}
-			fmt.Fprintf(&b, "    %s@{ shape: fork }\n    class %s gateway\n", jid, jid)
+			fmt.Fprintf(&b, "    %s{\"%s\"}\n    class %s gateway\n", jid, word, jid)
 			for _, from := range t.From() {
 				fmt.Fprintf(&b, "    p_%s --> %s\n", nodeID(string(from)), jid)
 				countEdge()
 			}
-			fmt.Fprintf(&b, "    %s -->|%s| %s\n", jid, word, id)
+			fmt.Fprintf(&b, "    %s --> %s\n", jid, id)
 			countEdge()
 		} else {
 			for _, from := range t.From() {
@@ -270,11 +268,11 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
 			}
 		}
 
-		// A multi-output transition forks through a bar — outputs are always
-		// "produce all", so its edges carry no word. The guard labels the
-		// single trunk edge into the bar (the guard gates the firing, not
-		// one branch). XOR-splits (alternative guarded transitions out of
-		// one place) need no bar: the place is the choice point.
+		// A multi-output transition forks through a ◇all gateway — outputs
+		// are always "produce all". The guard labels the single trunk edge
+		// into the gateway (the guard gates the firing, not one branch).
+		// XOR-splits (alternative guarded transitions out of one place) need
+		// no gateway: the place is the choice point.
 		outLabel := ""
 		if g, ok := t.Metadata("guard"); ok {
 			if gs, ok := g.(string); ok && gs != "" {
@@ -283,7 +281,7 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
 		}
 		if len(t.To()) > 1 {
 			fid := "f_" + nodeID(t.Name())
-			fmt.Fprintf(&b, "    %s@{ shape: fork }\n    class %s gateway\n", fid, fid)
+			fmt.Fprintf(&b, "    %s{\"all\"}\n    class %s gateway\n", fid, fid)
 			fmt.Fprintf(&b, "    %s -->%s %s\n", id, outLabel, fid)
 			countEdge()
 			for _, to := range t.To() {
@@ -314,7 +312,7 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
     classDef auto fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
     classDef timer fill:#FEF3C7,stroke:#B45309,color:#92400E
     classDef startMarker fill:#111827,stroke:#111827,color:#111827
-    classDef gateway fill:#334155,stroke:#334155
+    classDef gateway fill:#F8FAFC,stroke:#334155,stroke-width:2px,color:#334155,font-weight:bold
 `)
 	for _, i := range timerEdges {
 		fmt.Fprintf(&b, "    linkStyle %d stroke:#B45309,stroke-dasharray:6 3\n", i)

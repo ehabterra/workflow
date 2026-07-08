@@ -66,12 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagram_class` metadata key ("person", "auto", or any host classDef) for
   actor typing the engine cannot know. Guards appear visibly on the routing
   edges, prettified (`❰ amount ≤ 100 ❱`); reset arcs are dotted red
-  "cancels" edges. Splits and merges route through fork/join gateway bars
-  (Mermaid's native UML-style thin-bar shape, `@{ shape: fork }`): a
-  multi-input transition joins through a bar whose edge says the semantics
-  — "all" (AND-join) or "any" (OR-input) — and a multi-output transition
-  forks through a bar (outputs always all fire); XOR-splits stay as
-  guard-labeled alternative edges out of the choosing place.
+  "cancels" edges. Splits and merges route through BPMN-style gateway
+  diamonds that say their semantics: a multi-input transition joins
+  through ◇all (AND-join) or ◇any (OR-input, exactly one consumed), and a
+  multi-output transition forks through ◇all (outputs always all fire);
+  XOR-splits stay as guard-labeled alternative edges out of the choosing
+  place.
   Places may name a region via a `diagram_group` metadata key; same-group
   places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
   (the dogfood boxes the expense net's Legal/Finance review lanes). On a live

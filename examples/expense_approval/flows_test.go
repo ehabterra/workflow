@@ -328,13 +328,13 @@ func TestDiagramsPages(t *testing.T) {
 	resp.Body.Close()
 	body := string(page)
 	for _, want := range []string{
-		"flowchart LR",                    // the rich renderer
-		"legal approve",                   // humanized transition names
-		"j_legal_approve@{ shape: fork }", // OR-input join bar…
-		"|any| t_legal_approve",           // …whose edge says "any" (--> is HTML-escaped)
-		"cancels",                         // reset arcs
-		"❰ amount ≤ 100.0 ❱",              // visible guard
-		"classDef timer",                  // typed transitions
+		"flowchart LR",                   // the rich renderer
+		"legal approve",                  // humanized transition names
+		`j_legal_approve{&#34;any&#34;}`, // OR-input gateway diamond saying "any" (quotes HTML-escaped)
+		"class j_legal_approve gateway",
+		"cancels",            // reset arcs
+		"❰ amount ≤ 100.0 ❱", // visible guard
+		"classDef timer",     // typed transitions
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("diagrams page missing %q:\n%s", want, body)

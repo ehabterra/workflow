@@ -646,16 +646,16 @@ func TestWorkflow_Diagram(t *testing.T) {
 		}
 		got := wf.Diagram()
 		for _, want := range []string{
-			"f_fork@{ shape: fork }", // AND-split forks through a gateway bar…
-			"class f_fork gateway",   //   (outputs are always "produce all")
+			`f_fork{"all"}`,        // AND-split forks through a ◇all gateway…
+			"class f_fork gateway", //   (outputs are always "produce all")
 			"t_fork --> f_fork",
 			"f_fork --> p_branch1",
 			"f_fork --> p_branch2",
-			"j_merge@{ shape: fork }", // …and the AND-join joins through a bar
-			"class j_merge gateway",   //   whose edge says "all" ("any" for OR-inputs)
+			`j_merge{"all"}`,        // …and the AND-join joins through a diamond
+			"class j_merge gateway", //   saying "all" ("any" for OR-inputs)
 			"p_branch1 --> j_merge",
 			"p_branch2 --> j_merge",
-			"j_merge -->|all| t_merge",
+			"j_merge --> t_merge",
 			"t_merge --> p_end",
 		} {
 			if !strings.Contains(got, want) {
@@ -670,11 +670,11 @@ func TestWorkflow_Diagram(t *testing.T) {
 		def, _ := workflow.NewDefinition([]workflow.Place{"pending", "escalated", "done"}, []workflow.Transition{*a})
 		got := def.Diagram()
 		for _, want := range []string{
-			"j_approve@{ shape: fork }", // OR-input joins through the same bar…
+			`j_approve{"any"}`, // OR-input: the gateway diamond says "any", not "all"
 			"class j_approve gateway",
 			"p_pending --> j_approve",
 			"p_escalated --> j_approve",
-			"j_approve -->|any| t_approve", // …but its edge says "any", not "all"
+			"j_approve --> t_approve",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("Diagram() missing %q:\n%s", want, got)
