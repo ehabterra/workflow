@@ -97,10 +97,10 @@ func TestDefinitionDiff_RenameReadsAsRemoveAddChange(t *testing.T) {
 	if _, err := captureMismatch(store, &mm).LoadWorkflow(ctx, "wf", v2); err != nil {
 		t.Fatalf("LoadWorkflow(v2): %v", err)
 	}
-	d := mm.Diff
-	if d == nil {
+	if mm.Diff == nil {
 		t.Fatal("Diff = nil, want structural diff")
 	}
+	d := mm.Diff
 	if len(d.PlacesAdded) != 1 || d.PlacesAdded[0] != "b2" ||
 		len(d.PlacesRemoved) != 1 || d.PlacesRemoved[0] != "b" {
 		t.Errorf("place diff = +%v -%v, want +[b2] -[b]", d.PlacesAdded, d.PlacesRemoved)
