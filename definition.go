@@ -59,8 +59,8 @@ func NewDefinition(places []Place, transitions []Transition) (*Definition, error
 
 // Fingerprint returns a stable SHA-256 hash of the definition's structure: its
 // places and, for every transition, the name, input places, output places,
-// guard expression string (as stored in the "guard" metadata), and reset
-// places. It is order-
+// guard expression string (as stored in the "guard" metadata), reset places,
+// and input mode (AND-join vs OR-input). It is order-
 // independent — places and transitions are canonically sorted first — so two
 // definitions built in different orders but describing the same net share a
 // fingerprint. Every component is length-prefixed before hashing, so no choice
@@ -94,12 +94,17 @@ func (d *Definition) Fingerprint() string {
 		}
 		resets := placeStrings(t.Resets())
 		slices.Sort(resets)
+		inputMode := "all"
+		if t.FromAny() {
+			inputMode = "any"
+		}
 		var rec strings.Builder
 		writeLenPrefixed(&rec, t.Name())
 		writeLenPrefixedList(&rec, from)
 		writeLenPrefixedList(&rec, to)
 		writeLenPrefixed(&rec, guard)
 		writeLenPrefixedList(&rec, resets)
+		writeLenPrefixed(&rec, inputMode)
 		transitions[i] = rec.String()
 	}
 	slices.Sort(transitions)

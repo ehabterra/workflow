@@ -9,9 +9,10 @@
 # sibling branch via its reset arcs, so nothing is stranded). mark_paid is
 # fired by the batch payment run (see payment.yaml).
 #
-# Known modeling friction (docs/DOGFOOD.md): "approve from pending OR
-# escalated" needs one transition per source place. (Rejection cancelling
-# the sibling branch is SOLVED by reset arcs — see the reject transitions.)
+# Former modeling frictions, both solved by library features this net now
+# uses: reset arcs cancel the sibling branch on rejection, and from_any
+# (OR-input) lets one approve/reject serve both the pending and escalated
+# stages (docs/roadmap/FRICTION.md, resolved entries 1 and 2).
 workflow:
   name: expense_approval
   initial_marking: draft
@@ -35,12 +36,18 @@ workflow:
       from: [draft]
       to: [pending_legal, pending_finance]
       guard: "amount > 100.0"
+    # ONE approve/reject per branch: from_any (OR-input) accepts the token
+    # from whichever stage holds it — pending or escalated — consuming only
+    # that stage. This collapsed four *_escalated twin transitions (friction
+    # log, resolved entry 2).
     - name: legal_approve
-      from: [pending_legal]
+      from: [pending_legal, escalated_legal]
       to: [legal_ok]
+      from_any: true
     - name: finance_approve
-      from: [pending_finance]
+      from: [pending_finance, escalated_finance]
       to: [finance_ok]
+      from_any: true
     - name: legal_escalate
       from: [pending_legal]
       to: [escalated_legal]
@@ -49,31 +56,19 @@ workflow:
       from: [pending_finance]
       to: [escalated_finance]
       after: 72h
-    - name: legal_approve_escalated
-      from: [escalated_legal]
-      to: [legal_ok]
-    - name: finance_approve_escalated
-      from: [escalated_finance]
-      to: [finance_ok]
     # Rejecting one branch CANCELS the other via reset arcs: the sibling's
     # pending/escalated token — and any escalation timer running on it —
     # dies in the same atomic firing. (This replaced host-side ClearPlace
     # token surgery; see docs/roadmap/FRICTION.md, resolved entry 1.)
     - name: legal_reject
-      from: [pending_legal]
+      from: [pending_legal, escalated_legal]
       to: [rejected]
+      from_any: true
       resets: [pending_finance, escalated_finance, finance_ok]
     - name: finance_reject
-      from: [pending_finance]
+      from: [pending_finance, escalated_finance]
       to: [rejected]
-      resets: [pending_legal, escalated_legal, legal_ok]
-    - name: legal_reject_escalated
-      from: [escalated_legal]
-      to: [rejected]
-      resets: [pending_finance, escalated_finance, finance_ok]
-    - name: finance_reject_escalated
-      from: [escalated_finance]
-      to: [rejected]
+      from_any: true
       resets: [pending_legal, escalated_legal, legal_ok]
     - name: finalize
       from: [legal_ok, finance_ok]

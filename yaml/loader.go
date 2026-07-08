@@ -108,6 +108,11 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 			transition.SetTimeoutAfter(d)
 		}
 
+		// OR-input (merge): enabled by any one marked input, consuming it.
+		if transConfig.FromAny {
+			transition.SetFromAny(true)
+		}
+
 		// Reset arcs (cancellation region): places cleared when this
 		// transition fires. Place existence is validated by NewDefinition.
 		if len(transConfig.Resets) > 0 {

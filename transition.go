@@ -22,6 +22,16 @@ type Transition struct {
 	// never fires it on its own; a host schedules the check.
 	timeout time.Duration
 
+	// fromAny, when true, makes this an OR-input (merge) transition: it is
+	// enabled when ANY ONE of its input places is marked, and firing consumes
+	// exactly the first marked input (declaration order) — the other inputs
+	// are left untouched. The default (false) is the Petri-net AND-join: all
+	// inputs must be marked and all are consumed.
+	//
+	// The canonical use is "the same action from either stage": approve from
+	// pending OR escalated collapses two near-identical transitions into one.
+	fromAny bool
+
 	// resets holds the places this transition CLEARS when it fires — reset
 	// arcs, the Petri-net primitive for cancellation regions. Firing removes
 	// every token from each reset place atomically with the marking move:
@@ -129,6 +139,35 @@ func (t *Transition) SetTimeoutAfter(d time.Duration) {
 // mirror.
 func (t *Transition) TimeoutAfter() (time.Duration, bool) {
 	return t.timeout, t.timeout > 0
+}
+
+// SetFromAny toggles OR-input (merge) semantics: enabled when any one input
+// place is marked; firing consumes exactly the first marked input in
+// declaration order. FromAny is part of the definition's Fingerprint.
+func (t *Transition) SetFromAny(v bool) { t.fromAny = v }
+
+// FromAny reports whether this transition uses OR-input (merge) semantics.
+func (t *Transition) FromAny() bool { return t.fromAny }
+
+// consumeSet returns the input places a firing of t would consume, given a
+// marked-place predicate: every input for the default AND-join, or the first
+// marked input for an OR-input (FromAny) transition. ok is false when the
+// marking does not enable t.
+func (t *Transition) consumeSet(marked func(Place) bool) ([]Place, bool) {
+	if t.fromAny {
+		for _, p := range t.from {
+			if marked(p) {
+				return []Place{p}, true
+			}
+		}
+		return nil, false
+	}
+	for _, p := range t.from {
+		if !marked(p) {
+			return nil, false
+		}
+	}
+	return t.From(), true
 }
 
 // SetResets declares the places this transition clears when it fires (reset

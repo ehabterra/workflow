@@ -21,7 +21,12 @@ func isColored(t Token) bool { return t.ID() != "" || len(t.data) > 0 }
 func (w *Workflow) coloredTokensAt(places []Place) []Token {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.coloredTokensAtLocked(places)
+}
 
+// coloredTokensAtLocked is coloredTokensAt for callers that already hold w.mu
+// (the RWMutex is not reentrant).
+func (w *Workflow) coloredTokensAtLocked(places []Place) []Token {
 	var out []Token
 	for _, p := range places {
 		for _, tok := range w.marking.TokensAt(p) {
@@ -162,24 +167,32 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 
 	from := targetTransition.From()
 	to := targetTransition.To()
-	if len(from) != 1 {
+	if !targetTransition.FromAny() && len(from) != 1 {
 		return fmt.Errorf("%w: per-token firing requires a single input place, transition %s has %d",
 			ErrInvalidTransition, transitionName, len(from))
 	}
-	inputPlace := from[0]
 
-	// Snapshot the token so guards and listeners can inspect it (per-token routing).
+	// Resolve the input place: the declared one, or — for an OR-input
+	// transition — whichever input currently holds the token. Snapshot the
+	// token so guards and listeners can inspect it (per-token routing).
 	w.mu.RLock()
+	inputPlace := from[0]
 	tok, hasToken := w.tokenAt(inputPlace, tokenID)
+	if targetTransition.FromAny() {
+		for _, p := range from {
+			if t, ok := w.tokenAt(p, tokenID); ok {
+				inputPlace, tok, hasToken = p, t, true
+				break
+			}
+		}
+	}
 	currentPlaces := w.marking.Places()
 	w.mu.RUnlock()
 	if !hasToken {
 		return fmt.Errorf("%w: %s in place %s", ErrTokenNotFound, tokenID, inputPlace)
 	}
-	for _, fromPlace := range from {
-		if !slices.Contains(currentPlaces, fromPlace) {
-			return ErrNotEnabled
-		}
+	if !slices.Contains(currentPlaces, inputPlace) {
+		return ErrNotEnabled
 	}
 	eventTokens := []Token{tok}
 

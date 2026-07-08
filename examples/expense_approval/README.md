@@ -86,6 +86,17 @@ which is friction entry #3.
 returns to `draft`, takes an updated amount, and re-routes through the
 submit guards — possibly straight to auto-approval.
 
+**One transition per action, whatever the stage.** `legal_approve` accepts
+from `pending_legal` OR `escalated_legal` (`from_any: true` — an OR-input
+merge that consumes only the marked stage), so escalation no longer doubles
+the transition count. And the submit XOR-split is resolved by the library:
+`ApplyAny("submit_auto", "submit")` fires whichever route the amount guard
+allows.
+
+**The diagrams cannot drift.** `/diagrams` renders both nets from
+`Workflow.Diagram()` — the same structures the engine fires — and each
+expense page embeds its live diagram with the current marking highlighted.
+
 **Rejection cancels the sibling branch — declaratively.** Each reject
 transition carries reset arcs (`resets: [pending_finance, …]`): firing it
 clears the other branch's places atomically, killing its pending token and

@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OR-input (merge) transitions** — friction log #2. `from_any: true` in
+  YAML (`Transition.SetFromAny` in Go) makes a transition enabled when ANY
+  ONE of its input places is marked; firing consumes exactly the first
+  marked input, leaving the others untouched. One transition now serves
+  "the same action from either stage" (approve from pending OR escalated),
+  collapsing twin transitions. Works in every apply path including
+  per-token firing (the input is resolved to whichever place holds the
+  token), timers (due when any marked input has waited long enough), the
+  fingerprint (input mode is part of the structure), and Mermaid diagrams
+  (per-input edges labeled "(or)" instead of a join node).
+- **`Workflow.ApplyAny(ctx, names...)`** — friction log #3, the XOR-split
+  resolver. Fires the first named transition the state allows, skipping
+  not-enabled and guard-rejected candidates, returning the fired name; when
+  nothing fires, the last blocking error tells the caller whether nothing
+  was enabled or a guard refused. Guard-routed alternatives out of one
+  place (auto-approve vs. review) become one call.
+- **Diagrams in the dogfood UI**: a `/diagrams` page renders both nets from
+  `Workflow.Diagram()` (so they can never drift from the executed code),
+  and each expense page embeds its LIVE diagram with the current marking
+  highlighted (client-side Mermaid; the raw source stays readable without
+  JS).
 - **Cancellation regions via reset arcs** — the top-ranked finding of the M5
   friction log. A transition can declare places it CLEARS when it fires:
   `Transition.SetResets("b", "c")` in Go, `resets: [b, c]` in YAML. Firing
@@ -24,7 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 - The definition fingerprint encoding now includes each transition's reset
-  places, so **every fingerprint changes** with this version. Persisted
+  places and input mode (AND-join vs OR-input), so **every fingerprint
+  changes** with this version. Persisted
   instances load again after a `WithDefinitionMigration` hook approves the
   upgrade (the loader still validates every place).
 - **Versioning is now part of the `Storage` contract** (the library is pre-1.0

@@ -312,3 +312,34 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+// TestDiagramsPages: the diagrams page and the live per-expense diagram
+// render the engine's own Mermaid output, including the OR-input and
+// reset-arc notations.
+func TestDiagramsPages(t *testing.T) {
+	ts, _ := newTestServer(t)
+	id := submitViaHTTP(t, ts, "alice", "300")
+
+	resp, err := http.Get(ts.URL + "/diagrams")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(page)
+	for _, want := range []string{"stateDiagram", "legal_approve", "#40;or#41;", "resets", "pay"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("diagrams page missing %q:\n%s", want, body)
+		}
+	}
+
+	resp, err = http.Get(ts.URL + "/expenses/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(page), "stateDiagram") {
+		t.Fatal("detail page must embed the live diagram")
+	}
+}

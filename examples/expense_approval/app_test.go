@@ -84,14 +84,14 @@ func TestEscalationTick(t *testing.T) {
 		t.Fatalf("second tick should fire nothing, got %v", fired)
 	}
 
-	// The escalated branch is still approvable, via the *_escalated
-	// transition.
+	// The escalated branch is still approvable — the same OR-input
+	// legal_approve serves both stages, consuming the escalated token.
 	names, err = app.Approve(ctx, id, "legal", "lawyer")
 	if err != nil {
 		t.Fatalf("approve escalated: %v", err)
 	}
-	if names[0] != "legal_approve_escalated" {
-		t.Fatalf("want legal_approve_escalated, fired %v", names)
+	if names[0] != "legal_approve" {
+		t.Fatalf("want legal_approve (OR-input), fired %v", names)
 	}
 
 	// Timer firings are recorded in the audit trail (post-hoc, actor

@@ -203,6 +203,14 @@ describing only shipping behavior.
   Mermaid-rendered); the dogfood's reject transitions adopted it and deleted
   their token surgery.
 
+- **OR-input transitions (`from_any`)** — ✅ shipped (2026-07-07), friction #2.
+  Enabled by any one marked input, consuming only it; fingerprinted, timer-
+  aware, per-token capable, Mermaid-labeled "(or)". Dogfood collapsed its
+  four `*_escalated` twin transitions.
+- **XOR-split routing (`Workflow.ApplyAny`)** — ✅ shipped (2026-07-07),
+  friction #3. Fires the first allowed candidate; guard-routed alternatives
+  become one call.
+
 ## Parked — demand-driven (🟢, revisit after M5 friction log)
 
 Formerly M3–M8. None is deleted; none proceeds without a dogfood-proven need.
