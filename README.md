@@ -1,7 +1,7 @@
 # Go Workflow
 
 [![CI](https://github.com/ehabterra/workflow/actions/workflows/ci.yml/badge.svg)](https://github.com/ehabterra/workflow/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ehabterra/workflow)](https://goreportcard.com/report/github.com/ehabterra/workflow)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ehabterra/workflow.svg)](https://pkg.go.dev/github.com/ehabterra/workflow)
 [![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ehabterra/workflow/blob/main/LICENSE)
 [![codecov](https://codecov.io/gh/ehabterra/workflow/branch/main/graph/badge.svg)](https://codecov.io/gh/ehabterra/workflow)
