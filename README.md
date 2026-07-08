@@ -794,9 +794,10 @@ diagram := wf.Diagram()
 fmt.Println(diagram)
 ```
 
-Example output — an AND-split forks through a blank gateway bar, and the
-AND-join joins through a bar saying `all` (`any` for OR-input transitions);
-guards appear on the routing edges and the live marking is highlighted:
+Example output — an AND-split forks through a gateway bar (Mermaid's native
+fork/join shape), and the AND-join joins through a bar whose edge says `all`
+(`any` for OR-input transitions); guards appear on the routing edges and the
+live marking is highlighted:
 
 ```mermaid
 flowchart LR
@@ -814,18 +815,18 @@ flowchart LR
     t_review["review"]
     class t_review action
     p_draft --> t_review
-    f_review["&nbsp;"]
+    f_review@{ shape: fork }
     class f_review gateway
     t_review --> f_review
     f_review --> p_legal
     f_review --> p_finance
     t_finalize["finalize"]
     class t_finalize action
-    j_finalize["all"]
+    j_finalize@{ shape: fork }
     class j_finalize gateway
     p_legal --> j_finalize
     p_finance --> j_finalize
-    j_finalize --> t_finalize
+    j_finalize -->|all| t_finalize
     t_finalize --> p_approved
     classDef place fill:#FFFFFF,stroke:#6B7280,stroke-width:1px,color:#111827
     classDef current fill:#DCFCE7,stroke:#15803D,stroke-width:3px,color:#14532D,font-weight:bold
@@ -835,7 +836,7 @@ flowchart LR
     classDef auto fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
     classDef timer fill:#FEF3C7,stroke:#B45309,color:#92400E
     classDef startMarker fill:#111827,stroke:#111827,color:#111827
-    classDef gateway fill:#111827,stroke:#111827,color:#F9FAFB,font-weight:bold
+    classDef gateway fill:#334155,stroke:#334155
 ```
 
 ## Benchmarks

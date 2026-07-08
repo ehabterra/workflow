@@ -99,12 +99,13 @@ batch page render the nets with the library's own Mermaid renderer
 nodes color-typed by who fires them (declared per transition with the
 `diagram_class` metadata — person / automatic; ⏱ timers are derived),
 guards visible on the routing edges, dotted "cancels" reset arcs,
-splits and merges routed through UML-style fork/join gateway bars — a
-join bar says `all` (AND-join) or `any` (OR-input), a fork bar is blank
-(outputs always all fire) — the two parallel review lanes boxed as
-`subgraph` regions (via a `diagram_group` place metadata), the live
-marking highlighted, and ⬤×N token badges on colored-token places — with
-a legend for non-technical readers.
+splits and merges routed through fork/join gateway bars (Mermaid's
+native UML-style shape) — a join bar's edge says `all` (AND-join) or
+`any` (OR-input); fork edges carry no word (outputs always all fire) —
+the two parallel review lanes boxed as `subgraph` regions (via a
+`diagram_group` place metadata), the live marking highlighted, and ⬤×N
+token badges on colored-token places — with a legend for non-technical
+readers.
 
 **Rejection cancels the sibling branch — declaratively.** Each reject
 transition carries reset arcs (`resets: [pending_finance, …]`): firing it
