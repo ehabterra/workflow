@@ -58,6 +58,7 @@ const payGuardLimit = 5000.0
 type schemaEnsurer interface {
 	workflow.Storage
 	EnsureSchema(ctx context.Context) error
+	BackfillTokenStates(ctx context.Context) (int, error)
 }
 
 // App wires storage, history, and the two workflow definitions into the
@@ -95,6 +96,15 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 	}
 	if err := store.EnsureSchema(ctx); err != nil {
 		return nil, fmt.Errorf("ensure state schema: %w", err)
+	}
+	// Eagerly normalize any pre-token-table rows (marking blob → token rows).
+	// Instances would normalize on their next save anyway, but the token
+	// read-model (Manager.ListPlaceTokens) should see the whole fleet from
+	// the first request. Idempotent: 0 on every boot after the first.
+	if n, err := store.BackfillTokenStates(ctx); err != nil {
+		return nil, fmt.Errorf("backfill token rows: %w", err)
+	} else if n > 0 {
+		log.Printf("normalized %d pre-upgrade instance markings into token rows", n)
 	}
 	if err := hist.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("ensure history schema: %w", err)

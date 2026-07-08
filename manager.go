@@ -522,6 +522,20 @@ func (m *Manager) ListWorkflowIDs(ctx context.Context, opts ListOptions) ([]stri
 	return ls.ListIDs(ctx, opts)
 }
 
+// ListPlaceTokens returns every token currently resting in the given place
+// across ALL persisted workflow instances — the cross-instance read-model for
+// shared token pools (e.g. "every payable expense in the system"), answered
+// by one indexed query instead of loading every instance. It requires the
+// backend's TokenQueryStorage support and returns an error wrapping
+// errors.ErrUnsupported otherwise.
+func (m *Manager) ListPlaceTokens(ctx context.Context, place Place, opts ListOptions) ([]PlacedToken, error) {
+	ts, ok := m.storage.(TokenQueryStorage)
+	if !ok {
+		return nil, fmt.Errorf("storage backend does not implement TokenQueryStorage: %w", errors.ErrUnsupported)
+	}
+	return ts.ListPlaceTokens(ctx, place, opts)
+}
+
 // ListDue returns the IDs of persisted instances whose next-due time is at or
 // before `before`, ordered by due time ascending — the instances a host cron
 // should advance with FireDue. A zero limit means no limit; drain a batch with

@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Normalized token storage + cross-instance token queries.** The SQL
+  backends now persist a marking as one row per token in a child table
+  (`<state_table>_tokens`: workflow_id, place, token_id, full token JSON)
+  instead of a single JSON blob in the state column — same whole-marking
+  overwrite, same per-instance optimistic version, so the atomic
+  load→fire→save contract is unchanged, but the marking becomes queryable:
+  the new **`workflow.TokenQueryStorage`** optional capability (exposed as
+  **`Manager.ListPlaceTokens`**) answers "every token in place P across ALL
+  instances" — the shared-pool read-model — with one indexed query. Loads
+  stay single-snapshot (the token rows LEFT JOIN into the instance-row
+  query); saves write instance row + token rows in one transaction.
+  Compatibility is self-healing: legacy rows (marking JSON still in the
+  state column) load as-is and normalize on their next save, or eagerly via
+  the new `BackfillTokenStates` helper (the dogfood runs it at boot);
+  `storage.WithTokenTable("")` opts out entirely and restores the old blob
+  format. `EnsureSchema` creates the table; `GenerateTokenSchema` emits the
+  DDL for migration tools (see `examples/migration_example`'s new 000005
+  migration). Conformance: the kit gained `Tokens/ListPlaceTokens`. Design:
+  `docs/roadmap/SHARED_POOL_MODELING.md` §9 ("B via storage-only", simple
+  flavor; per-token delta concurrency deliberately deferred).
 - **Empty markings persist** — friction log #3. A marking with zero marked
   places is now a valid state end-to-end: `NewWorkflowFromMarking` accepts an
   empty (non-nil) marking, the new **`Manager.CreateWorkflowFromMarking`**

@@ -123,6 +123,33 @@ type ListableStorage interface {
 	ListIDs(ctx context.Context, opts ListOptions) ([]string, error)
 }
 
+// PlacedToken is one token at rest in one place of one workflow instance — a
+// row of the cross-instance token read-model (see TokenQueryStorage).
+type PlacedToken struct {
+	WorkflowID string
+	Place      Place
+	Token      Token
+}
+
+// TokenQueryStorage is an optional interface a Storage backend may implement
+// to answer cross-instance token queries: "every token currently resting in
+// place P, across ALL workflow instances". It is the read-model a shared
+// token-pool needs (e.g. a batch run listing every payable expense in the
+// system) — a single indexed query instead of loading and inspecting every
+// instance. The Manager exposes it via ListPlaceTokens.
+//
+// Backends that normalize each token into its own row (the SQL backends'
+// token table) answer this directly; a backend persisting markings as opaque
+// blobs cannot, and simply does not implement the interface.
+type TokenQueryStorage interface {
+	Storage
+
+	// ListPlaceTokens returns every token in the given place across all
+	// workflow instances, in stable storage order for pagination. A zero
+	// opts.Limit means no limit.
+	ListPlaceTokens(ctx context.Context, place Place, opts ListOptions) ([]PlacedToken, error)
+}
+
 // TxSideEffect is a write executed atomically with a state save — typically an
 // audit/history record or an outbox row. The tx argument is backend-specific:
 // the SQL backends pass a *sql.Tx. An effect that returns an error aborts the

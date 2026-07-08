@@ -48,6 +48,7 @@ func TestPostgresConformance(t *testing.T) {
 		}
 		t.Cleanup(func() {
 			_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+			_, _ = db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s_tokens", table))
 		})
 		return store
 	})

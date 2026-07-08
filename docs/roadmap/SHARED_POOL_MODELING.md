@@ -233,7 +233,15 @@ Full cited version in chat; condensed:
   dogfood deleted `batch_control` from `payment.yaml` and its migration hook
   grew real place-removal logic (`migratePaymentAnchor` rewrites stored
   markings; covered by `TestPaymentAnchorMigration`). FRICTION #3 closed.
-  The `token_states` normalization (§9.1–§9.3) remains open, pending Q2.
+- 2026-07-08 — **SHIPPED: step 2 of §9 (token normalization, SIMPLE flavor).**
+  Both SQL backends now persist the marking as one row per token in a child
+  table and blank the `state` blob; the cross-instance read-model landed as
+  `workflow.TokenQueryStorage` / `Manager.ListPlaceTokens`. Q2 was answered
+  implicitly ("simple flavor is fine"): concurrency stays per-instance
+  whole-marking overwrite; §9.5 (delta) remains deferred. Deviations from
+  the sketch are recorded in §9.6. **This doc's open work is done** — what
+  remains live is only the Q1/Q3 modeling choice (singleton vs per-instance
+  tokens), which the read-model makes freely swappable later.
 - _(add decisions here as they are made)_
 
 ---
@@ -357,4 +365,38 @@ whole-marking overwrite to **token deltas**: the manager emits "added token X to
 concurrency scoped **per token row** (an append of a new token conflicts with no
 one). This touches the `Storage` interface and the manager save path — but still
 **not** the net, YAML, or firing API. Deferred until measurement (Q2) justifies it.
+
+### 9.6 As shipped (2026-07-08) — deltas from the sketch above
+
+The implementation (storage/tokens.go + both backends) follows §9.1–§9.4 with
+these deliberate deviations:
+
+- **Table name**: `<state_table>_tokens` derived from the configured state
+  table (two nets sharing one DB with different state tables don't collide),
+  overridable via `storage.WithTokenTable(name)`; the empty name **disables**
+  normalization entirely (legacy blob mode — the escape hatch for
+  hand-managed schemas).
+- **Row payload**: the `token` column stores the FULL token JSON — id, data,
+  and `enteredAt` — not just `TokenData`: the entry timestamp must survive
+  for timers to restore. `token_id` stays as a queryable projection.
+- **No UNIQUE constraint**: the engine's marking is a true multiset
+  (`AddToken` accepts several anonymous colored tokens in one place), so
+  storage must not impose an identity constraint the model lacks; `seq` is
+  the row identity and scan order.
+- **Load is ONE statement**, not a two-query transaction: the token rows
+  LEFT JOIN into the instance-row query, so the snapshot is atomic even at
+  READ COMMITTED — stronger and simpler than the sketch's BEGIN/COMMIT.
+- **Compatibility is self-healing**: a save through the token table blanks
+  the `state` blob, so a NON-empty blob always marks a legacy (or
+  downgraded-writer) row whose blob is authoritative on load; the next save
+  normalizes it. `BackfillTokenStates` (both backends) migrates eagerly —
+  the dogfood calls it at boot — and skips instances a concurrent save beat
+  it to, without bumping versions.
+- **Read-model API**: `workflow.TokenQueryStorage` (optional capability,
+  like `ListableStorage`/`DueStorage`) with `Manager.ListPlaceTokens`
+  exposed on the manager; conformance covered by the kit's
+  `Tokens/ListPlaceTokens`. The dogfood's `RunBatch` still loads the
+  singleton — it must fire `pay` per token through the net anyway — but the
+  pool is now equally answerable by one query, which is exactly what makes
+  the Q1/Q3 singleton-vs-per-instance choice swappable later.
 

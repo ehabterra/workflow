@@ -37,8 +37,12 @@ func clampUnixNano(t time.Time) int64 {
 }
 
 // Compile-time assertions that SQLiteStorage satisfies the full storage
-// contract, including the host-driven-timer (M4) due index.
-var _ workflow.TransactionalDueStorage = (*SQLiteStorage)(nil)
+// contract, including the host-driven-timer (M4) due index and the
+// cross-instance token read-model.
+var (
+	_ workflow.TransactionalDueStorage = (*SQLiteStorage)(nil)
+	_ workflow.TokenQueryStorage       = (*SQLiteStorage)(nil)
+)
 
 // SQLiteStorage provides a persistent storage implementation using SQLite.
 // It is highly configurable to allow for custom table and column names,
@@ -88,15 +92,40 @@ func (s *SQLiteStorage) GenerateSchema() string {
 	return fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s);", s.table, strings.Join(columns, ", "))
 }
 
-// EnsureSchema creates the state table if it does not exist and idempotently
-// applies the migrations this library version needs — currently the M4 due
-// index: it adds the due column to a pre-existing table (safely tolerating a
-// table that already has it) and creates the supporting index. It is safe to
-// call on every process start against both fresh and pre-existing tables, and
-// is the recommended one-call setup for backends that use Manager.FireDue.
+// GenerateTokenSchema returns the CREATE statements (table + indexes) for the
+// token table — the normalized one-row-per-token form of the marking behind
+// workflow.TokenQueryStorage — for use with a separate migration tool.
+// EnsureSchema applies the same statements itself. Empty when the token table
+// is disabled (WithTokenTable("")).
+func (s *SQLiteStorage) GenerateTokenSchema() string {
+	if !s.tokensEnabled() {
+		return ""
+	}
+	return strings.Join(tokenTableDDL(s.tokensTable(), "INTEGER PRIMARY KEY"), "\n")
+}
+
+// EnsureSchema creates the state table (and the token table, unless disabled)
+// if they do not exist and idempotently applies the migrations this library
+// version needs — currently the M4 due index: it adds the due column to a
+// pre-existing table (safely tolerating a table that already has it) and
+// creates the supporting index. It is safe to call on every process start
+// against both fresh and pre-existing tables, and is the recommended one-call
+// setup for backends that use Manager.FireDue.
+//
+// Upgrading a pre-token-table database: EnsureSchema creates the (empty)
+// token table; existing rows keep their marking blob and remain loadable, and
+// each instance is normalized on its next save. Run BackfillTokenStates once
+// to migrate eagerly so ListPlaceTokens sees not-yet-saved instances.
 func (s *SQLiteStorage) EnsureSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, s.GenerateSchema()); err != nil {
 		return fmt.Errorf("create table: %w", err)
+	}
+	if s.tokensEnabled() {
+		for _, stmt := range tokenTableDDL(s.tokensTable(), "INTEGER PRIMARY KEY") {
+			if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("create token table: %w", err)
+			}
+		}
 	}
 	if s.dueColumn == "" {
 		return nil
@@ -153,52 +182,93 @@ func (s *SQLiteStorage) LoadStateTx(ctx context.Context, tx *sql.Tx, id string) 
 }
 
 func (s *SQLiteStorage) loadState(ctx context.Context, q querier, id string) (workflow.Marking, map[string]any, int64, error) {
-	columns := []string{s.stateColumn}
+	columns := []string{"w." + s.stateColumn}
 	if s.contextColumn != "" {
-		columns = append(columns, s.contextColumn)
+		columns = append(columns, "w."+s.contextColumn)
 	}
 	customStart := len(columns)
 	customFieldKeys := make([]string, 0, len(s.customFields))
 
 	for key, colDef := range s.customFields {
 		colName := strings.Fields(colDef)[0]
-		columns = append(columns, colName)
+		columns = append(columns, "w."+colName)
 		customFieldKeys = append(customFieldKeys, key)
 	}
 	versionIdx := len(columns)
-	columns = append(columns, s.versionColumn)
+	columns = append(columns, "w."+s.versionColumn)
 
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ?",
-		strings.Join(columns, ", "),
-		s.table,
-		s.idColumn,
-	)
-
-	row := q.QueryRowContext(ctx, query, id)
-
-	// Prepare to scan into a slice of any pointers
-	scanArgs := make([]any, len(columns))
-	for i := range columns {
-		scanArgs[i] = new(any)
+	// The token rows join into the SAME statement as the instance row: one
+	// statement is one snapshot, so the marking, context, and version can
+	// never disagree (the read-skew class of bug the single-query contract
+	// exists to prevent).
+	tokens := s.tokensEnabled()
+	tokenIdx := len(columns)
+	var query string
+	if tokens {
+		columns = append(columns, "tk.place", "tk.token")
+		query = fmt.Sprintf("SELECT %s FROM %s w LEFT JOIN %s tk ON tk.workflow_id = w.%s WHERE w.%s = ? ORDER BY tk.seq",
+			strings.Join(columns, ", "), s.table, s.tokensTable(), s.idColumn, s.idColumn)
+	} else {
+		query = fmt.Sprintf("SELECT %s FROM %s w WHERE w.%s = ?",
+			strings.Join(columns, ", "), s.table, s.idColumn)
 	}
 
-	err := row.Scan(scanArgs...)
+	scanArgs := make([]any, len(columns))
+	for i := range tokenIdx {
+		scanArgs[i] = new(any)
+	}
+	var tokPlace, tokJSON sql.NullString
+	if tokens {
+		scanArgs[tokenIdx] = &tokPlace
+		scanArgs[tokenIdx+1] = &tokJSON
+	}
+
+	rows, err := q.QueryContext(ctx, query, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, 0, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
-		}
 		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	found := false
+	var tokenPlaces, tokenJSONs []string
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+		}
+		found = true
+		if tokens && tokPlace.Valid && tokJSON.Valid {
+			tokenPlaces = append(tokenPlaces, tokPlace.String)
+			tokenJSONs = append(tokenJSONs, tokJSON.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to load state: %w", err)
+	}
+	if !found {
+		return nil, nil, 0, fmt.Errorf("%w: id %s", workflow.ErrWorkflowNotFound, id)
 	}
 
 	// Process results
 	var stateJSON []byte
-	if rawState, ok := (*scanArgs[0].(*any)).([]byte); ok {
-		stateJSON = rawState
-	} else {
+	switch raw := (*scanArgs[0].(*any)).(type) {
+	case []byte:
+		stateJSON = raw
+	case string:
+		stateJSON = []byte(raw)
+	case nil:
+	default:
 		return nil, nil, 0, fmt.Errorf("unexpected type for state column")
 	}
 
-	marking, err := workflow.UnmarshalMarkingJSON(stateJSON)
+	// A NON-empty state blob is authoritative — a legacy row (or one written
+	// by a pre-token-table binary) that has not been normalized yet. New
+	// saves blank the blob and keep the marking in token rows only.
+	var marking workflow.Marking
+	if tokens && len(stateJSON) == 0 {
+		marking, err = markingFromTokenJSON(tokenPlaces, tokenJSONs)
+	} else {
+		marking, err = workflow.UnmarshalMarkingJSON(stateJSON)
+	}
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
@@ -320,9 +390,15 @@ func dueValueSQLite(due *time.Time) any {
 	return clampUnixNano(due.UTC())
 }
 
-// DeleteState removes a workflow's state from the database.
+// DeleteState removes a workflow's state (and its token rows) from the database.
 func (s *SQLiteStorage) DeleteState(ctx context.Context, id string) error {
-	return s.deleteState(ctx, s.db, id)
+	if !s.tokensEnabled() {
+		return s.deleteState(ctx, s.db, id)
+	}
+	// The instance row and its token rows must go together.
+	return RunInTx(ctx, s.db, func(tx *sql.Tx) error {
+		return s.deleteState(ctx, tx, id)
+	})
 }
 
 // DeleteStateTx behaves like DeleteState but writes through the provided transaction.
@@ -331,9 +407,36 @@ func (s *SQLiteStorage) DeleteStateTx(ctx context.Context, tx *sql.Tx, id string
 }
 
 func (s *SQLiteStorage) deleteState(ctx context.Context, q querier, id string) error {
+	if s.tokensEnabled() {
+		del := fmt.Sprintf("DELETE FROM %s WHERE workflow_id = ?", s.tokensTable())
+		if _, err := q.ExecContext(ctx, del, id); err != nil {
+			return err
+		}
+	}
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", s.table, s.idColumn)
 	_, err := q.ExecContext(ctx, query, id)
 	return err
+}
+
+// ListPlaceTokens implements workflow.TokenQueryStorage: every token currently
+// resting in the given place across ALL workflow instances, in stable (seq)
+// order — the cross-instance read-model for shared token pools. It returns an
+// error wrapping errors.ErrUnsupported when the token table is disabled.
+func (s *SQLiteStorage) ListPlaceTokens(ctx context.Context, place workflow.Place, opts workflow.ListOptions) ([]workflow.PlacedToken, error) {
+	return listPlaceTokens(ctx, s.db, s.config, false, place, opts)
+}
+
+// BackfillTokenStates migrates every pre-token-table row (marking JSON still
+// in the state column) into token rows, one instance per transaction, and
+// reports how many were migrated. Instances normalize organically on their
+// next save anyway; run this once after an upgrade so ListPlaceTokens also
+// sees instances that have not saved since. Idempotent and safe under
+// concurrent writers (a racing save wins and normalizes the row itself).
+func (s *SQLiteStorage) BackfillTokenStates(ctx context.Context) (int, error) {
+	if !s.tokensEnabled() {
+		return 0, fmt.Errorf("token table disabled (empty token table name): %w", errors.ErrUnsupported)
+	}
+	return backfillTokens(ctx, s.db, s.config, false)
 }
 
 // SaveState implements workflow.Storage. It saves the workflow
@@ -345,7 +448,14 @@ func (s *SQLiteStorage) deleteState(ctx context.Context, q querier, id string) e
 // does not maintain the due index; for a timed definition, use
 // SaveStateWithDue or go through the Manager so the index stays current.
 func (s *SQLiteStorage) SaveState(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64) (int64, error) {
-	return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
+	if !s.tokensEnabled() {
+		return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, nil, false)
+	}
+	// The version-guarded instance write and the token rows must commit
+	// atomically, so the non-Tx path opens its own transaction.
+	return saveStateInTx(ctx, s.db, nil, func(tx *sql.Tx) (int64, error) {
+		return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, nil, false)
+	})
 }
 
 // SaveStateTx behaves like SaveState but writes through the
@@ -372,7 +482,12 @@ func (s *SQLiteStorage) SaveStateInTx(ctx context.Context, id string, marking wo
 // versioned state and records the instance's next-due time (nil clears it) in
 // the due-index column.
 func (s *SQLiteStorage) SaveStateWithDue(ctx context.Context, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time) (int64, error) {
-	return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
+	if !s.tokensEnabled() {
+		return s.saveState(ctx, s.db, id, marking, ctxData, expectedVersion, due, true)
+	}
+	return saveStateInTx(ctx, s.db, nil, func(tx *sql.Tx) (int64, error) {
+		return s.saveState(ctx, tx, id, marking, ctxData, expectedVersion, due, true)
+	})
 }
 
 // SaveStateInTxWithDue implements workflow.TransactionalDueStorage: the
@@ -384,10 +499,22 @@ func (s *SQLiteStorage) SaveStateInTxWithDue(ctx context.Context, id string, mar
 	})
 }
 
+// saveState writes the instance row (version-guarded) and, when the token
+// table is enabled, mirrors the marking into token rows and blanks the state
+// blob. The caller must pass a transaction as q whenever the token table is
+// enabled, so the instance row and its token rows commit atomically.
 func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, marking workflow.Marking, ctxData map[string]any, expectedVersion int64, due *time.Time, setDue bool) (int64, error) {
-	stateJSON, err := json.Marshal(marking)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal state: %w", err)
+	// With the token table enabled the blob is blanked — the marking lives in
+	// token rows only (an empty blob is what marks a normalized row on load).
+	var stateVal string
+	if s.tokensEnabled() {
+		stateVal = ""
+	} else {
+		stateJSON, err := json.Marshal(marking)
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal state: %w", err)
+		}
+		stateVal = string(stateJSON)
 	}
 	customCols, customVals := s.customColumns(ctxData, encodeValue)
 	if s.contextColumn != "" {
@@ -409,7 +536,7 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, mar
 		// Create a new row at version 1; do nothing if the id already exists so we
 		// can distinguish "created" (1 row affected) from "already exists" (0).
 		columns := append([]string{s.idColumn, s.stateColumn, s.versionColumn}, customCols...)
-		values := append([]any{id, stateJSON, int64(1)}, customVals...)
+		values := append([]any{id, stateVal, int64(1)}, customVals...)
 		placeholders := make([]string, len(columns))
 		for i := range placeholders {
 			placeholders[i] = "?"
@@ -428,6 +555,11 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, mar
 		if n == 0 {
 			return 0, fmt.Errorf("%w: workflow %s already exists (expected version 0)", workflow.ErrConflict, id)
 		}
+		if s.tokensEnabled() {
+			if err := replaceTokens(ctx, q, s.tokensTable(), false, id, marking); err != nil {
+				return 0, err
+			}
+		}
 		return 1, nil
 	}
 
@@ -436,7 +568,7 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, mar
 		fmt.Sprintf("%s = ?", s.stateColumn),
 		fmt.Sprintf("%s = %s + 1", s.versionColumn, s.versionColumn),
 	}
-	args := []any{stateJSON}
+	args := []any{stateVal}
 	for i, col := range customCols {
 		setClauses = append(setClauses, fmt.Sprintf("%s = ?", col))
 		args = append(args, customVals[i])
@@ -456,6 +588,11 @@ func (s *SQLiteStorage) saveState(ctx context.Context, q querier, id string, mar
 	}
 	if n == 0 {
 		return 0, fmt.Errorf("%w: workflow %s (expected version %d)", workflow.ErrConflict, id, expectedVersion)
+	}
+	if s.tokensEnabled() {
+		if err := replaceTokens(ctx, q, s.tokensTable(), false, id, marking); err != nil {
+			return 0, err
+		}
 	}
 	return expectedVersion + 1, nil
 }

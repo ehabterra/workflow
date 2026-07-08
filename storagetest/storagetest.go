@@ -178,6 +178,76 @@ func Run(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("Tokens/ListPlaceTokens", func(t *testing.T) {
+		// The cross-instance token read-model (optional TokenQueryStorage
+		// capability): every token resting in one place, across ALL
+		// instances, tracking saves as tokens move.
+		ctx := context.Background()
+		store := newStore(t)
+		ts, ok := store.(workflow.TokenQueryStorage)
+		if !ok {
+			t.Skip("backend does not implement TokenQueryStorage")
+		}
+
+		m1 := workflow.NewMarking(nil)
+		m1.AddToken("payable", workflow.NewTokenWithID("t1", workflow.TokenData{"amount": float64(10)}))
+		m2 := workflow.NewMarking(nil)
+		m2.AddToken("payable", workflow.NewTokenWithID("t2", workflow.TokenData{"amount": float64(20)}))
+		m2.AddToken("paid", workflow.NewTokenWithID("t3", nil))
+		if _, err := store.SaveState(ctx, "wf1", m1, nil, 0); err != nil {
+			t.Fatalf("SaveState(wf1): %v", err)
+		}
+		if _, err := store.SaveState(ctx, "wf2", m2, nil, 0); err != nil {
+			t.Fatalf("SaveState(wf2): %v", err)
+		}
+
+		got, err := ts.ListPlaceTokens(ctx, "payable", workflow.ListOptions{})
+		if err != nil {
+			t.Fatalf("ListPlaceTokens: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("payable tokens = %d, want 2 (%+v)", len(got), got)
+		}
+		byID := map[workflow.TokenID]workflow.PlacedToken{}
+		for _, pt := range got {
+			if pt.Place != "payable" {
+				t.Fatalf("token %s reported place %q, want payable", pt.Token.ID(), pt.Place)
+			}
+			byID[pt.Token.ID()] = pt
+		}
+		if byID["t1"].WorkflowID != "wf1" || byID["t2"].WorkflowID != "wf2" {
+			t.Fatalf("token ownership wrong: %+v", byID)
+		}
+		if v, _ := byID["t2"].Token.Get("amount"); v != float64(20) {
+			t.Fatalf("t2 amount = %v, want 20", v)
+		}
+
+		if got, err = ts.ListPlaceTokens(ctx, "nowhere", workflow.ListOptions{}); err != nil || len(got) != 0 {
+			t.Fatalf("empty place: %v, %d tokens, want 0", err, len(got))
+		}
+		if got, err = ts.ListPlaceTokens(ctx, "payable", workflow.ListOptions{Limit: 1}); err != nil || len(got) != 1 {
+			t.Fatalf("Limit 1: %v, %d tokens, want 1", err, len(got))
+		}
+
+		// The read-model tracks saves: wf1 pays its token out.
+		paid := workflow.NewMarking(nil)
+		paid.AddToken("paid", workflow.NewTokenWithID("t1", workflow.TokenData{"amount": float64(10)}))
+		if _, err := store.SaveState(ctx, "wf1", paid, nil, 1); err != nil {
+			t.Fatalf("SaveState(wf1 paid): %v", err)
+		}
+		if got, err = ts.ListPlaceTokens(ctx, "payable", workflow.ListOptions{}); err != nil || len(got) != 1 || got[0].Token.ID() != "t2" {
+			t.Fatalf("after payout: %v, %+v, want only t2", err, got)
+		}
+
+		// Uncolored presence tokens are rows too (empty token ID).
+		if _, err := store.SaveState(ctx, "wf3", mk("review"), nil, 0); err != nil {
+			t.Fatalf("SaveState(wf3): %v", err)
+		}
+		if got, err = ts.ListPlaceTokens(ctx, "review", workflow.ListOptions{}); err != nil || len(got) != 1 || got[0].Token.ID() != "" {
+			t.Fatalf("presence token row: %v, %+v, want one empty-ID token", err, got)
+		}
+	})
+
 	t.Run("FullContextRoundTrip", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)

@@ -64,9 +64,11 @@ workaround.
    native shared place), pros-cons, research (fusion vs substitution,
    rcwf static places, proclets, WF-net soundness, Camunda/Temporal/saga),
    and open questions are in [`SHARED_POOL_MODELING.md`](./SHARED_POOL_MODELING.md).
-   The empty-marking fix above is step 1 of that doc's chosen direction
-   ("B via storage-only"); the `token_states` storage normalization is the
-   remaining step.
+   The empty-marking fix above was step 1 of that doc's chosen direction
+   ("B via storage-only"); step 2 — normalizing the marking into a token
+   child table with a cross-instance read-model
+   (`workflow.TokenQueryStorage` / `Manager.ListPlaceTokens`) — has shipped
+   too, closing the doc's open work (see its §9.6 for the as-built shape).
 
 4. **`FireDue` cannot join a caller transaction.** Interactive fires get
    atomic state+history via `Execute` + `WithTxSideEffect`, but `FireDue`
