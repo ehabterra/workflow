@@ -157,13 +157,19 @@ Priority order for what the library needs next, from what actually hurt:
 4. ✅ **SHIPPED: `FireDue` side effects** — `WithFireDueTxSideEffect` (see
    resolved entry 4 above); timer audit records are exactly-once now.
 
-5. **Additive-change detection for fingerprints** (new). Adding `release`,
-   `revise`, and submit routing changed both nets' fingerprints; the
-   migration hook can only see two opaque hashes, so the host approves
-   blindly (safe here because the loader re-validates places — but the
-   hook can't distinguish "new transition added" from "place renamed").
-   A structural diff (places added/removed, transitions added/removed)
-   handed to the migration hook would make upgrade hooks trustworthy.
+5. ✅ **SHIPPED: structural diffs for the migration hook** (was:
+   additive-change detection for fingerprints). Every save now stamps a
+   compact definition *shape* (place names + per-transition record hashes)
+   alongside the fingerprint, so a mismatch hands the hook a
+   `DefinitionMismatch` with a **`DefinitionDiff`**: places and transitions
+   added/removed/changed, by name — a rename reads as remove+add with the
+   referencing transitions marked changed. `Diff.Additive()` makes "new
+   structure only, approve mechanically" a one-line policy; the dogfood's
+   hook now refuses non-additive expense-net changes instead of approving
+   blindly, and state saved by pre-shape versions yields a nil diff ("no
+   information"). Original finding: the hook could only see two opaque
+   hashes, so the host approved blindly and couldn't distinguish "new
+   transition added" from "place renamed".
 
 6. **Creation seed** (entry 8) and **cross-instance recipes** (entry 5) —
    real but tolerable with documented patterns.
