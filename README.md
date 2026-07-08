@@ -794,10 +794,11 @@ diagram := wf.Diagram()
 fmt.Println(diagram)
 ```
 
-Example output — splits and merges route through BPMN-style gateway
-diamonds that say their semantics: the AND-split forks through `◇all`, and
-the AND-join joins through `◇all` (`◇any` for OR-input transitions); guards
-appear on the routing edges and the live marking is highlighted:
+Example output — splits and merges route through gateway diamonds with the
+BPMN symbols: the AND-split forks through `◇+` (parallel gateway), the
+AND-join joins through `◇+` (`◇×`, the exclusive gateway, for OR-input
+transitions); guards appear on the routing edges and the live marking is
+highlighted:
 
 ```mermaid
 flowchart LR
@@ -815,14 +816,14 @@ flowchart LR
     t_review["review"]
     class t_review action
     p_draft --> t_review
-    f_review{"all"}
+    f_review{"+"}
     class f_review gateway
     t_review --> f_review
     f_review --> p_legal
     f_review --> p_finance
     t_finalize["finalize"]
     class t_finalize action
-    j_finalize{"all"}
+    j_finalize{"+"}
     class j_finalize gateway
     p_legal --> j_finalize
     p_finance --> j_finalize

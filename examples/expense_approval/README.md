@@ -99,8 +99,8 @@ batch page render the nets with the library's own Mermaid renderer
 nodes color-typed by who fires them (declared per transition with the
 `diagram_class` metadata — person / automatic; ⏱ timers are derived),
 guards visible on the routing edges, dotted "cancels" reset arcs,
-splits and merges routed through BPMN-style gateway diamonds that say
-their semantics — `◇all` (AND: every branch) or `◇any` (OR-input:
+splits and merges routed through gateway diamonds with the BPMN
+symbols — `◇+` (parallel: every branch) or `◇×` (exclusive/OR-input:
 exactly one) — the two parallel review lanes boxed as `subgraph`
 regions (via a `diagram_group` place metadata), the live marking
 highlighted, and ⬤×N token badges on colored-token places — with a

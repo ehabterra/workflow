@@ -646,13 +646,13 @@ func TestWorkflow_Diagram(t *testing.T) {
 		}
 		got := wf.Diagram()
 		for _, want := range []string{
-			`f_fork{"all"}`,        // AND-split forks through a ◇all gateway…
+			`f_fork{"+"}`,          // AND-split forks through a ◇+ parallel gateway…
 			"class f_fork gateway", //   (outputs are always "produce all")
 			"t_fork --> f_fork",
 			"f_fork --> p_branch1",
 			"f_fork --> p_branch2",
-			`j_merge{"all"}`,        // …and the AND-join joins through a diamond
-			"class j_merge gateway", //   saying "all" ("any" for OR-inputs)
+			`j_merge{"+"}`,          // …and the AND-join joins through ◇+
+			"class j_merge gateway", //   (◇× for OR-inputs)
 			"p_branch1 --> j_merge",
 			"p_branch2 --> j_merge",
 			"j_merge --> t_merge",
@@ -670,7 +670,7 @@ func TestWorkflow_Diagram(t *testing.T) {
 		def, _ := workflow.NewDefinition([]workflow.Place{"pending", "escalated", "done"}, []workflow.Transition{*a})
 		got := def.Diagram()
 		for _, want := range []string{
-			`j_approve{"any"}`, // OR-input: the gateway diamond says "any", not "all"
+			`j_approve{"×"}`, // OR-input: the ◇× exclusive gateway, not ◇+
 			"class j_approve gateway",
 			"p_pending --> j_approve",
 			"p_escalated --> j_approve",

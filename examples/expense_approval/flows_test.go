@@ -328,9 +328,9 @@ func TestDiagramsPages(t *testing.T) {
 	resp.Body.Close()
 	body := string(page)
 	for _, want := range []string{
-		"flowchart LR",                   // the rich renderer
-		"legal approve",                  // humanized transition names
-		`j_legal_approve{&#34;any&#34;}`, // OR-input gateway diamond saying "any" (quotes HTML-escaped)
+		"flowchart LR",                 // the rich renderer
+		"legal approve",                // humanized transition names
+		`j_legal_approve{&#34;×&#34;}`, // OR-input ◇× exclusive gateway (quotes HTML-escaped)
 		"class j_legal_approve gateway",
 		"cancels",            // reset arcs
 		"❰ amount ≤ 100.0 ❱", // visible guard
