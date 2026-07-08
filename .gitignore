@@ -12,3 +12,4 @@ coverage.out
 /examples/timer_escalation/timer_escalation
 /examples/website_workflow/website_workflow/examples/timer_escalation_beanstalkd/timer_escalation_beanstalkd
 /examples/expense_approval/expense_approval
+examples/website_workflow/website_workflow
