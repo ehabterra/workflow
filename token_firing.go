@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -200,12 +201,16 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	// guard can route on the token's data (e.g. token.amount > 1000).
 	event := NewGuardEvent(ctx, targetTransition, currentPlaces, to, eventTokens, w)
 	if err := targetTransition.validate(event); err != nil {
+		if errors.Is(err, ErrGuardRejected) {
+			w.notifyGuardRejected(ctx, targetTransition, from, eventTokens)
+		}
 		return err
 	}
 	if err := w.fireEvent(event); err != nil {
 		return err
 	}
 	if event.IsBlocking() {
+		w.notifyGuardRejected(ctx, targetTransition, from, eventTokens)
 		return ErrGuardRejected
 	}
 

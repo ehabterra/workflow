@@ -97,14 +97,14 @@ jobs:
         with:
           go-version: '1.25'
 
-      # Example modules have their own go.mod and are not covered by the root
-      # `go test ./...`, so build, vet, and test each one to catch breakage
-      # early.
+      # Example and contrib modules have their own go.mod and are not covered
+      # by the root `go test ./...`, so build, vet, and test each one to catch
+      # breakage early.
       - name: Build, vet, and test example modules
         run: |
           set -euo pipefail
           fail=0
-          for mod in $(find examples -name go.mod -maxdepth 2); do
+          for mod in $(find examples contrib -name go.mod -maxdepth 2); do
             dir=$(dirname "$mod")
             echo "::group::$dir"
             (cd "$dir" && go build ./... && go vet ./... && go test -race ./...) || fail=1
