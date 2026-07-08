@@ -73,7 +73,11 @@ transition when the webhook arrives. The error split does the HTTP mapping:
 through `Manager.Execute` with `WithTxSideEffect` writing the history record
 in the *same transaction* as the state save (`app.go: fire`). The
 crash-consistency test injects a failing side effect and proves neither half
-lands. (Timer firings are the documented exception — see the friction log.)
+lands. Timer firings get the same guarantee via `WithFireDueTxSideEffect`:
+the effect receives the fired steps (transition + from/to marking) *inside*
+`FireDue`'s transaction, so the escalation tick's history records are
+exactly-once too — this was friction entry #4 until the library grew the
+option.
 
 **Guards route, straight from context.** `submit` is an XOR-split decided
 by guard expressions over the workflow context: `amount <= 100.0` sends

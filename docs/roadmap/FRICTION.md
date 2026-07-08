@@ -70,12 +70,21 @@ workaround.
    (`workflow.TokenQueryStorage` / `Manager.ListPlaceTokens`) — has shipped
    too, closing the doc's open work (see its §9.6 for the as-built shape).
 
-4. **`FireDue` cannot join a caller transaction.** Interactive fires get
-   atomic state+history via `Execute` + `WithTxSideEffect`, but `FireDue`
-   returns the fired names only after its own save commits, so timer audit
-   records are written post-hoc (at-least-once; a crash between commit and
-   history write loses the record). Wanted: a `FireDue` option receiving the
-   fired transitions *inside* the transaction.
+4. ✅ **SHIPPED: `WithFireDueTxSideEffect`** (was: `FireDue` cannot join a
+   caller transaction). A `FireDue`-scoped tx side effect now receives the
+   pass's fired steps — transition plus the marking on each side — *inside*
+   the save's transaction, so a timer firing and its audit record commit or
+   roll back together, exactly like an interactive fire. The dogfood's
+   `Tick` deleted its post-hoc `SaveTransition` loop, its timer records
+   gained from/to markings, and plain `Execute` rejects the option (only
+   `FireDue` knows what fired). Original finding kept below.
+
+   **Original entry**: interactive fires get atomic state+history via
+   `Execute` + `WithTxSideEffect`, but `FireDue` returns the fired names
+   only after its own save commits, so timer audit records are written
+   post-hoc (at-least-once; a crash between commit and history write loses
+   the record). Wanted: a `FireDue` option receiving the fired transitions
+   *inside* the transaction.
 
 5. **Cross-instance steps are the host's problem** (expected — but the
    recipe deserves docs). Expense → payment-net enqueue and pay →
@@ -145,9 +154,8 @@ Priority order for what the library needs next, from what actually hurt:
    fires the first allowed candidate, skipping not-enabled and
    guard-rejected ones; the dogfood's `routeSubmit` is now one call.
 
-4. **`FireDue` side effects** (entry 4). Timer audit records are still
-   at-least-once while every interactive fire is exactly-once. Grows worse
-   as timers multiply.
+4. ✅ **SHIPPED: `FireDue` side effects** — `WithFireDueTxSideEffect` (see
+   resolved entry 4 above); timer audit records are exactly-once now.
 
 5. **Additive-change detection for fingerprints** (new). Adding `release`,
    `revise`, and submit routing changed both nets' fingerprints; the

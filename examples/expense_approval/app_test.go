@@ -94,14 +94,23 @@ func TestEscalationTick(t *testing.T) {
 		t.Fatalf("want legal_approve (OR-input), fired %v", names)
 	}
 
-	// Timer firings are recorded in the audit trail (post-hoc, actor
-	// "timer").
+	// Timer firings are recorded in the audit trail atomically with the
+	// state commit (WithFireDueTxSideEffect), actor "timer", with the
+	// from/to markings of each step — no longer a post-hoc write.
 	recs, err := app.hist.ListHistory(ctx, id, history.QueryOptions{Actor: "timer"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(recs) != 2 {
 		t.Fatalf("want 2 timer history records, got %d", len(recs))
+	}
+	for _, r := range recs {
+		if r.FromState == "" || r.ToState == "" {
+			t.Fatalf("timer record must carry the step's from/to marking, got %+v", r)
+		}
+		if !strings.Contains(r.ToState, "escalated") {
+			t.Fatalf("timer record ToState = %q, want an escalated place", r.ToState)
+		}
 	}
 }
 

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`WithFireDueTxSideEffect` — exactly-once timer audit records** (friction
+  log #4). A `FireDue`-scoped transactional side effect that receives the
+  steps the pass fired (**`FiredStep`**: transition + the marking before and
+  after it) *inside* the save's transaction. A plain `WithTxSideEffect`
+  could never serve here — `FireDue` returns the fired names only after its
+  save commits, leaving an at-least-once crash window for post-hoc history
+  writes. Now a timer firing and its audit record commit or roll back
+  together, exactly like an interactive `Execute` fire; the effect is
+  skipped when the pass fired nothing, and plain `Execute` rejects the
+  option (only `FireDue` knows what fired). The dogfood's escalation tick
+  deleted its post-hoc write and its timer records gained from/to markings.
 - **Normalized token storage + cross-instance token queries.** The SQL
   backends now persist a marking as one row per token in a child table
   (`<state_table>_tokens`: workflow_id, place, token_id, full token JSON)

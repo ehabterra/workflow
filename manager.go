@@ -291,6 +291,15 @@ type ExecuteOption func(*executeConfig)
 type executeConfig struct {
 	effects     []TxSideEffect
 	maxAttempts int
+
+	// firedEffects are FireDue-scoped tx side effects (WithFireDueTxSideEffect):
+	// like effects, but each receives the steps the FireDue pass fired.
+	// firedSteps is the provider FireDue installs so the wrapped effects can
+	// read the current attempt's steps at commit time; it is nil under plain
+	// Execute, which rejects firedEffects rather than silently dropping the
+	// payload.
+	firedEffects []FireDueTxSideEffect
+	firedSteps   func() []FiredStep
 }
 
 // WithMaxRetries sets how many times Execute retries the whole
@@ -333,6 +342,48 @@ func WithTxSideEffect(effect TxSideEffect) ExecuteOption {
 	return func(c *executeConfig) { c.effects = append(c.effects, effect) }
 }
 
+// FiredStep describes one timer firing inside a FireDue pass: the transition
+// that fired and the marking on each side of it — what a host needs to write
+// an audit/history record for the firing.
+type FiredStep struct {
+	Transition string
+	Before     []Place
+	After      []Place
+}
+
+// FireDueTxSideEffect is a write committed atomically with a FireDue save,
+// receiving the steps the pass fired. See WithFireDueTxSideEffect.
+type FireDueTxSideEffect func(ctx context.Context, tx any, steps []FiredStep) error
+
+// WithFireDueTxSideEffect registers a write committed atomically with the
+// FireDue save that receives the transitions the pass fired — the
+// exactly-once way to record timer firings. A plain WithTxSideEffect cannot
+// serve here: FireDue returns the fired names only after its save commits, so
+// a host writing history from the return value has an at-least-once crash
+// window between the two. This effect runs inside the save's transaction with
+// the fired steps in hand, so the state change and its audit record commit or
+// roll back together, exactly like an interactive Execute fire:
+//
+//	fired, err := mgr.FireDue(ctx, id, def, now,
+//	    workflow.WithFireDueTxSideEffect(func(ctx context.Context, tx any, steps []workflow.FiredStep) error {
+//	        for _, s := range steps {
+//	            if err := hist.SaveTransitionTx(ctx, tx.(*sql.Tx), &history.TransitionRecord{
+//	                WorkflowID: id, Transition: s.Transition, Actor: "timer", CreatedAt: now,
+//	            }); err != nil {
+//	                return err
+//	            }
+//	        }
+//	        return nil
+//	    }))
+//
+// The effect is skipped when the pass fired nothing (a due-index self-heal
+// save has no steps to record). Like WithTxSideEffect it requires a
+// TransactionalStorage backend, and it is only meaningful under FireDue —
+// plain Execute rejects it, since only FireDue knows what fired.
+func WithFireDueTxSideEffect(effect FireDueTxSideEffect) ExecuteOption {
+	return func(c *executeConfig) { c.firedEffects = append(c.firedEffects, effect) }
+}
+
 // Execute atomically advances a persisted instance: it loads the instance fresh
 // from storage, runs fn against it (fn typically applies one or more
 // transitions), and saves it back under optimistic concurrency. If the save
@@ -356,6 +407,26 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 	var cfg executeConfig
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+
+	// FireDue-scoped effects are only meaningful when a steps provider was
+	// installed (by FireDue itself): plain Execute has no fired steps to hand
+	// them, so reject rather than silently invoke with nothing. Wrapping them
+	// into plain effects BEFORE the transactional-support check keeps the
+	// atomicity requirement applying to them too.
+	if len(cfg.firedEffects) > 0 {
+		if cfg.firedSteps == nil {
+			return fmt.Errorf("WithFireDueTxSideEffect is only valid with FireDue: %w", errors.ErrUnsupported)
+		}
+		for _, fe := range cfg.firedEffects {
+			cfg.effects = append(cfg.effects, func(ctx context.Context, tx any) error {
+				steps := cfg.firedSteps()
+				if len(steps) == 0 {
+					return nil // a self-heal save with no firing needs no record
+				}
+				return fe(ctx, tx, steps)
+			})
+		}
 	}
 
 	// Atomic side effects need transactional support; fail loudly rather than
@@ -592,11 +663,22 @@ var errFireDueNoSave = errors.New("firedue: no save needed")
 // leaves no running timer the instance drops out of ListDue.
 //
 // Extra ExecuteOptions (e.g. WithMaxRetries, WithTxSideEffect) are forwarded to
-// the underlying Execute.
+// the underlying Execute; WithFireDueTxSideEffect additionally receives the
+// steps this pass fired, inside the save's transaction (see its doc).
 func (m *Manager) FireDue(ctx context.Context, id string, definition *Definition, now time.Time, opts ...ExecuteOption) ([]string, error) {
 	var fired []string
+	var steps []FiredStep
+	// Install the steps provider for WithFireDueTxSideEffect: the wrapped
+	// effects run after fn within the same attempt, so reading the shared
+	// slice hands them exactly this attempt's steps.
+	execOpts := make([]ExecuteOption, 0, len(opts)+1)
+	execOpts = append(execOpts, opts...)
+	execOpts = append(execOpts, func(c *executeConfig) {
+		c.firedSteps = func() []FiredStep { return steps }
+	})
 	err := m.Execute(ctx, id, definition, func(wf *Workflow) error {
 		fired = nil // Execute may re-run fn on a conflict retry; start clean.
+		steps = nil
 		wf.setClock(func() time.Time { return now })
 		for range maxFireDueSteps {
 			// Fire the first due transition that is actually allowed, then
@@ -604,6 +686,7 @@ func (m *Manager) FireDue(ctx context.Context, id string, definition *Definition
 			// fires — the set is empty, or every member is guard-blocked or was
 			// disabled earlier in this pass — the pass is done.
 			progressed := false
+			before := wf.CurrentPlaces()
 			for _, t := range wf.Due(now) {
 				err := wf.ApplyTransitionWithContext(ctx, t.Name())
 				if err != nil {
@@ -613,6 +696,7 @@ func (m *Manager) FireDue(ctx context.Context, id string, definition *Definition
 					return err
 				}
 				fired = append(fired, t.Name())
+				steps = append(steps, FiredStep{Transition: t.Name(), Before: before, After: wf.CurrentPlaces()})
 				progressed = true
 				break
 			}
@@ -632,7 +716,7 @@ func (m *Manager) FireDue(ctx context.Context, id string, definition *Definition
 			}
 		}
 		return nil
-	}, opts...)
+	}, execOpts...)
 	if err != nil && !errors.Is(err, errFireDueNoSave) {
 		return nil, err
 	}
