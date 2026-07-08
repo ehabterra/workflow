@@ -997,18 +997,27 @@ func buildProjectFromWorkflow(id string, wf *workflow.Workflow) *Project {
 }
 
 func handleDiagram(w http.ResponseWriter, r *http.Request) {
-	// The definition renders its own structure — no scratch instance needed —
-	// and the ?dir= switcher picks the flow orientation.
+	// The ?dir= switcher picks the flow orientation.
 	dir := workflow.DiagramDirection(r.URL.Query().Get("dir"))
 	switch dir {
 	case workflow.DiagramDirectionBottomUp, workflow.DiagramDirectionLeftRight, workflow.DiagramDirectionRightLeft:
 	default:
 		dir = workflow.DiagramDirectionTopDown
 	}
+	// Render a FRESH instance built from the YAML's initial_marking (not the
+	// bare definition, which cannot know where instances start): that draws
+	// the ◉ start marker and lights the initial place exactly the way every
+	// new project begins.
+	diagram := ""
+	if wf, err := yaml.NewLoader().LoadWorkflow(yamlConfig, "structure"); err == nil {
+		diagram = wf.Diagram(dir)
+	} else {
+		diagram = workflowDef.Diagram(dir) // structure-only fallback
+	}
 	data := struct {
 		Diagram string
 		Dir     string
-	}{Diagram: workflowDef.Diagram(dir), Dir: string(dir)}
+	}{Diagram: diagram, Dir: string(dir)}
 	if err := templates.ExecuteTemplate(w, "diagram.html", data); err != nil {
 		log.Printf("Error executing template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

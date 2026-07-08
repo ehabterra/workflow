@@ -67,4 +67,17 @@ func TestWorkflowYAML(t *testing.T) {
 	if !strings.HasPrefix(def.Diagram(workflow.DiagramDirectionLeftRight), "flowchart LR\n") {
 		t.Fatal("direction override must render flowchart LR")
 	}
+
+	// The /diagram page renders a FRESH instance from the YAML's
+	// initial_marking, so the ◉ start marker points at planning — a bare
+	// Definition.Diagram cannot know that (regression guard: the marker
+	// briefly disappeared when the page switched to Definition.Diagram).
+	fresh, err := yaml.NewLoader().LoadWorkflow(cfg, "structure")
+	if err != nil {
+		t.Fatalf("LoadWorkflow: %v", err)
+	}
+	live := fresh.Diagram()
+	if !strings.Contains(live, "START((( )))") || !strings.Contains(live, "START --> p_planning") {
+		t.Fatalf("fresh-instance diagram must carry the ◉ start marker into planning:\n%s", live)
+	}
 }
