@@ -629,6 +629,12 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return ErrNotEnabled
 	}
 
+	// The pre-lock token snapshot may now be stale — the re-resolved consume
+	// set can differ from the pre-lock pick — so refresh it while the tokens
+	// are still at the inputs: the after-event must report the tokens
+	// actually consumed.
+	moved = w.coloredTokensAtLocked(from)
+
 	// Move tokens from the input places to the output places (clearing any
 	// reset places), preserving colored token data and leaving unrelated
 	// places untouched.
@@ -716,6 +722,12 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	if !enabled {
 		return ErrNotEnabled
 	}
+
+	// The pre-lock token snapshot may now be stale — the re-resolved consume
+	// set can differ from the pre-lock pick — so refresh it while the tokens
+	// are still at the inputs: the after-event must report the tokens
+	// actually consumed.
+	moved = w.coloredTokensAtLocked(from)
 
 	// Move tokens from the input places to the output places (clearing any
 	// reset places), preserving colored token data and leaving unrelated
