@@ -396,6 +396,18 @@
                             <input type="text" name="custom_required_changes" placeholder="Required Changes" 
                                    class="px-3 py-2 border border-gray-300 rounded text-sm">
                         </div>
+                        {{else if eq .Name "reject_project"}}
+                        <div class="mb-3 p-3 bg-red-50 border border-red-200 rounded-md">
+                            <p class="text-sm text-red-800">
+                                <i class="fas fa-ban"></i> Rejects from whichever review stage holds the project
+                                (OR-input) and cancels every sibling review in flight (reset arcs).
+                            </p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <input type="text" name="custom_rejection_reason" placeholder="Rejection Reason"
+                                   required
+                                   class="px-3 py-2 border border-gray-300 rounded text-sm">
+                        </div>
                         {{else if eq .Name "complete_qa"}}
                         <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
                             <p class="text-sm text-blue-800 mb-2">

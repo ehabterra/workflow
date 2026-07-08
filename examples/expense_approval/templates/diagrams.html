@@ -4,6 +4,7 @@
 <h1>Diagrams</h1>
 <p class="lede">Rendered by the library itself (<span class="mono">Definition.Diagram</span> / <span class="mono">Workflow.Diagram</span>) from the same definitions the engine fires, so they can never drift from the code. Rounded nodes are <em>places</em> (states at rest); rectangles are <em>transitions</em>, colored by who fires them; ◉ marks the entry point.</p>
 {{template "diagram-legend"}}
+{{template "dir-switcher" .Dir}}
 
 <h2>Expense net — one instance per expense</h2>
 <p class="muted" style="font-size:.85rem">The two parallel review lanes are boxed as <span class="mono">subgraph</span> regions (declared with a <span class="mono">diagram_group</span> place metadata); shared states stay outside.</p>
