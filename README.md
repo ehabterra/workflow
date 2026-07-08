@@ -794,22 +794,48 @@ diagram := wf.Diagram()
 fmt.Println(diagram)
 ```
 
-Example output:
+Example output — an AND-split forks through a blank gateway bar, and the
+AND-join joins through a bar saying `all` (`any` for OR-input transitions);
+guards appear on the routing edges and the live marking is highlighted:
 
 ```mermaid
-stateDiagram-v2
-    classDef currentPlace font-weight:bold,stroke-width:4px
-    start
-    middle
-    end
-    start --> middle : to-middle
-    middle --> end : to-end
-
-    %% Current places
-    class end currentPlace
-
-    %% Initial place
-    [*] --> start
+flowchart LR
+    START((( )))
+    class START startMarker
+    START --> p_draft
+    p_draft(["draft"])
+    p_legal(["legal"])
+    p_finance(["finance"])
+    p_approved(["approved"])
+    class p_draft current
+    class p_legal place
+    class p_finance place
+    class p_approved terminal
+    t_review["review"]
+    class t_review action
+    p_draft --> t_review
+    f_review["&nbsp;"]
+    class f_review gateway
+    t_review --> f_review
+    f_review --> p_legal
+    f_review --> p_finance
+    t_finalize["finalize"]
+    class t_finalize action
+    j_finalize["all"]
+    class j_finalize gateway
+    p_legal --> j_finalize
+    p_finance --> j_finalize
+    j_finalize --> t_finalize
+    t_finalize --> p_approved
+    classDef place fill:#FFFFFF,stroke:#6B7280,stroke-width:1px,color:#111827
+    classDef current fill:#DCFCE7,stroke:#15803D,stroke-width:3px,color:#14532D,font-weight:bold
+    classDef terminal fill:#F3F4F6,stroke:#6B7280,stroke-dasharray:3 3,color:#374151
+    classDef action fill:#1D4ED8,stroke:#1E3A8A,color:#FFFFFF
+    classDef person fill:#15803D,stroke:#14532D,color:#FFFFFF
+    classDef auto fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
+    classDef timer fill:#FEF3C7,stroke:#B45309,color:#92400E
+    classDef startMarker fill:#111827,stroke:#111827,color:#111827
+    classDef gateway fill:#111827,stroke:#111827,color:#F9FAFB,font-weight:bold
 ```
 
 ## Benchmarks

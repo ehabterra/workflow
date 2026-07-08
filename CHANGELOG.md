@@ -46,9 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagram_class` metadata key ("person", "auto", or any host classDef) for
   actor typing the engine cannot know. Guards appear visibly on the routing
   edges, prettified (`❰ amount ≤ 100 ❱`); reset arcs are dotted red
-  "cancels" edges. The transition node is the fork/join point (it fans in
-  from every input, out to every output); merge inputs are labeled so the
-  semantics are explicit — an AND-join says "all", an OR-input says "either".
+  "cancels" edges. Splits and merges route through classic UML-style
+  fork/join gateway bars: a multi-input transition joins through a dark bar
+  saying its semantics — "all" (AND-join) or "any" (OR-input) — and a
+  multi-output transition forks through a blank bar (outputs always all
+  fire); XOR-splits stay as guard-labeled alternative edges out of the
+  choosing place.
   Places may name a region via a `diagram_group` metadata key; same-group
   places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
   (the dogfood boxes the expense net's Legal/Finance review lanes). On a live

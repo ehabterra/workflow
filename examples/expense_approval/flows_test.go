@@ -328,9 +328,10 @@ func TestDiagramsPages(t *testing.T) {
 	resp.Body.Close()
 	body := string(page)
 	for _, want := range []string{
-		"flowchart LR",       // the rich renderer
-		"legal approve",      // humanized transition names
-		"either",             // OR-merge inputs
+		"flowchart LR",    // the rich renderer
+		"legal approve",   // humanized transition names
+		"j_legal_approve", // OR-input join bar (says "any")
+		"class j_legal_approve gateway",
 		"cancels",            // reset arcs
 		"❰ amount ≤ 100.0 ❱", // visible guard
 		"classDef timer",     // typed transitions

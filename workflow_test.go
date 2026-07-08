@@ -646,11 +646,35 @@ func TestWorkflow_Diagram(t *testing.T) {
 		}
 		got := wf.Diagram()
 		for _, want := range []string{
-			"t_fork --> p_branch1",       // AND-split fans out of one node…
-			"t_fork --> p_branch2",       //   (outputs are always "produce all")
-			"p_branch1 -->|all| t_merge", // …and the AND-join fans in, labeled "all"
-			"p_branch2 -->|all| t_merge", //   (symmetric with "either" for OR-inputs)
+			`f_fork["&nbsp;"]`,     // AND-split forks through a blank gateway bar…
+			"class f_fork gateway", //   (outputs are always "produce all")
+			"t_fork --> f_fork",
+			"f_fork --> p_branch1",
+			"f_fork --> p_branch2",
+			`j_merge["all"]`,        // …and the AND-join joins through a bar
+			"class j_merge gateway", //   saying "all" ("any" for OR-inputs)
+			"p_branch1 --> j_merge",
+			"p_branch2 --> j_merge",
+			"j_merge --> t_merge",
 			"t_merge --> p_end",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Diagram() missing %q:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("or-input joins through an any bar", func(t *testing.T) {
+		a, _ := workflow.NewTransition("approve", []workflow.Place{"pending", "escalated"}, []workflow.Place{"done"})
+		a.SetFromAny(true)
+		def, _ := workflow.NewDefinition([]workflow.Place{"pending", "escalated", "done"}, []workflow.Transition{*a})
+		got := def.Diagram()
+		for _, want := range []string{
+			`j_approve["any"]`, // OR-input: the join bar says "any", not "all"
+			"class j_approve gateway",
+			"p_pending --> j_approve",
+			"p_escalated --> j_approve",
+			"j_approve --> t_approve",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("Diagram() missing %q:\n%s", want, got)
