@@ -453,12 +453,28 @@ func WithFireDueTxSideEffect(effect FireDueTxSideEffect) ExecuteOption {
 // reloaded state; a transition that is no longer enabled on reload returns
 // ErrNotEnabled from within fn, which Execute surfaces to the caller.
 //
+// RETRY RESETS: any variable fn's closure writes (fired-transition names,
+// step records, before/after markings) must be RE-INITIALIZED at the top of
+// fn — a retry otherwise appends to the previous attempt's values, and the
+// bug stays silent until real concurrency triggers a conflict:
+//
+//	var fired []string
+//	err := mgr.Execute(ctx, id, def, func(wf *workflow.Workflow) error {
+//	    fired = nil // reset: Execute may re-run fn on ErrConflict
+//	    if err := wf.ApplyTransition("approve"); err != nil {
+//	        return err
+//	    }
+//	    fired = append(fired, "approve")
+//	    return nil
+//	})
+//
 // Side-effect semantics: fn (and any listeners it triggers) may run more than
 // once across retries, and a listener's external side effects are not rolled
 // back by a later conflict — make them idempotent, or perform them after
 // Execute returns. Writes that must be crash-consistent with the state change
 // (history records, outbox rows) belong in a WithTxSideEffect option, which
-// commits them in the same transaction as the save.
+// commits them in the same transaction as the save. See
+// docs/guides/PRODUCTION_RECIPES.md for the full set of retry/crash recipes.
 func (m *Manager) Execute(ctx context.Context, id string, definition *Definition, fn func(*Workflow) error, opts ...ExecuteOption) error {
 	var cfg executeConfig
 	for _, opt := range opts {

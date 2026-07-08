@@ -29,13 +29,27 @@
 //
 // [Storage] and the history store persist workflow state and an audit trail. Both
 // interfaces take a context.Context as their first argument so callers can apply
-// cancellation and deadlines. A SQLite implementation ships in the storage and
-// history sub-packages; you can supply your own by implementing the interfaces.
+// cancellation and deadlines. SQLite and PostgreSQL implementations ship in the
+// storage and history sub-packages (with optimistic concurrency built into the
+// contract, a normalized one-row-per-token format, and the [TokenQueryStorage]
+// cross-instance read-model); you can supply your own by implementing the
+// interfaces — the storagetest sub-package is the conformance suite for it.
+//
+// [Manager.Execute] is the recommended write path: load fresh, run your
+// function, save under the instance's version, and retry the whole cycle on
+// conflict — with [WithTxSideEffect] committing audit/outbox writes in the same
+// transaction as the save ([WithFireDueTxSideEffect] is the timer-firing
+// variant). See docs/guides/PRODUCTION_RECIPES.md for the crash-window and
+// idempotency recipes, and docs/BOUNDARIES.md for what the library
+// deliberately leaves to the host.
 //
 // # Configuration and visualization
 //
 // Workflows can be defined programmatically or loaded from YAML (see the yaml
-// sub-package). [Workflow.Diagram] renders a Mermaid state diagram for documentation.
+// sub-package). [Definition.Diagram] renders the structure as a Mermaid
+// flowchart, and [Workflow.Diagram] adds the live marking — guards on edges,
+// BPMN-style gateway diamonds for splits and merges, reset arcs, timer styling,
+// and per-place token badges.
 //
 // # Status
 //
@@ -48,8 +62,10 @@
 // FireDue — the host owns the clock), SQLite and PostgreSQL storage backends
 // with optimistic concurrency built into the Storage contract and
 // transactional building blocks, SQLite and PostgreSQL history stores, the
-// strict YAML loader with the polymorphic initial_marking key, and Mermaid
-// diagram generation.
+// strict YAML loader with the polymorphic initial_marking key, definition
+// fingerprints with structural diffs for the migration hook, token queries
+// and aggregation, empty-marking (pool-net) persistence with the
+// cross-instance token read-model, and Mermaid diagram generation.
 //
 // Not yet available (tracked in ROADMAP.md): a signals API, static validation
 // (deadlock/soundness checking), hierarchical workflows (HCPN),

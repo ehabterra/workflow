@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **M6 documentation pass** — the deep docs milestone, grounded in the
+  dogfood app: `docs/guides/MENTAL_MODEL.md` (the narrative "how to think
+  in Petri nets" guide, from marking-vs-status-column through a worked
+  requirements-to-net translation), `docs/guides/PRODUCTION_RECIPES.md`
+  (crash windows and idempotency — friction entries 5–8 as recipes:
+  `Execute` retry resets, exactly-once audit, webhook redelivery mapping,
+  cross-instance saga + reconciler, creation-seed GC, listener semantics,
+  token-query re-entrancy, migration-as-policy), and `docs/BOUNDARIES.md`
+  (what the library deliberately does not do). Godoc polished to match:
+  refreshed package doc, a RETRY RESETS callout with example on
+  `Manager.Execute`, and a LOCK RE-ENTRANCY warning on the token-query
+  APIs. The README gained a documentation index.
 - **Structural diffs for definition migration** (friction log #5). Every
   save stamps a compact definition *shape* (sorted place names plus a short
   hash of each transition's structural record, a few hundred bytes under

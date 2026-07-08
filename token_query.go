@@ -4,10 +4,21 @@ package workflow
 //
 // These operate on colored (data-carrying) tokens; uncolored presence tokens are
 // skipped, since they carry nothing to query or aggregate.
+//
+// LOCK RE-ENTRANCY: every query in this file holds the workflow's lock while
+// running the caller's predicate (or transform). A predicate that calls back
+// into the same workflow — GetTokens, ApplyTransition, Marking, anything that
+// takes the lock — DEADLOCKS. Keep predicates pure functions of their Token
+// argument; if a query needs other workflow state, collect it into plain
+// values first and close over those (see the token-query recipe in
+// docs/guides/PRODUCTION_RECIPES.md).
 
 // FindTokens returns, grouped by place, the colored tokens across the whole
 // marking that match pred (a nil pred matches every colored token). Places with
 // no match are omitted.
+//
+// pred runs under the workflow's lock and must not call back into the
+// workflow (see the re-entrancy note at the top of this file).
 func (w *Workflow) FindTokens(pred TokenPredicate) map[Place][]Token {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -87,6 +98,9 @@ func (w *Workflow) AggregateTokens(pred TokenPredicate, field string) TokenAggre
 // TransformTokens replaces the data of each colored token at place that matches
 // pred (a nil pred matches all) with transform(token), keeping each token's
 // identity. It returns the number of tokens transformed.
+//
+// pred and transform run under the workflow's write lock and must not call
+// back into the workflow (see the re-entrancy note at the top of this file).
 func (w *Workflow) TransformTokens(place Place, pred TokenPredicate, transform func(Token) TokenData) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
