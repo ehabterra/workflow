@@ -190,14 +190,22 @@ func TestOrInputConcurrentFiring(t *testing.T) {
 			t.Fatal(err)
 		}
 		var wg sync.WaitGroup
-		for _, name := range []string{"escalate", "approve"} {
+		errs := make([]error, 2)
+		for i, name := range []string{"escalate", "approve"} {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = wf.ApplyTransition(name)
+				errs[i] = wf.ApplyTransition(name)
 			}()
 		}
 		wg.Wait()
+		// Losing the race legitimately yields ErrNotEnabled; anything else
+		// (a guard rejection, a phantom error) is a real bug.
+		for i, err := range errs {
+			if err != nil && !errors.Is(err, workflow.ErrNotEnabled) {
+				t.Fatalf("unexpected error during race (goroutine %d): %v", i, err)
+			}
+		}
 		// approve may have fired from pending or from escalated, but the
 		// token ends in done exactly once (possibly after a helper fire).
 		if !wf.Marking().HasPlace("done") {
@@ -209,6 +217,51 @@ func TestOrInputConcurrentFiring(t *testing.T) {
 		if p := wf.CurrentPlaces(); len(p) != 1 || p[0] != "done" {
 			t.Fatalf("want exactly [done], got %v", p)
 		}
+	}
+}
+
+// TestOrInputAfterEventReportsConsumedTokens: when a before-listener drains
+// the input the OR-input picked BEFORE the write lock, the consume set is
+// re-resolved under the lock — and the after-transition event must report the
+// tokens of the place that ACTUALLY fired, not a stale snapshot of the
+// abandoned one.
+func TestOrInputAfterEventReportsConsumedTokens(t *testing.T) {
+	tr := workflow.MustNewTransition("approve", []workflow.Place{"pending", "escalated"}, []workflow.Place{"done"})
+	tr.SetFromAny(true)
+	def, err := workflow.NewDefinition([]workflow.Place{"pending", "escalated", "done"}, []workflow.Transition{*tr})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both inputs marked: pending (picked first) holds an uncolored token,
+	// escalated holds the colored token the firing should end up consuming.
+	m := workflow.NewMarking([]workflow.Place{"pending"})
+	m.AddToken("escalated", workflow.NewTokenWithID("tok-esc", workflow.TokenData{"amount": 9.0}))
+	wf, err := workflow.NewWorkflowFromMarking("wf", def, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The before-listener drains pending, forcing the under-lock
+	// re-resolution to consume escalated instead.
+	wf.AddEventListener(workflow.EventBeforeTransition, func(e workflow.Event) error {
+		wf.ClearPlace("pending")
+		return nil
+	})
+	var afterTokens []workflow.Token
+	wf.AddEventListener(workflow.EventAfterTransition, func(e workflow.Event) error {
+		afterTokens = e.Tokens()
+		return nil
+	})
+
+	if err := wf.ApplyTransition("approve"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if got := wf.GetTokens("done"); len(got) != 1 || got[0].ID() != "tok-esc" {
+		t.Fatalf("want tok-esc consumed into done, got %v", got)
+	}
+	if len(afterTokens) != 1 || afterTokens[0].ID() != "tok-esc" {
+		t.Fatalf("after-event must report the tokens actually consumed (tok-esc), got %v", afterTokens)
 	}
 }
 

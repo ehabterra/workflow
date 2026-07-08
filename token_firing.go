@@ -21,7 +21,12 @@ func isColored(t Token) bool { return t.ID() != "" || len(t.data) > 0 }
 func (w *Workflow) coloredTokensAt(places []Place) []Token {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.coloredTokensAtLocked(places)
+}
 
+// coloredTokensAtLocked is coloredTokensAt for callers that already hold w.mu
+// (the RWMutex is not reentrant).
+func (w *Workflow) coloredTokensAtLocked(places []Place) []Token {
 	var out []Token
 	for _, p := range places {
 		for _, tok := range w.marking.TokensAt(p) {
