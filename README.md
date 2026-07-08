@@ -45,7 +45,7 @@ Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflo
 * Support for multiple states and parallel transitions
 * Event system for workflow lifecycle hooks
 * Constraint system for custom validation logic
-* Comprehensive test coverage
+* Comprehensive test coverage — plus test kits for **your** code: `workflowtest` (marking assertions, a transition path runner, a guard table-harness, a deterministic clock for timer tests) and `storagetest` (the conformance suite for custom storage backends)
 
 ## Storage Layer
 

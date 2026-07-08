@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`workflowtest` package** (M5.2) — public test helpers, the counterpart
+  to the `storagetest` conformance kit: `AssertMarking` (exact set) /
+  `AssertHas` / `AssertNotHas` marking assertions; the `Apply` path runner
+  ("apply submit → legal_ok → finance_ok → finalize", failing with the step
+  and marking on the first error); the **`AssertGuard`** table harness,
+  which evaluates a transition's guards against context and token cases on
+  a throwaway instance — no storage, no Manager (`AssertGuardAllows` /
+  `AssertGuardRejects` shorthands); and **`Clock`** (frozen, `Advance`/`Set`)
+  plus `AssertDue` so timer tests never sleep. The dogfood adopted the
+  guard harness for its submit boundary and the marking assertions in the
+  payment-migration test.
 - **`WithFireDueTxSideEffect` — exactly-once timer audit records** (friction
   log #4). A `FireDue`-scoped transactional side effect that receives the
   steps the pass fired (**`FiredStep`**: transition + the marking before and

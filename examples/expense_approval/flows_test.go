@@ -12,6 +12,7 @@ import (
 
 	"github.com/ehabterra/workflow"
 	"github.com/ehabterra/workflow/history"
+	"github.com/ehabterra/workflow/workflowtest"
 )
 
 // TestAutoApprovePettyCash: the guard-routed fast path. Amounts <= 100 skip
@@ -59,6 +60,14 @@ func TestAutoApprovePettyCash(t *testing.T) {
 func TestSubmitRoutingBoundary(t *testing.T) {
 	app, _ := newTestApp(t)
 	ctx := context.Background()
+
+	// The same boundary, table-tested straight against the definition — no
+	// HTTP, no storage — with the workflowtest guard harness.
+	workflowtest.AssertGuard(t, app.expenseDef, "submit_auto",
+		workflowtest.GuardCase{Name: "petty cash", Context: map[string]any{"amount": 50.0}, Allow: true},
+		workflowtest.GuardCase{Name: "at the limit", Context: map[string]any{"amount": 100.0}, Allow: true},
+		workflowtest.GuardCase{Name: "a cent over", Context: map[string]any{"amount": 100.01}, Allow: false},
+	)
 
 	atLimit := mustSubmit(t, app, "alice", 100)
 	view, err := app.Expense(ctx, atLimit)
