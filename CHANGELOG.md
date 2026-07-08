@@ -98,7 +98,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
   (the dogfood boxes the expense net's Legal/Finance review lanes). On a live
   instance the current marking is highlighted and colored-token places carry
-  ⬤×N badges. The old stateDiagram output (and its HTML tooltip spans) is
+  ⬤×N badges. Both `Diagram` methods take an optional **`DiagramDirection`**
+  (`DiagramDirectionTopDown` — the default — `BottomUp`, `LeftRight`,
+  `RightLeft`; unknown values fall back to the default), and the default
+  orientation changed from left-right to **top-down**, which reads better on
+  scrolling pages. The old stateDiagram output (and its HTML tooltip spans) is
   gone. The dogfood embeds these diagrams on `/diagrams`, every expense page,
   and the batch page, with an HTML legend.
 - **Per-place metadata on `Definition`** (`SetPlaceMetadata` /

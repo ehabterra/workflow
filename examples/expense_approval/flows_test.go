@@ -337,7 +337,7 @@ func TestDiagramsPages(t *testing.T) {
 	resp.Body.Close()
 	body := string(page)
 	for _, want := range []string{
-		"flowchart LR",                 // the rich renderer
+		"flowchart TD",                 // the rich renderer (default top-down)
 		"legal approve",                // humanized transition names
 		`j_legal_approve{&#34;×&#34;}`, // OR-input ◇× exclusive gateway (quotes HTML-escaped)
 		"class j_legal_approve gateway",
@@ -356,7 +356,7 @@ func TestDiagramsPages(t *testing.T) {
 	}
 	page, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(page), "flowchart LR") || !strings.Contains(string(page), "class p_pending_legal current") {
+	if !strings.Contains(string(page), "flowchart TD") || !strings.Contains(string(page), "class p_pending_legal current") {
 		t.Fatal("detail page must embed the live diagram with the marking highlighted")
 	}
 

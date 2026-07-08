@@ -789,9 +789,12 @@ value, ok := wf.Context("key")
 The package includes a Mermaid diagram generator for visualizing workflows. The generated diagrams can be rendered in any Mermaid-compatible viewer (like GitHub, GitLab, or the Mermaid Live Editor).
 
 ```go
-// Generate a Mermaid diagram
+// Generate a Mermaid diagram (top-down by default)
 diagram := wf.Diagram()
 fmt.Println(diagram)
+
+// Or pick the flow orientation: TopDown (default), BottomUp, LeftRight, RightLeft
+wide := wf.Diagram(workflow.DiagramDirectionLeftRight)
 ```
 
 Example output — splits and merges route through gateway diamonds with the
@@ -801,7 +804,7 @@ transitions); guards appear on the routing edges and the live marking is
 highlighted:
 
 ```mermaid
-flowchart LR
+flowchart TD
     START((( )))
     class START startMarker
     START --> p_draft

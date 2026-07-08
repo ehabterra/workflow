@@ -619,7 +619,7 @@ func TestWorkflow_Diagram(t *testing.T) {
 		}
 		got := wf.Diagram()
 		for _, want := range []string{
-			"flowchart LR",          // the rich flowchart renderer
+			"flowchart TD",          // the rich flowchart renderer (default top-down)
 			"START((( )))",          // the initial-state entry marker…
 			"START --> p_start",     // …feeding the initial place
 			`p_start(["start"])`,    // places are stadium nodes
@@ -722,6 +722,31 @@ func TestWorkflow_Diagram(t *testing.T) {
 		// The ungrouped place must NOT be wrapped in a subgraph.
 		if strings.Contains(got, `subgraph grp_ [`) {
 			t.Errorf("ungrouped place should not create a subgraph:\n%s", got)
+		}
+	})
+
+	t.Run("direction", func(t *testing.T) {
+		tr, _ := workflow.NewTransition("go", []workflow.Place{"a"}, []workflow.Place{"b"})
+		def, _ := workflow.NewDefinition([]workflow.Place{"a", "b"}, []workflow.Transition{*tr})
+		wf, err := workflow.NewWorkflow("t", def, "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			name string
+			got  string
+			want string
+		}{
+			{"definition default is top-down", def.Diagram(), "flowchart TD\n"},
+			{"workflow default is top-down", wf.Diagram(), "flowchart TD\n"},
+			{"left-right override", def.Diagram(workflow.DiagramDirectionLeftRight), "flowchart LR\n"},
+			{"right-left override", wf.Diagram(workflow.DiagramDirectionRightLeft), "flowchart RL\n"},
+			{"bottom-up renders Mermaid's BT", def.Diagram(workflow.DiagramDirectionBottomUp), "flowchart BT\n"},
+			{"unknown value falls back to the default", def.Diagram(workflow.DiagramDirection("sideways")), "flowchart TD\n"},
+		} {
+			if !strings.HasPrefix(tc.got, tc.want) {
+				t.Errorf("%s: diagram starts %q, want prefix %q", tc.name, tc.got[:min(30, len(tc.got))], tc.want)
+			}
 		}
 	})
 }
