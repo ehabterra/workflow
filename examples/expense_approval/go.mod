@@ -3,7 +3,7 @@ module github.com/ehabterra/workflow/examples/expense_approval
 go 1.25.0
 
 require (
-	github.com/ehabterra/workflow v0.0.0
+	github.com/ehabterra/workflow v0.8.0
 	github.com/ehabterra/workflow/contrib/otel v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/mattn/go-sqlite3 v1.14.22
