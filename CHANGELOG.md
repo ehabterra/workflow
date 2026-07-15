@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus `AssertDue` so timer tests never sleep. The dogfood adopted the
   guard harness for its submit boundary and the marking assertions in the
   payment-migration test.
+- **Observer listeners + OpenTelemetry contrib** (M5.3). `AddObserver` on
+  `Definition`, `Manager`, and `Workflow` registers a **non-blocking**
+  listener (`ObserverFunc`): it returns nothing, its panics are recovered,
+  and it can never abort or fail a firing — the contract instrumentation
+  needs. Guard rejections became observable through the new
+  **`EventGuardRejected`**, an observability-only event emitted when an
+  expression constraint or blocking guard listener refuses a firing
+  (whole-marking and per-token paths); it is dispatched exclusively to
+  observers, so error-returning listeners can never add a failure mode to
+  the rejection path. On top of this sits the new **`contrib/otel`** module
+  (separate go.mod — the core stays dependency-free):
+  `otelworkflow.Instrument(mgr)` emits a `workflow.fire` span per completed
+  firing — parented on the context the transition was applied with, its
+  start time taken from the before-transition event — and the
+  `workflow.firings` counter with `workflow.name`/`workflow.transition`/
+  `workflow.result` (`applied` | `guard_rejected`) attributes. The dogfood
+  exports both over OTLP/HTTP via the new `-otel-endpoint` flag.
 - **`WithFireDueTxSideEffect` — exactly-once timer audit records** (friction
   log #4). A `FireDue`-scoped transactional side effect that receives the
   steps the pass fired (**`FiredStep`**: transition + the marking before and

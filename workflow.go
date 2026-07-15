@@ -338,6 +338,14 @@ func (w *Workflow) AddEventListener(eventType EventType, listener EventListener)
 	return w.listeners.add(eventType, listener, w)
 }
 
+// AddObserver adds a non-blocking observer for a specific event type on this
+// instance: it cannot error, its panics are recovered, and it is the only
+// listener kind that receives EventGuardRejected. Instrumentation belongs
+// here (see ObserverFunc). It returns a handle for RemoveListener.
+func (w *Workflow) AddObserver(eventType EventType, observer ObserverFunc) *ListenerHandle {
+	return w.listeners.add(eventType, observer, w)
+}
+
 // AddGuardEventListener adds a guard event listener
 // It returns a handle that can be used to remove the listener later
 func (w *Workflow) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
@@ -466,8 +474,12 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(consumeFrom), w)
+	tokens := w.coloredTokensAt(consumeFrom)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), tokens, w)
 	if err := targetTransition.validate(event); err != nil {
+		if errors.Is(err, ErrGuardRejected) {
+			w.notifyGuardRejected(ctx, targetTransition, consumeFrom, tokens)
+		}
 		return err
 	}
 
@@ -476,10 +488,18 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 		return err
 	}
 	if event.IsBlocking() {
+		w.notifyGuardRejected(ctx, targetTransition, consumeFrom, tokens)
 		return ErrGuardRejected
 	}
 
 	return nil
+}
+
+// notifyGuardRejected emits the observability-only EventGuardRejected. It is
+// dispatched to observers exclusively (see dispatchListeners), so it can
+// never error and never adds a failure mode to the rejection path.
+func (w *Workflow) notifyGuardRejected(ctx context.Context, t *Transition, from []Place, tokens []Token) {
+	_ = w.fireEvent(NewEvent(ctx, EventGuardRejected, t, from, t.To(), tokens, w))
 }
 
 // CanWithContext checks if transition to target places is possible with a context
@@ -585,8 +605,12 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	}
 
 	// Validate guard constraints
-	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), w.coloredTokensAt(consumeFrom), w)
+	guardTokens := w.coloredTokensAt(consumeFrom)
+	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), guardTokens, w)
 	if err := targetTransition.validate(event); err != nil {
+		if errors.Is(err, ErrGuardRejected) {
+			w.notifyGuardRejected(ctx, targetTransition, consumeFrom, guardTokens)
+		}
 		return err
 	}
 
@@ -595,6 +619,7 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return err
 	}
 	if event.IsBlocking() {
+		w.notifyGuardRejected(ctx, targetTransition, consumeFrom, guardTokens)
 		return ErrGuardRejected
 	}
 

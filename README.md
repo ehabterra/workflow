@@ -34,6 +34,7 @@ Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflo
 * **Mathematically Sound:** Our Petri Net core gives parallel paths and merging logic precise token semantics, which makes complex flows analyzable. A static validator/deadlock checker is planned but not yet shipped, so correctness of a given definition is still up to you today.
 * **Thread-Safe Registry:** The workflow registry uses proper locking to safely handle concurrent access from multiple goroutines.
 * **Audit Trail Ready:** Our pluggable history layer can record every transition, letting you track exactly who did what and when. Recording is opt-in: use the `yaml.ApplyTransitionByNameWithHistory` helper or call the history store from your own event hooks — transitions are not logged automatically.
+* **Observability Built In:** Non-blocking **observer listeners** (`AddObserver`) that can never error, panic outward, or slow a firing — and the [`contrib/otel`](contrib/otel/README.md) module on top of them: a `workflow.fire` span per firing (nested under your request's trace) and a `workflow.firings{name,transition,result}` counter, wired into the reference system behind one flag.
 
 ### 📊 Easy to Understand (Visualization)
 

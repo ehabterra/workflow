@@ -100,11 +100,33 @@ func (s *listenerSet) count(eventType EventType) int {
 	return len(s.lists[eventType])
 }
 
+// ObserverFunc is a non-blocking listener for instrumentation: it returns
+// nothing, and a panic inside it is recovered, so an observer can never abort
+// or fail a firing — unlike an EventListener, whose error propagates into the
+// apply path. Register one with the AddObserver methods on Definition,
+// Manager, or Workflow. Metrics, tracing, and logging belong here; anything
+// that must be able to veto or fail a firing stays an EventListener.
+type ObserverFunc func(Event)
+
+// safeObserve runs an observer, recovering any panic: observation must never
+// break the firing it observes.
+func safeObserve(fn ObserverFunc, event Event) {
+	defer func() { _ = recover() }()
+	fn(event)
+}
+
 // dispatchListeners invokes each listener with the event, stopping at the first
-// error. Guard events go to GuardEventListener entries, everything else to
-// EventListener entries; a listener of the wrong kind for the event is skipped.
+// error. Observers (ObserverFunc) run for every event type of their list and
+// can neither error nor panic outward. Guard events go to GuardEventListener
+// entries, EventGuardRejected goes to observers ONLY (it is observability-only
+// by contract), and everything else goes to EventListener entries; a listener
+// of the wrong kind for the event is skipped.
 func dispatchListeners(listeners []any, event Event) error {
 	for _, l := range listeners {
+		if of, ok := l.(ObserverFunc); ok {
+			safeObserve(of, event)
+			continue
+		}
 		switch event.Type() {
 		case EventGuard:
 			if gl, ok := l.(GuardEventListener); ok {
@@ -112,6 +134,9 @@ func dispatchListeners(listeners []any, event Event) error {
 					return err
 				}
 			}
+		case EventGuardRejected:
+			// Observability-only: error-returning listeners are never invoked,
+			// so instrumenting rejections cannot fail the rejection path.
 		default:
 			if el, ok := l.(EventListener); ok {
 				if err := el(event); err != nil {
