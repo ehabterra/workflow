@@ -110,29 +110,7 @@ func (d *Definition) Fingerprint() string {
 	// fields), then sort the records for order independence.
 	transitions := make([]string, len(d.Transitions))
 	for i := range d.Transitions {
-		t := &d.Transitions[i]
-		from := placeStrings(t.From())
-		to := placeStrings(t.To())
-		slices.Sort(from)
-		slices.Sort(to)
-		guard := ""
-		if g, ok := t.Metadata("guard"); ok {
-			guard, _ = g.(string)
-		}
-		resets := placeStrings(t.Resets())
-		slices.Sort(resets)
-		inputMode := "all"
-		if t.FromAny() {
-			inputMode = "any"
-		}
-		var rec strings.Builder
-		writeLenPrefixed(&rec, t.Name())
-		writeLenPrefixedList(&rec, from)
-		writeLenPrefixedList(&rec, to)
-		writeLenPrefixed(&rec, guard)
-		writeLenPrefixedList(&rec, resets)
-		writeLenPrefixed(&rec, inputMode)
-		transitions[i] = rec.String()
+		transitions[i] = transitionRecord(&d.Transitions[i])
 	}
 	slices.Sort(transitions)
 
@@ -142,6 +120,36 @@ func (d *Definition) Fingerprint() string {
 	writeLenPrefixedList(&buf, transitions)
 	h.Write([]byte(buf.String()))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// transitionRecord serializes one transition's structural fields — name,
+// sorted inputs/outputs, guard string, sorted resets, input mode — into an
+// unambiguous length-prefixed record. Fingerprint hashes the whole sorted set
+// of records; the definition shape (see diff.go) hashes each record
+// individually so a later fingerprint mismatch can be diffed per transition.
+func transitionRecord(t *Transition) string {
+	from := placeStrings(t.From())
+	to := placeStrings(t.To())
+	slices.Sort(from)
+	slices.Sort(to)
+	guard := ""
+	if g, ok := t.Metadata("guard"); ok {
+		guard, _ = g.(string)
+	}
+	resets := placeStrings(t.Resets())
+	slices.Sort(resets)
+	inputMode := "all"
+	if t.FromAny() {
+		inputMode = "any"
+	}
+	var rec strings.Builder
+	writeLenPrefixed(&rec, t.Name())
+	writeLenPrefixedList(&rec, from)
+	writeLenPrefixedList(&rec, to)
+	writeLenPrefixed(&rec, guard)
+	writeLenPrefixedList(&rec, resets)
+	writeLenPrefixed(&rec, inputMode)
+	return rec.String()
 }
 
 // writeLenPrefixed writes s preceded by its byte length ("3:abc"), making the

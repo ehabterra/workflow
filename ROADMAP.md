@@ -186,12 +186,31 @@ that finding outranks any roadmap item.
 
 ---
 
-## M6 — Docs & mental model (🟡) — target: **v0.10.0**
+## M6 — Docs & mental model (✅ 2026-07-08) — target: **v0.10.0**
 
-The deep pass, grounded in the dogfood app (not before): a narrative "how to think in
-Petri nets" guide, the signals/crash-recovery/idempotency recipes, `Boundaries` doc
-(below), pkg.go.dev polish. The **full README rewrite still lands last**, at the v1.0 gate,
-describing only shipping behavior.
+The deep pass, grounded in the dogfood app (not before) — delivered:
+
+- **[`docs/guides/MENTAL_MODEL.md`](docs/guides/MENTAL_MODEL.md)** — the
+  narrative "how to think in Petri nets" guide: marking vs status column,
+  parallelism as state, the three kinds of "or", cycles, reset arcs, time,
+  instance-per-entity vs shared-pool styles, and a worked
+  requirements-to-net translation. Every idea names its dogfood counterpart.
+- **[`docs/guides/PRODUCTION_RECIPES.md`](docs/guides/PRODUCTION_RECIPES.md)**
+  — the crash-recovery/idempotency recipes (friction entries 5–8): `Execute`
+  retry resets, exactly-once audit (interactive + timer), webhook error
+  mapping, cross-instance saga + reconciler, creation-seed GC, listener
+  at-least-once semantics, token-query re-entrancy, migration-as-policy —
+  each pointing at the dogfood code and test that proves it.
+- **[`docs/BOUNDARIES.md`](docs/BOUNDARIES.md)** — the honest statements
+  (below) written out, each with the host-side pattern.
+- **pkg.go.dev polish** — package doc refreshed (Execute write path,
+  transactional side effects, token read-model, current diagram renderer);
+  RETRY RESETS callout on `Manager.Execute`; LOCK RE-ENTRANCY warning on the
+  token-query APIs.
+
+The **full README rewrite still lands last**, at the v1.0 gate, describing
+only shipping behavior. (A signals API remains a parked feature, not a doc
+item.)
 
 ---
 
@@ -230,7 +249,7 @@ Formerly M3–M8. None is deleted; none proceeds without a dogfood-proven need.
 
 ---
 
-## Boundaries (honest statements, to be written into docs in M6)
+## Boundaries (honest statements — written out in [`docs/BOUNDARIES.md`](docs/BOUNDARIES.md), M6)
 
 1. **Not a durable-execution engine.** State is persisted, code is not. A crash loses
    in-memory progress since the last save — by design. Recovery = load + re-drive.

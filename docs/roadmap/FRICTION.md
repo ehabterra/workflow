@@ -86,29 +86,43 @@ workaround.
    the record). Wanted: a `FireDue` option receiving the fired transitions
    *inside* the transaction.
 
-5. **Cross-instance steps are the host's problem** (expected — but the
-   recipe deserves docs). Expense → payment-net enqueue and pay →
+5. ✅ **DOCUMENTED: cross-instance steps are the host's problem** (expected —
+   the recipe now has docs). Expense → payment-net enqueue and pay →
    `mark_paid` are two transactions each; both crash windows needed an
-   explicit `Reconcile`. An outbox/reconcile recipe belongs in the M6 guides.
+   explicit `Reconcile`. The pattern — ordered idempotent writes + one
+   reconciler case per window — is the cross-instance recipe in
+   [`../guides/PRODUCTION_RECIPES.md`](../guides/PRODUCTION_RECIPES.md)
+   (M6), grounded in this app's `Reconcile`.
 
-6. **`Execute` retry resets are subtle.** Any state captured by the `fn`
-   closure (fired-transition names, before/after markings) must be reset at
-   the top of `fn` because `Execute` re-runs it on `ErrConflict`. Easy to
-   get silently wrong — a `workflowtest` assertion or a doc callout would
-   help (M5.2 candidate).
+6. ✅ **DOCUMENTED: `Execute` retry resets are subtle.** Any state captured
+   by the `fn` closure (fired-transition names, before/after markings) must
+   be reset at the top of `fn` because `Execute` re-runs it on `ErrConflict`.
+   Now a RETRY RESETS callout with an example on `Manager.Execute`'s godoc
+   and the first recipe in
+   [`../guides/PRODUCTION_RECIPES.md`](../guides/PRODUCTION_RECIPES.md).
+   (A `workflowtest` assertion that flags non-reset closures remains a
+   candidate if docs prove insufficient.)
 
-7. **Token-query predicates must not call back into the workflow** (lock
-   re-entrancy). An `AggregateTokens` predicate that calls `wf.GetTokens`
-   risks deadlock; had to pre-collect IDs. Needs a doc warning on the
-   `token_query.go` API.
+7. ✅ **DOCUMENTED: token-query predicates must not call back into the
+   workflow** (lock re-entrancy). An `AggregateTokens` predicate that calls
+   `wf.GetTokens` deadlocks; had to pre-collect IDs. Now a LOCK RE-ENTRANCY
+   warning on `token_query.go` (file header + the predicate-taking APIs)
+   and a wrong-vs-right recipe in
+   [`../guides/PRODUCTION_RECIPES.md`](../guides/PRODUCTION_RECIPES.md).
 
-8. **Instance creation can't seed context or fire in one save.**
-   `CreateWorkflow(ctx, id, def, place)` persists a bare instance; setting
-   the business context and firing `submit` needs a second save (`Execute`).
-   A crash in between leaves a context-less draft the app must garbage-
-   collect (`Reconcile` deletes them after a grace period, keyed off the
-   draft token's `EnteredAt`). Wanted: `CreateWorkflow` variants taking
-   initial context, or an `Execute` that can create-if-missing.
+8. ✅ **DOCUMENTED (pattern): instance creation can't seed context or fire
+   in one save.** `CreateWorkflow(ctx, id, def, place)` persists a bare
+   instance; setting the business context and firing `submit` needs a second
+   save (`Execute`). A crash in between leaves a context-less draft the app
+   garbage-collects (`Reconcile`, grace period keyed off the draft token's
+   `EnteredAt`). The creation-seed recipe — do ALL first-save mutations in
+   one `Execute` so the crash artifact is precisely characterizable, then GC
+   it — is in
+   [`../guides/PRODUCTION_RECIPES.md`](../guides/PRODUCTION_RECIPES.md).
+   The API wish (`CreateWorkflow` variants taking initial context, or a
+   create-if-missing `Execute`) stays parked: the documented pattern makes
+   the window boring, and `CreateWorkflowFromMarking` already covers seeded
+   markings.
 
 ## Bugs found in the library (the dogfood earning its keep)
 
@@ -157,20 +171,30 @@ Priority order for what the library needs next, from what actually hurt:
 4. ✅ **SHIPPED: `FireDue` side effects** — `WithFireDueTxSideEffect` (see
    resolved entry 4 above); timer audit records are exactly-once now.
 
-5. **Additive-change detection for fingerprints** (new). Adding `release`,
-   `revise`, and submit routing changed both nets' fingerprints; the
-   migration hook can only see two opaque hashes, so the host approves
-   blindly (safe here because the loader re-validates places — but the
-   hook can't distinguish "new transition added" from "place renamed").
-   A structural diff (places added/removed, transitions added/removed)
-   handed to the migration hook would make upgrade hooks trustworthy.
+5. ✅ **SHIPPED: structural diffs for the migration hook** (was:
+   additive-change detection for fingerprints). Every save now stamps a
+   compact definition *shape* (place names + per-transition record hashes)
+   alongside the fingerprint, so a mismatch hands the hook a
+   `DefinitionMismatch` with a **`DefinitionDiff`**: places and transitions
+   added/removed/changed, by name — a rename reads as remove+add with the
+   referencing transitions marked changed. `Diff.Additive()` makes "new
+   structure only, approve mechanically" a one-line policy; the dogfood's
+   hook now refuses non-additive expense-net changes instead of approving
+   blindly, and state saved by pre-shape versions yields a nil diff ("no
+   information"). Original finding: the hook could only see two opaque
+   hashes, so the host approved blindly and couldn't distinguish "new
+   transition added" from "place renamed".
 
-6. **Creation seed** (entry 8) and **cross-instance recipes** (entry 5) —
-   real but tolerable with documented patterns.
+6. ✅ **DOCUMENTED: creation seed** (entry 8) and **cross-instance recipes**
+   (entry 5) — the patterns now live in the M6
+   [`../guides/PRODUCTION_RECIPES.md`](../guides/PRODUCTION_RECIPES.md),
+   grounded in this app's `SubmitExpense` and `Reconcile`.
 
 ## Verdict so far
 
 No bespoke persistence or scheduling layer was needed — the M5 exit
 criterion holds. The library's core loop (load → fire → save atomically) is
-solid; the friction is all at the edges (cancellation, OR-inputs, timer
-audit atomicity, cross-instance recipes).
+solid; the friction was all at the edges (cancellation, OR-inputs, timer
+audit atomicity, cross-instance recipes) — and with the M6 guides, every
+entry in this log is now either shipped as a library feature (1–4 above,
+plus the fingerprint diff) or documented as a host pattern (5–8).
