@@ -129,14 +129,17 @@ a valid persisted state (`CreateWorkflowFromMarking` with an empty marking),
 so no always-marked anchor place is needed and tokens exist only for
 expenses actually flowing through.
 
-**Definitions evolve; the fingerprint notices.** Adding `release`/`revise`
-changed both nets' fingerprints, so the app installs a
-`WithDefinitionMigration` hook that approves the (additive) upgrades —
-and the loader still re-validates every loaded place afterwards. Deleting
-the payment net's `batch_control` anchor place is the one change approval
-alone can't cover: the hook runs real migration logic
-(`migratePaymentAnchor`), stripping the anchor from the stored marking
-before the manager reloads.
+**Definitions evolve; the fingerprint notices — and the diff says what.**
+Adding `release`/`revise` changed both nets' fingerprints, so the app
+installs a `WithDefinitionMigration` hook. The mismatch now carries a
+structural `DefinitionDiff` (places/transitions added, removed, changed —
+by name), so approval is a policy instead of blind trust:
+`Diff.Additive()` changes pass mechanically, non-additive expense-net
+changes are refused, and the loader still re-validates every loaded place
+afterwards. Deleting the payment net's `batch_control` anchor place is
+the one change approval alone can't cover: the hook runs real migration
+logic (`migratePaymentAnchor`), stripping the anchor from the stored
+marking before the manager reloads.
 
 **What the library refuses to do for you** — and this app does explicitly:
 terminality on rejection (no cancellation regions yet; `ErrTerminal` in

@@ -126,20 +126,30 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 	// Fresh loads on every request: correct across replicas, and the demo is
 	// nowhere near the scale where the registry cache would matter.
 	//
-	// The migration hook approves definition upgrades for both nets. Expense-
-	// net changes have all been additive (new transitions — release, revise,
-	// submit routing), so persisted markings stay valid — and the loader still
-	// validates every loaded place after the hook approves, so a marking that
-	// genuinely no longer fits fails anyway. The payment net is the exception:
-	// it REMOVED a place (the batch_control anchor, obsolete now that an empty
-	// marking persists), which is the one change approval alone cannot cover —
-	// a stored marking still holding the anchor token needs rewriting first.
+	// The migration hook used to approve upgrades BLINDLY (two opaque hashes
+	// were all it saw — friction #5). The mismatch now carries a structural
+	// DIFF, so approval is a policy: additive changes (new places/transitions
+	// only) can never invalidate a persisted marking and pass mechanically;
+	// anything that removed or rewired structure must be handled explicitly —
+	// like the payment net deleting its batch_control anchor place, which
+	// needs the stored marking rewritten before the load can proceed. A nil
+	// diff (state saved by a pre-shape library) is "no information": approve
+	// and let the loader's place validation be the backstop, as before.
 	mgr := workflow.NewManager(workflow.NewRegistry(), store,
-		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
-			if id == paymentID {
-				return migratePaymentAnchor(ctx, store, id, stored, current)
+		workflow.WithDefinitionMigration(func(ctx context.Context, mm workflow.DefinitionMismatch) error {
+			if mm.WorkflowID == paymentID {
+				return migratePaymentAnchor(ctx, store, mm)
 			}
-			log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): additive change, approving", id, stored, current)
+			switch {
+			case mm.Diff == nil:
+				log.Printf("definition upgraded for %s (%.8s… -> %.8s…): pre-shape state, approving (loader validates places)",
+					mm.WorkflowID, mm.StoredFingerprint, mm.CurrentFingerprint)
+			case mm.Diff.Additive():
+				log.Printf("definition upgraded for %s: additive change (%s), approving", mm.WorkflowID, mm.Diff)
+			default:
+				return fmt.Errorf("definition change for %s is not additive (%s): refusing to load without explicit migration",
+					mm.WorkflowID, mm.Diff)
+			}
 			return nil
 		}))
 
@@ -184,13 +194,15 @@ func NewApp(ctx context.Context, db *sql.DB, driver string, escalateAfter time.D
 // reloads. Idempotent: an already-clean marking is approved untouched, so
 // the hook firing again before the next save restamps the fingerprint is
 // harmless.
-func migratePaymentAnchor(ctx context.Context, store workflow.Storage, id, stored, current string) error {
+func migratePaymentAnchor(ctx context.Context, store workflow.Storage, mm workflow.DefinitionMismatch) error {
+	id := mm.WorkflowID
 	marking, wfCtx, version, err := store.LoadState(ctx, id)
 	if err != nil {
 		return fmt.Errorf("payment anchor migration: load: %w", err)
 	}
 	if !marking.HasPlace("batch_control") {
-		log.Printf("definition upgraded for %s (stored fingerprint %.8s… -> %.8s…): marking already clean, approving", id, stored, current)
+		log.Printf("definition upgraded for %s (%.8s… -> %.8s…): marking already clean, approving",
+			id, mm.StoredFingerprint, mm.CurrentFingerprint)
 		return nil
 	}
 	if err := marking.RemovePlace("batch_control"); err != nil {
@@ -204,7 +216,8 @@ func migratePaymentAnchor(ctx context.Context, store workflow.Storage, id, store
 		}
 		return fmt.Errorf("payment anchor migration: save: %w", err)
 	}
-	log.Printf("payment net %s migrated (fingerprint %.8s… -> %.8s…): batch_control anchor stripped from the stored marking", id, stored, current)
+	log.Printf("payment net %s migrated (%.8s… -> %.8s…): batch_control anchor stripped from the stored marking",
+		id, mm.StoredFingerprint, mm.CurrentFingerprint)
 	return nil
 }
 

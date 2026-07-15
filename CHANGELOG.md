@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Structural diffs for definition migration** (friction log #5). Every
+  save stamps a compact definition *shape* (sorted place names plus a short
+  hash of each transition's structural record, a few hundred bytes under
+  the reserved `__workflow_def_shape` context key) alongside the
+  fingerprint. On a mismatch, the `WithDefinitionMigration` handler now
+  receives a **`DefinitionMismatch`** carrying both fingerprints and a
+  **`DefinitionDiff`** — places and transitions added/removed/changed, by
+  name (a renamed place reads as remove+add with its referencing
+  transitions marked changed). `Diff.Additive()` turns "new structure only,
+  approve mechanically" into a one-line policy; `Diff` is nil for state
+  saved by pre-shape versions ("no information", not "no change"). The
+  dogfood's hook now refuses non-additive expense-net changes instead of
+  approving every upgrade blindly.
 - **`WithFireDueTxSideEffect` — exactly-once timer audit records** (friction
   log #4). A `FireDue`-scoped transactional side effect that receives the
   steps the pass fired (**`FiredStep`**: transition + the marking before and
@@ -112,6 +125,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancelling its pending work — previously host-side token surgery.
 
 ### Breaking
+- **`DefinitionMigrationFunc` signature changed**: the handler now receives
+  one `DefinitionMismatch` struct (workflow ID, stored/current fingerprints,
+  structural `Diff`) instead of `(id, storedFingerprint, currentFingerprint)`
+  strings — update handlers to
+  `func(ctx context.Context, mm workflow.DefinitionMismatch) error`. The
+  fingerprint itself is unchanged; the newly stamped shape rides in a second
+  reserved context key (`__workflow_def_shape`), stripped on load like the
+  fingerprint.
 - The definition fingerprint encoding now includes each transition's reset
   places and input mode (AND-join vs OR-input), so **every fingerprint
   changes** with this version. Persisted

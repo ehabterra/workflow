@@ -133,14 +133,15 @@ func TestManager_DefinitionFingerprint_RoundTripAndMismatch(t *testing.T) {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 
-	// Same definition loads fine, and the fingerprint never leaks into context.
+	// Same definition loads fine, and the fingerprint and shape never leak
+	// into context.
 	wf, err := mgr.LoadWorkflow(ctx, "wf", def)
 	if err != nil {
 		t.Fatalf("LoadWorkflow(same def): %v", err)
 	}
 	for k := range wf.AllContext() {
-		if k == "__workflow_def_fingerprint" {
-			t.Fatal("definition fingerprint leaked into workflow context")
+		if k == "__workflow_def_fingerprint" || k == "__workflow_def_shape" {
+			t.Fatalf("reserved key %s leaked into workflow context", k)
 		}
 	}
 
@@ -159,13 +160,30 @@ func TestManager_DefinitionFingerprint_RoundTripAndMismatch(t *testing.T) {
 		t.Fatalf("LoadWorkflow(changed def) err = %v, want ErrDefinitionMismatch", err)
 	}
 
-	// ...unless a migration handler approves it.
+	// ...unless a migration handler approves it. The handler sees both
+	// fingerprints AND the structural diff of the change (extra place c,
+	// extra transition more — a purely additive upgrade).
 	called := false
 	migrating := workflow.NewManager(workflow.NewRegistry(), store,
-		workflow.WithDefinitionMigration(func(_ context.Context, id, stored, current string) error {
+		workflow.WithDefinitionMigration(func(_ context.Context, mm workflow.DefinitionMismatch) error {
 			called = true
-			if stored == "" || current == "" || stored == current {
-				t.Errorf("unexpected fingerprints stored=%q current=%q", stored, current)
+			if mm.WorkflowID != "wf" {
+				t.Errorf("mismatch.WorkflowID = %q, want wf", mm.WorkflowID)
+			}
+			if mm.StoredFingerprint == "" || mm.CurrentFingerprint == "" || mm.StoredFingerprint == mm.CurrentFingerprint {
+				t.Errorf("unexpected fingerprints stored=%q current=%q", mm.StoredFingerprint, mm.CurrentFingerprint)
+			}
+			if mm.Diff == nil {
+				t.Fatal("mismatch.Diff = nil, want the structural diff (the save stamped a shape)")
+			}
+			if !mm.Diff.Additive() {
+				t.Errorf("diff %s should be additive", mm.Diff)
+			}
+			if len(mm.Diff.PlacesAdded) != 1 || mm.Diff.PlacesAdded[0] != "c" {
+				t.Errorf("PlacesAdded = %v, want [c]", mm.Diff.PlacesAdded)
+			}
+			if len(mm.Diff.TransitionsAdded) != 1 || mm.Diff.TransitionsAdded[0] != "more" {
+				t.Errorf("TransitionsAdded = %v, want [more]", mm.Diff.TransitionsAdded)
 			}
 			return nil
 		}))
@@ -397,15 +415,15 @@ func TestManager_DefinitionMigration_RemovedPlaceAndReload(t *testing.T) {
 	// the handler must be consulted, and the load must see the rewrite.
 	called := false
 	migrating := workflow.NewManager(workflow.NewRegistry(), store,
-		workflow.WithDefinitionMigration(func(ctx context.Context, id, stored, current string) error {
+		workflow.WithDefinitionMigration(func(ctx context.Context, mm workflow.DefinitionMismatch) error {
 			called = true
-			_, _, version, err := store.LoadState(ctx, id)
+			_, _, version, err := store.LoadState(ctx, mm.WorkflowID)
 			if err != nil {
 				return err
 			}
-			_, err = store.SaveState(ctx, id,
+			_, err = store.SaveState(ctx, mm.WorkflowID,
 				workflow.NewMarking([]workflow.Place{"done"}),
-				map[string]any{"__workflow_def_fingerprint": current}, version)
+				map[string]any{"__workflow_def_fingerprint": mm.CurrentFingerprint}, version)
 			return err
 		}))
 	wf, err := migrating.LoadWorkflow(ctx, "wf", v2)
