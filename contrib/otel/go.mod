@@ -2,10 +2,16 @@ module github.com/ehabterra/workflow/contrib/otel
 
 go 1.25.0
 
+// In-repo builds (CI, examples) compile against the working tree. External
+// consumers resolve the pinned parent version below instead — replace
+// directives are ignored outside this repository. AddObserver (which this
+// module needs) ships in the parent's next tag after v0.8.0; until then,
+// lift the parent with `go get github.com/ehabterra/workflow@main` alongside
+// this module.
 replace github.com/ehabterra/workflow => ../..
 
 require (
-	github.com/ehabterra/workflow v0.0.0-00010101000000-000000000000
+	github.com/ehabterra/workflow v0.8.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
