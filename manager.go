@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -14,19 +15,47 @@ import (
 // workflow's user-visible context or guard environment.
 const defFingerprintKey = "__workflow_def_fingerprint"
 
+// defShapeKey is the reserved context key under which the Manager persists the
+// definition's structural shape (place names + per-transition record hashes,
+// a few hundred bytes). It is what turns a later fingerprint mismatch into a
+// DefinitionDiff for the migration handler. Written on save, stripped on load,
+// exactly like defFingerprintKey.
+const defShapeKey = "__workflow_def_shape"
+
+// DefinitionMismatch describes a stored-vs-supplied definition mismatch, as
+// handed to the WithDefinitionMigration handler.
+type DefinitionMismatch struct {
+	WorkflowID string
+
+	// StoredFingerprint is the fingerprint stamped on the instance's last
+	// save; empty for a row that was not written by this library's save path.
+	// CurrentFingerprint is the fingerprint of the definition supplied now.
+	StoredFingerprint  string
+	CurrentFingerprint string
+
+	// Diff is the structural difference from the definition the instance was
+	// last saved under to the one supplied now — what was added, removed, or
+	// rewired, by name. It is nil when the stored state carries no shape (it
+	// predates shape stamping, or was not written by this library): nil means
+	// "no information", not "no change".
+	Diff *DefinitionDiff
+}
+
 // DefinitionMigrationFunc is called by the Manager when a persisted instance's
 // stored definition fingerprint differs from the definition supplied to load it.
 // Returning nil lets the load proceed (the caller has confirmed the change is
 // safe, or has migrated the marking); returning an error aborts the load with
-// that error. storedFingerprint is empty for a row that was not written by this
-// library's save path (every save stamps one).
-type DefinitionMigrationFunc func(ctx context.Context, id, storedFingerprint, currentFingerprint string) error
+// that error. The mismatch carries both fingerprints and, when the stored
+// state includes a shape, the structural DefinitionDiff — so approval can be
+// a policy (e.g. mismatch.Diff.Additive()) rather than blind trust.
+type DefinitionMigrationFunc func(ctx context.Context, mismatch DefinitionMismatch) error
 
 // Manager handles workflow instances and their persistence.
 //
-// The Manager reserves the context key "__workflow_def_fingerprint" for the
-// definition fingerprint it stamps on every save: a user value stored under
-// that key is overwritten on save and stripped on load.
+// The Manager reserves the context keys "__workflow_def_fingerprint" and
+// "__workflow_def_shape" for the definition fingerprint and structural shape
+// it stamps on every save: user values stored under those keys are
+// overwritten on save and stripped on load.
 type Manager struct {
 	registry *Registry
 	storage  Storage
@@ -150,9 +179,10 @@ func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *De
 			return nil, fmt.Errorf("reloading after definition migration: %w", err)
 		}
 	}
-	// Strip the fingerprint so it never reaches the workflow's user-visible
-	// context or guard environment.
+	// Strip the fingerprint and shape so they never reach the workflow's
+	// user-visible context or guard environment.
 	delete(wfContext, defFingerprintKey)
+	delete(wfContext, defShapeKey)
 
 	// Validate EVERY loaded place against the definition, not just the first:
 	// a stale marking referencing a place removed from the definition must fail
@@ -199,16 +229,17 @@ func (m *Manager) readState(ctx context.Context, id string) (Marking, map[string
 
 // checkFingerprint compares the stored definition fingerprint against the
 // supplied definition. A missing stored fingerprint (pre-fingerprint instance)
-// passes. A mismatch is an error unless a migration handler approves it; the
-// returned bool reports whether a handler was consulted and approved (the
-// caller then reloads state, since the handler may have rewritten it).
+// passes... to the migration handler, like any mismatch. A mismatch is an
+// error unless a migration handler approves it; the returned bool reports
+// whether a handler was consulted and approved (the caller then reloads
+// state, since the handler may have rewritten it).
 func (m *Manager) checkFingerprint(ctx context.Context, id string, definition *Definition, wfContext map[string]any) (migrated bool, err error) {
 	stored, ok := wfContext[defFingerprintKey].(string)
 	if !ok || stored == "" {
 		// Every save stamps the fingerprint, so a persisted instance without
 		// one was not written by this library's save path. Treat it exactly
 		// like a mismatch: fail loudly, or route to the migration handler
-		// (which receives an empty storedFingerprint).
+		// (which receives an empty StoredFingerprint).
 		stored = ""
 	}
 	current := definition.Fingerprint()
@@ -216,7 +247,13 @@ func (m *Manager) checkFingerprint(ctx context.Context, id string, definition *D
 		return false, nil
 	}
 	if m.onDefinitionMismatch != nil {
-		if err := m.onDefinitionMismatch(ctx, id, stored, current); err != nil {
+		mismatch := DefinitionMismatch{
+			WorkflowID:         id,
+			StoredFingerprint:  stored,
+			CurrentFingerprint: current,
+			Diff:               storedShapeDiff(wfContext, definition),
+		}
+		if err := m.onDefinitionMismatch(ctx, mismatch); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -224,15 +261,34 @@ func (m *Manager) checkFingerprint(ctx context.Context, id string, definition *D
 	return false, fmt.Errorf("%w: instance %q stored fingerprint %s, definition fingerprint %s", ErrDefinitionMismatch, id, stored, current)
 }
 
+// storedShapeDiff parses the shape stamped on the instance's last save and
+// diffs it against the supplied definition. It returns nil when the stored
+// state carries no (parseable) shape — pre-shape instances, or rows not
+// written by this library — leaving the mismatch's Diff as "no information".
+func storedShapeDiff(wfContext map[string]any, definition *Definition) *DefinitionDiff {
+	raw, ok := wfContext[defShapeKey].(string)
+	if !ok || raw == "" {
+		return nil
+	}
+	var stored definitionShape
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return nil
+	}
+	return diffShapes(stored, definition.shape())
+}
+
 // contextForSave returns a copy of ctxData stamped with the definition
-// fingerprint, ready to hand to storage. The live workflow context is never
-// mutated (the caller passes a snapshot copy).
+// fingerprint and structural shape, ready to hand to storage. The live
+// workflow context is never mutated (the caller passes a snapshot copy).
 func contextForSave(ctxData map[string]any, definition *Definition) map[string]any {
 	if ctxData == nil {
-		ctxData = make(map[string]any, 1)
+		ctxData = make(map[string]any, 2)
 	}
 	if definition != nil {
 		ctxData[defFingerprintKey] = definition.Fingerprint()
+		if shape, err := json.Marshal(definition.shape()); err == nil {
+			ctxData[defShapeKey] = string(shape)
+		}
 	}
 	return ctxData
 }
@@ -397,12 +453,28 @@ func WithFireDueTxSideEffect(effect FireDueTxSideEffect) ExecuteOption {
 // reloaded state; a transition that is no longer enabled on reload returns
 // ErrNotEnabled from within fn, which Execute surfaces to the caller.
 //
+// RETRY RESETS: any variable fn's closure writes (fired-transition names,
+// step records, before/after markings) must be RE-INITIALIZED at the top of
+// fn — a retry otherwise appends to the previous attempt's values, and the
+// bug stays silent until real concurrency triggers a conflict:
+//
+//	var fired []string
+//	err := mgr.Execute(ctx, id, def, func(wf *workflow.Workflow) error {
+//	    fired = nil // reset: Execute may re-run fn on ErrConflict
+//	    if err := wf.ApplyTransition("approve"); err != nil {
+//	        return err
+//	    }
+//	    fired = append(fired, "approve")
+//	    return nil
+//	})
+//
 // Side-effect semantics: fn (and any listeners it triggers) may run more than
 // once across retries, and a listener's external side effects are not rolled
 // back by a later conflict — make them idempotent, or perform them after
 // Execute returns. Writes that must be crash-consistent with the state change
 // (history records, outbox rows) belong in a WithTxSideEffect option, which
-// commits them in the same transaction as the save.
+// commits them in the same transaction as the save. See
+// docs/guides/PRODUCTION_RECIPES.md for the full set of retry/crash recipes.
 func (m *Manager) Execute(ctx context.Context, id string, definition *Definition, fn func(*Workflow) error, opts ...ExecuteOption) error {
 	var cfg executeConfig
 	for _, opt := range opts {

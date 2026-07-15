@@ -47,6 +47,23 @@ Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflo
 * Constraint system for custom validation logic
 * Comprehensive test coverage — plus test kits for **your** code: `workflowtest` (marking assertions, a transition path runner, a guard table-harness, a deterministic clock for timer tests) and `storagetest` (the conformance suite for custom storage backends)
 
+## Documentation
+
+Start here, in roughly this order:
+
+| Guide | What it covers |
+|---|---|
+| [Mental model](docs/guides/MENTAL_MODEL.md) | How to *think* in Petri nets: marking vs status column, parallelism as state, choice/merge, cycles, cancellation, the two modeling styles — with a worked requirements-to-net translation |
+| [Production recipes](docs/guides/PRODUCTION_RECIPES.md) | Crash windows and idempotency: `Execute` retry resets, exactly-once audit trails, webhook redelivery, cross-instance saga + reconciler, creation-seed GC, migration-as-policy |
+| [Boundaries](docs/BOUNDARIES.md) | What the library deliberately does **not** do, and the host-side pattern for each |
+| [Timers](docs/guides/TIMERS_GUIDE.md) | Host-driven time: `after:` durations, `ListDue`/`FireDue` crons, exactly-once timer audit records |
+| [Colored tokens (CPN)](docs/guides/CPN_GUIDE.md) | Data-carrying tokens, per-token firing, token-aware guards, queries and aggregation |
+| [Best practices](docs/guides/WORKFLOW_BEST_PRACTICES.md) | Net-design patterns: unambiguous transitions, conditional branches, API usage |
+
+The executable companion to all of them is the reference system at
+[`examples/expense_approval`](examples/expense_approval) — a production-shaped
+web app exercising every feature above, whose README maps each concept to code.
+
 ## Storage Layer
 
 We designed the storage interface to be flexible. You tell us where to put the data and what extra information you need to store.
