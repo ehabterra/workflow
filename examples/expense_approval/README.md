@@ -17,7 +17,10 @@ open http://localhost:8080
 `-escalate-after 2m` shrinks the production 72h review deadline so you can
 watch escalation happen live (safe for existing data: timeouts are not part
 of the definition fingerprint). Use `-postgres-dsn` (or
-`EXPENSE_POSTGRES_DSN`) to run on PostgreSQL instead of SQLite.
+`EXPENSE_POSTGRES_DSN`) to run on PostgreSQL instead of SQLite. Point
+`-otel-endpoint host:4318` (or `EXPENSE_OTEL_ENDPOINT`) at an OTLP/HTTP
+collector to export a `workflow.fire` span per firing and the
+`workflow.firings` counter, via [`contrib/otel`](../../contrib/otel/README.md).
 
 The process is production-shaped where it matters: HTTP timeouts, a request
 log, `GET /healthz` for probes, graceful shutdown on Ctrl-C/SIGTERM (a hard
