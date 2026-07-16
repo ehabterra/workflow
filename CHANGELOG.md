@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`CLAUDE.md`** — guidance for AI agents: module layout, the `-p 1`
+  test-serialization rule (Postgres testcontainers), coverage reality, PR/commit
+  conventions, the architecture invariants, and the non-obvious cautions
+  (non-reentrant `RWMutex`, Mermaid `#nnn;` entity escaping, instance-only START
+  marker, `contrib/otel` MVS pins, build/db artifacts).
+- **MIT copyright headers** on every `.go` file, stamped with each file's git
+  creation year.
+- **Test coverage raised** with real (behavior-asserting) tests: root 95.6%,
+  `history` 96.7%, `yaml` 95.0%, `workflowtest` 95.8%; `storage` 89.3% and
+  `contrib/otel` 89.6% (residual is DB-fault / timing edge branches).
 - **README rewritten** (early v1.0-gate item; the gate itself stays open —
   still pre-1.0). Shipping behavior only: honest positioning and an
   "Is this the right tool?" section (including when NOT to use it), a quick
