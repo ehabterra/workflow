@@ -131,9 +131,10 @@ func TestSaveTransitionHistoryMetadataMergeAndError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Context supplies the template value AND a merged custom field.
+	// Context supplies the template value AND a merged custom field, both via the
+	// package's own string-keyed helper (the mechanism the resolver reads from).
 	tctx := yaml.WithTemplateValue(ctx, "reason", "audit")
-	tctx = context.WithValue(tctx, "custom_fields", map[string]any{"extra": "ctxval"})
+	tctx = yaml.WithTemplateValue(tctx, "custom_fields", map[string]any{"extra": "ctxval"})
 
 	if err := yaml.ApplyTransitionByNameWithHistory(wf, "go", hs, tctx, "", "", map[string]any{"extra": "override"}); err != nil {
 		t.Fatalf("apply-with-history = %v", err)
