@@ -4,6 +4,9 @@ This example demonstrates **all advanced features** of the workflow system throu
 
 ```mermaid
 flowchart TD
+    START((( )))
+    class START startMarker
+    START --> p_planning
     subgraph grp_Finance ["Finance"]
         p_budget_review(["budget review"])
         p_budget_approved(["budget approved"])
@@ -29,7 +32,7 @@ flowchart TD
     p_deployment_ready(["deployment ready"])
     p_deployed(["deployed"])
     p_rejected(["rejected"])
-    class p_planning place
+    class p_planning current
     class p_budget_review place
     class p_budget_approved place
     class p_design_review place
@@ -114,7 +117,7 @@ flowchart TD
     j_approve_all_reviews_including_legal --> t_approve_all_reviews_including_legal
     t_approve_all_reviews_including_legal -->|"❰ (role project_manager or role admin) and requires_legal = true ❱"| p_approved
     t_mark_deployment_ready["mark deployment ready"]
-    class t_mark_deployment_ready action
+    class t_mark_deployment_ready person
     p_approved --> t_mark_deployment_ready
     t_mark_deployment_ready -->|"❰ role project_manager or role admin ❱"| p_deployment_ready
     t_deploy["deploy"]
@@ -154,13 +157,13 @@ flowchart TD
     classDef timer fill:#FEF3C7,stroke:#B45309,color:#92400E
     classDef startMarker fill:#111827,stroke:#111827,color:#111827
     classDef gateway fill:#F8FAFC,stroke:#334155,stroke-width:2px,color:#334155,font-weight:bold
-    linkStyle 48 stroke:#B91C1C
     linkStyle 49 stroke:#B91C1C
     linkStyle 50 stroke:#B91C1C
     linkStyle 51 stroke:#B91C1C
     linkStyle 52 stroke:#B91C1C
     linkStyle 53 stroke:#B91C1C
     linkStyle 54 stroke:#B91C1C
+    linkStyle 55 stroke:#B91C1C
 ```
 
 ## Features Demonstrated

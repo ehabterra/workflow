@@ -118,7 +118,6 @@ workflow:
     
     - name: deployment_ready
       metadata:
-        diagram_class: person
         description: "Project is ready for deployment"
         color: "#1ABC9C"
         icon: "deployment-ready"
@@ -369,6 +368,7 @@ workflow:
       to: [deployment_ready]
       guard: "hasRole('project_manager') or hasRole('admin')"
       metadata:
+        diagram_class: person
         icon: "check-circle"
         label: "Mark Deployment Ready"
       notes: "Project marked as ready for deployment"
