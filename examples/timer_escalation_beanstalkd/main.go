@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Command timer_escalation_beanstalkd shows how to drive the host-driven timer
 // model (roadmap M4) across multiple worker replicas using Beanstalkd purely as
 // a job distributor. The library still owns no clock and no scheduler — it only

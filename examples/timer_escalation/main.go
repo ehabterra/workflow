@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Command timer_escalation demonstrates the host-driven timer model (roadmap M4):
 // the library models time, the host owns the clock.
 //

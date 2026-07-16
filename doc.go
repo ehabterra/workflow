@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Package workflow is a Petri-net based workflow engine for Go.
 //
 // A workflow is defined by a set of places (states) and transitions between them.

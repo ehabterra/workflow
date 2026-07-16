@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Package storagetest provides a reusable conformance suite for workflow.Storage
 // implementations. Any backend (SQLite, Postgres, an in-memory mock, …) can run
 // Run against a factory to verify it honors the Storage contract, including the

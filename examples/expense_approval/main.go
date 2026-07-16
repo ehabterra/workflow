@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Command expense_approval runs the M5 dogfood reference system: an
 // expense-approval web service with parallel review, host-driven escalation
 // timers, an audit trail, and a CPN batch payment run.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Command cpn_routing demonstrates guard-based token routing loaded entirely from
 // YAML. A batch of orders (colored tokens carrying an amount) is routed to either
 // "approved" or "review" purely by per-transition guards that inspect each
