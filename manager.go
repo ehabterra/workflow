@@ -801,6 +801,15 @@ func (m *Manager) AddEventListener(eventType EventType, listener EventListener) 
 	return m.listeners.add(eventType, listener, m)
 }
 
+// AddObserver adds a non-blocking observer for a specific event type across
+// every workflow this Manager touches: it cannot error, its panics are
+// recovered, and it is the only listener kind that receives
+// EventGuardRejected. Instrumentation belongs here (see ObserverFunc and
+// contrib/otel). It returns a handle for RemoveListener.
+func (m *Manager) AddObserver(eventType EventType, observer ObserverFunc) *ListenerHandle {
+	return m.listeners.add(eventType, observer, m)
+}
+
 // AddGuardEventListener adds a dynamic guard event listener
 // It returns a handle that can be used to remove the listener later
 func (m *Manager) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {
