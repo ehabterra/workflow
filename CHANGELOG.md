@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **README rewritten** (early v1.0-gate item; the gate itself stays open —
+  still pre-1.0). Shipping behavior only: honest positioning and an
+  "Is this the right tool?" section (including when NOT to use it), a quick
+  start extracted from the README and verified to compile and run verbatim,
+  the model in sixty seconds with the renderer's own diagram, a feature
+  tour where every claim links to its guide, the persistence contract with
+  a bring-your-own-driver section (custom backends hand transactional side
+  effects their own tx type — e.g. `pgx.Tx` — validated by `storagetest`),
+  and docs/examples tables. Go version badge corrected to 1.25+.
 - **`workflowtest` package** (M5.2) — public test helpers, the counterpart
   to the `storagetest` conformance kit: `AssertMarking` (exact set) /
   `AssertHas` / `AssertNotHas` marking assertions; the `Apply` path runner

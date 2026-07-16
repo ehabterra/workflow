@@ -44,6 +44,7 @@ func setupOTel(ctx context.Context, endpoint string, mgr *workflow.Manager) (fun
 	metricExp, err := otlpmetrichttp.New(ctx,
 		otlpmetrichttp.WithEndpoint(endpoint), otlpmetrichttp.WithInsecure())
 	if err != nil {
+		_ = tp.Shutdown(ctx)
 		return nil, err
 	}
 	mp := sdkmetric.NewMeterProvider(
@@ -51,15 +52,18 @@ func setupOTel(ctx context.Context, endpoint string, mgr *workflow.Manager) (fun
 			sdkmetric.WithInterval(10*time.Second))),
 		sdkmetric.WithResource(res))
 
-	// Globals too, so any future instrumentation in the app picks them up.
-	otel.SetTracerProvider(tp)
-	otel.SetMeterProvider(mp)
-
 	inst, err := otelworkflow.Instrument(mgr,
 		otelworkflow.WithTracerProvider(tp), otelworkflow.WithMeterProvider(mp))
 	if err != nil {
+		_ = errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx))
 		return nil, err
 	}
+
+	// Globals too, so any future instrumentation in the app picks them up.
+	// Set only after full success, so a partial init never leaves process-wide
+	// providers pointed at something nobody will shut down.
+	otel.SetTracerProvider(tp)
+	otel.SetMeterProvider(mp)
 
 	return func(ctx context.Context) error {
 		inst.Close()
