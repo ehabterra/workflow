@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **README rewritten** (early v1.0-gate item; the gate itself stays open —
+  still pre-1.0). Shipping behavior only: honest positioning and an
+  "Is this the right tool?" section (including when NOT to use it), a quick
+  start extracted from the README and verified to compile and run verbatim,
+  the model in sixty seconds with the renderer's own diagram, a feature
+  tour where every claim links to its guide, the persistence contract with
+  a bring-your-own-driver section (custom backends hand transactional side
+  effects their own tx type — e.g. `pgx.Tx` — validated by `storagetest`),
+  and docs/examples tables. Go version badge corrected to 1.25+.
+- **`workflowtest` package** (M5.2) — public test helpers, the counterpart
+  to the `storagetest` conformance kit: `AssertMarking` (exact set) /
+  `AssertHas` / `AssertNotHas` marking assertions; the `Apply` path runner
+  ("apply submit → legal_ok → finance_ok → finalize", failing with the step
+  and marking on the first error); the **`AssertGuard`** table harness,
+  which evaluates a transition's guards against context and token cases on
+  a throwaway instance — no storage, no Manager (`AssertGuardAllows` /
+  `AssertGuardRejects` shorthands); and **`Clock`** (frozen, `Advance`/`Set`)
+  plus `AssertDue` so timer tests never sleep. The dogfood adopted the
+  guard harness for its submit boundary and the marking assertions in the
+  payment-migration test.
+- **Observer listeners + OpenTelemetry contrib** (M5.3). `AddObserver` on
+  `Definition`, `Manager`, and `Workflow` registers a **non-blocking**
+  listener (`ObserverFunc`): it returns nothing, its panics are recovered,
+  and it can never abort or fail a firing — the contract instrumentation
+  needs. Guard rejections became observable through the new
+  **`EventGuardRejected`**, an observability-only event emitted when an
+  expression constraint or blocking guard listener refuses a firing
+  (whole-marking and per-token paths); it is dispatched exclusively to
+  observers, so error-returning listeners can never add a failure mode to
+  the rejection path. On top of this sits the new **`contrib/otel`** module
+  (separate go.mod — the core stays dependency-free):
+  `otelworkflow.Instrument(mgr)` emits a `workflow.fire` span per completed
+  firing — parented on the context the transition was applied with, its
+  start time taken from the before-transition event — and the
+  `workflow.firings` counter with `workflow.name`/`workflow.transition`/
+  `workflow.result` (`applied` | `guard_rejected`) attributes. The dogfood
+  exports both over OTLP/HTTP via the new `-otel-endpoint` flag.
 - **M6 documentation pass** — the deep docs milestone, grounded in the
   dogfood app: `docs/guides/MENTAL_MODEL.md` (the narrative "how to think
   in Petri nets" guide, from marking-vs-status-column through a worked
@@ -112,7 +149,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
   (the dogfood boxes the expense net's Legal/Finance review lanes). On a live
   instance the current marking is highlighted and colored-token places carry
-  ⬤×N badges. The old stateDiagram output (and its HTML tooltip spans) is
+  ⬤×N badges. Both `Diagram` methods take an optional **`DiagramDirection`**
+  (`DiagramDirectionTopDown` — the default — `BottomUp`, `LeftRight`,
+  `RightLeft`; unknown values fall back to the default), and the default
+  orientation changed from left-right to **top-down**, which reads better on
+  scrolling pages. Every example UI gained a flow-direction switcher
+  (`?dir=` on the dogfood's diagrams/expense/batch pages, advanced_workflow,
+  and website_workflow), and `advanced_workflow` was aligned with the
+  current feature set: its seven per-stage `reject_*` twins collapsed into
+  one OR-input `reject_project` whose reset arcs cancel sibling reviews,
+  its team metadata became `diagram_group` lanes, human decisions carry
+  `diagram_class: person`, the drifted role→transition lists were fixed,
+  and both stale old-renderer diagram templates (tooltip JS for output
+  that no longer exists) were rewritten for the current renderer. The old stateDiagram output (and its HTML tooltip spans) is
   gone. The dogfood embeds these diagrams on `/diagrams`, every expense page,
   and the batch page, with an HTML legend.
 - **Per-place metadata on `Definition`** (`SetPlaceMetadata` /

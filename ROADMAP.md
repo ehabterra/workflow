@@ -176,8 +176,8 @@ instance-per-entity and tokens-in-one-net models get exercised.
 | # | Task | Effort | Acceptance |
 |---|------|--------|-----------|
 | M5.1 | **The reference system** — separate module (`examples/expense_approval` or own repo), HTTP layer, Postgres, cron tick, OTel. | ✅ | Runs end-to-end; kill-tests pass; README of the example doubles as the "mental model" tutorial. Ships with listener-based metrics; the OTel contrib is M5.3, extracted from it. Spec: `docs/DOGFOOD.md`. |
-| M5.2 | **`workflowtest` package** — marking assertions, path runner ("apply submit→legal_approve→finance_approve, assert approved"), guard-env harness, fake-clock helpers for `Due`. Built *as the dogfood needs them*. | M | The reference system's tests use only public helpers. |
-| M5.3 | **Observability contrib** — `contrib/otel`: Manager-listener span pair + `firings_total{workflow,transition,result}`; non-erroring **observer listeners** (instrumentation must never block business flow); lifecycle + rejection events as needed. | M | Traces visible in a collector from the reference system. |
+| M5.2 | **`workflowtest` package** — marking assertions, path runner ("apply submit→legal_approve→finance_approve, assert approved"), guard harness, fake-clock helpers for `Due`. Built *as the dogfood needs them*. | ✅ | Shipped 2026-07-08: `AssertMarking`/`AssertHas`/`AssertNotHas`, the `Apply` path runner, the `AssertGuard` table harness (guards evaluated on a scratch instance — no storage, no Manager), and `Clock` + `AssertDue` for timers. The dogfood adopted the guard harness (submit boundary) and the marking assertions (payment migration); its tests use only public helpers. |
+| M5.3 | **Observability contrib** — `contrib/otel`: Manager-listener span pair + `firings_total{workflow,transition,result}`; non-erroring **observer listeners** (instrumentation must never block business flow); lifecycle + rejection events as needed. | ✅ | Shipped 2026-07-08: `AddObserver` (panic-safe, non-erroring) on Definition/Manager/Workflow + the observability-only `EventGuardRejected`; `contrib/otel` emits a `workflow.fire` span per completed firing (start = before-event, parented on the caller's ctx) and `workflow.firings{name,transition,result}`; the dogfood exports both via `-otel-endpoint` (OTLP/HTTP). |
 | M5.4 | **Friction log → issues** — every papercut found while building becomes a tracked issue; this list *is* the input to re-prioritizing the parked milestones. | 🔄 | Written verdict: what the library made easy, hard, impossible. Running log: `docs/roadmap/FRICTION.md` (7 entries from M5.1); graduates to issues at M5 exit. |
 
 **Exit criterion / go-no-go:** the reference system is built **without** bespoke
@@ -208,13 +208,36 @@ The deep pass, grounded in the dogfood app (not before) — delivered:
   RETRY RESETS callout on `Manager.Execute`; LOCK RE-ENTRANCY warning on the
   token-query APIs.
 
-The **full README rewrite still lands last**, at the v1.0 gate, describing
-only shipping behavior. (A signals API remains a parked feature, not a doc
-item.)
+The full README rewrite originally deferred to the v1.0 gate landed early
+(2026-07-15, by request): shipping behavior only, quick start verified to
+compile and run verbatim, is-this-the-right-tool section, boundaries
+summary. **The v1.0 gate itself stays open** — the beta status note remains
+until the other gate criteria are met. (A signals API remains a parked
+feature, not a doc item.)
 
 ---
 
 ## Post-M5 — friction-log-driven features
+
+### Adoption-driven candidates (external evaluation feedback)
+
+- **`contrib/pgx` — native pgx/pgxpool storage backend** (🟡, M). An external
+  evaluation (2026-07-15) declined to adopt because "the library's tx
+  wouldn't be our tx": their stack is pgx-native + sqlc with a hard rule
+  that audit/outbox writes share the same `pgx.Tx` as the status change,
+  and the shipped backends speak `database/sql`. The CONTRACT already
+  supports this — `TxSideEffect` receives `tx any` precisely so a backend
+  can hand effects a `pgx.Tx`, and `storagetest.Run` proves conformance —
+  but nobody should have to write that backend themselves to evaluate the
+  library. Acceptance: a `contrib/pgx` module implementing `Storage` +
+  `TransactionalStorage` + `DueStorage` + `TokenQueryStorage` over
+  `pgxpool.Pool`, effects receiving `pgx.Tx`, passing the full conformance
+  kit against a real Postgres; a doc snippet showing sqlc queries joining
+  the same tx. (The evaluation's second objection — flat status-column
+  domain, Petri net oversized — is a correct application of our own
+  boundaries; the README's "Is this the right tool?" section now says so
+  up front.)
+
 
 - **Cancellation regions (reset arcs)** — ✅ shipped (2026-07-07), the friction
   log's #1 finding. `Transition.SetResets` / YAML `resets:` clear declared

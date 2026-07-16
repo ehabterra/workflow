@@ -197,6 +197,11 @@
 
   .diagram-card { padding: 1rem 1.2rem; overflow-x: auto; }
   .legend { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin: .6rem 0 1rem; font-size: .8rem; color: var(--slate); }
+  .dir-switcher { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .2rem 0 .9rem; font-size: .78rem; }
+  .dir-switcher .lbl { font: 600 .62rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--slate); margin-right: .2rem; }
+  .dir-switcher a { font-family: var(--mono); color: var(--slate); text-decoration: none; border: 1px solid var(--line); border-radius: 99px; padding: .22rem .6rem; }
+  .dir-switcher a:hover { border-color: var(--slate); color: var(--ink); }
+  .dir-switcher a.on { color: var(--pine-deep); border-color: var(--pine); background: var(--pine-soft); }
   .lg { display: inline-flex; align-items: center; gap: .35rem; }
   .lg-swatch { display: inline-block; width: .85rem; height: .85rem; border-radius: 4px; border: 1px solid var(--line); }
   .lg-current { background: var(--pine-soft); border: 2px solid var(--pine); }
@@ -235,6 +240,16 @@
 {{end}}
 
 {{define "flash"}}{{if .}}<div class="flash" role="status">{{.}}</div>{{end}}{{end}}
+
+{{define "dir-switcher"}}
+<div class="dir-switcher">
+  <span class="lbl">flow</span>
+  <a{{if eq . "TD"}} class="on"{{end}} href="?dir=TD">↓ top-down</a>
+  <a{{if eq . "LR"}} class="on"{{end}} href="?dir=LR">→ left-right</a>
+  <a{{if eq . "BT"}} class="on"{{end}} href="?dir=BT">↑ bottom-up</a>
+  <a{{if eq . "RL"}} class="on"{{end}} href="?dir=RL">← right-left</a>
+</div>
+{{end}}
 
 {{define "diagram-legend"}}
 <div class="legend">

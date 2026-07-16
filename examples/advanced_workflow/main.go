@@ -133,8 +133,8 @@ func initRolesConfig() {
 	rolesConfig["project_manager"] = &RoleConfig{
 		Name:        "project_manager",
 		Description: "Manages projects from planning to deployment. Can submit budgets, approve budgets, start development, submit legal reviews, approve final reviews, and mark projects as deployment ready.",
-		Places:      []string{"planning", "budget_review", "budget_approved", "development", "approved", "deployment_ready"},
-		Transitions: []string{"submit_budget", "approve_budget", "reject_budget", "start_development", "submit_legal_review_from_development", "submit_legal_review_from_design_review", "approve_all_reviews", "approve_all_reviews_with_legal", "mark_deployment_ready", "reject_from_planning", "reject_from_development", "reject_from_design_review", "reject_from_qa_testing", "reject_from_security_review", "reject_from_legal_review", "cancel_project"},
+		Places:      []string{"planning", "budget_review", "budget_approved", "development", "design_review", "qa_testing", "security_review", "legal_review", "qa_complete", "security_complete", "legal_complete", "approved", "deployment_ready", "rejected"},
+		Transitions: []string{"submit_budget", "approve_budget", "reject_budget", "start_development", "approve_standard_reviews", "approve_all_reviews_including_legal", "mark_deployment_ready", "reject_project", "restart_from_rejected"},
 	}
 
 	// Finance Manager - handles budget approvals
@@ -237,8 +237,8 @@ func initRolesConfig() {
 	rolesConfig["admin"] = &RoleConfig{
 		Name:        "admin",
 		Description: "Administrator with full access. Can perform all actions including approvals, rejections, and project cancellation.",
-		Places:      []string{"planning", "budget_review", "budget_approved", "development", "design_review", "qa_testing", "security_review", "legal_review", "approved", "deployment_ready"},
-		Transitions: []string{"submit_budget", "approve_budget", "reject_budget", "start_development", "submit_design_review", "approve_design", "reject_design", "complete_qa", "complete_security_review", "submit_legal_review_from_development", "submit_legal_review_from_design_review", "complete_legal_review", "approve_all_reviews", "approve_all_reviews_with_legal", "mark_deployment_ready", "deploy", "reject_from_planning", "reject_from_development", "reject_from_design_review", "reject_from_qa_testing", "reject_from_security_review", "reject_from_legal_review", "cancel_project"},
+		Places:      []string{"planning", "budget_review", "budget_approved", "development", "design_review", "qa_testing", "security_review", "legal_review", "qa_complete", "security_complete", "legal_complete", "approved", "deployment_ready", "deployed", "rejected"},
+		Transitions: []string{"submit_budget", "approve_budget", "reject_budget", "start_development", "submit_design_review", "submit_design_and_legal_review", "approve_design", "reject_design", "complete_qa", "complete_security_review", "complete_legal_review", "approve_standard_reviews", "approve_all_reviews_including_legal", "mark_deployment_ready", "deploy", "reject_project", "restart_from_rejected"},
 	}
 }
 
@@ -1000,13 +1000,28 @@ func buildProjectFromWorkflow(id string, wf *workflow.Workflow) *Project {
 }
 
 func handleDiagram(w http.ResponseWriter, r *http.Request) {
-	tempWf, err := workflow.NewWorkflow("diagram-generator", workflowDef, "planning")
-	if err != nil {
-		http.Error(w, "Failed to create diagram generator", http.StatusInternalServerError)
-		return
+	// The ?dir= switcher picks the flow orientation.
+	dir := workflow.DiagramDirection(r.URL.Query().Get("dir"))
+	switch dir {
+	case workflow.DiagramDirectionBottomUp, workflow.DiagramDirectionLeftRight, workflow.DiagramDirectionRightLeft:
+	default:
+		dir = workflow.DiagramDirectionTopDown
 	}
-	diagram := tempWf.Diagram()
-	if err := templates.ExecuteTemplate(w, "diagram.html", diagram); err != nil {
+	// Render a FRESH instance built from the YAML's initial_marking (not the
+	// bare definition, which cannot know where instances start): that draws
+	// the ◉ start marker and lights the initial place exactly the way every
+	// new project begins.
+	diagram := ""
+	if wf, err := yaml.NewLoader().LoadWorkflow(yamlConfig, "structure"); err == nil {
+		diagram = wf.Diagram(dir)
+	} else {
+		diagram = workflowDef.Diagram(dir) // structure-only fallback
+	}
+	data := struct {
+		Diagram string
+		Dir     string
+	}{Diagram: diagram, Dir: string(dir)}
+	if err := templates.ExecuteTemplate(w, "diagram.html", data); err != nil {
 		log.Printf("Error executing template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

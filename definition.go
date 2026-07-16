@@ -216,6 +216,15 @@ func (d *Definition) AddEventListener(eventType EventType, listener EventListene
 	return d.listeners.add(eventType, listener, d)
 }
 
+// AddObserver adds a non-blocking observer for a specific event type on every
+// workflow built from this definition: it cannot error, its panics are
+// recovered, and it is the only listener kind that receives
+// EventGuardRejected. Instrumentation belongs here (see ObserverFunc). It
+// returns a handle for RemoveListener.
+func (d *Definition) AddObserver(eventType EventType, observer ObserverFunc) *ListenerHandle {
+	return d.listeners.add(eventType, observer, d)
+}
+
 // AddGuardEventListener adds a default guard event listener
 // It returns a handle that can be used to remove the listener later
 func (d *Definition) AddGuardEventListener(listener GuardEventListener) *ListenerHandle {

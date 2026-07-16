@@ -17,6 +17,13 @@ const (
 	EventAfterTransition EventType = "after_transition"
 	// EventGuard is fired to check if a transition is allowed
 	EventGuard EventType = "guard"
+	// EventGuardRejected is fired when a firing attempt is refused by a guard
+	// (an expression constraint or a blocking guard listener). It is an
+	// OBSERVABILITY-ONLY event: it is dispatched exclusively to observers
+	// (AddObserver) — error-returning listeners registered for it are never
+	// invoked — so instrumenting rejections can never add a failure mode to
+	// the rejection path itself.
+	EventGuardRejected EventType = "guard_rejected"
 )
 
 // Event defines the common interface for all event types

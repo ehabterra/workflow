@@ -39,6 +39,7 @@ func main() {
 	escalateAfter := flag.Duration("escalate-after", 0, "override the 72h escalation deadline (e.g. 2m for a live demo)")
 	tick := flag.Duration("tick", 10*time.Second, "escalation tick interval (the host-owned clock)")
 	reconcileEvery := flag.Duration("reconcile", time.Minute, "periodic reconcile interval; 0 disables (manual button still works)")
+	otelEndpoint := flag.String("otel-endpoint", os.Getenv("EXPENSE_OTEL_ENDPOINT"), "OTLP/HTTP collector endpoint (host:port) for traces and metrics; empty disables")
 	flag.Parse()
 
 	// Shut down cleanly on Ctrl-C / SIGTERM: stop accepting requests,
@@ -60,6 +61,24 @@ func main() {
 	app, err := NewApp(ctx, db, driver, *escalateAfter, time.Now)
 	if err != nil {
 		log.Fatalf("start app: %v", err)
+	}
+
+	// Observability (M5.3): contrib/otel attached to the Manager via
+	// non-blocking observers — spans and firing counts flow to the collector,
+	// and instrumentation can never fail a firing.
+	if *otelEndpoint != "" {
+		shutdownOTel, err := setupOTel(ctx, *otelEndpoint, app.mgr)
+		if err != nil {
+			log.Fatalf("otel: %v", err)
+		}
+		defer func() {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownOTel(flushCtx); err != nil {
+				log.Printf("otel shutdown: %v", err)
+			}
+		}()
+		log.Printf("OpenTelemetry export enabled -> %s", *otelEndpoint)
 	}
 
 	// The host-driven timer loop (M4): the library models time, this ticker

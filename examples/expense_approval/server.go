@@ -239,7 +239,8 @@ func (s *Server) expenseDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	diagram, err := s.app.DiagramExpenseLive(r.Context(), view.ID)
+	dir := diagramDir(r)
+	diagram, err := s.app.DiagramExpenseLive(r.Context(), view.ID, dir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -249,6 +250,7 @@ func (s *Server) expenseDetail(w http.ResponseWriter, r *http.Request) {
 		"V":         view,
 		"PayStatus": payStatus,
 		"Diagram":   diagram,
+		"Dir":       string(dir),
 	})
 }
 
@@ -364,16 +366,30 @@ func (s *Server) releasePayment(w http.ResponseWriter, r *http.Request) {
 // engine executes, so they can never drift. The payment net is LIVE (token
 // badges); the expense net shows the structure every instance follows.
 func (s *Server) diagrams(w http.ResponseWriter, r *http.Request) {
-	payment, err := s.app.DiagramPaymentLive(r.Context())
+	dir := diagramDir(r)
+	payment, err := s.app.DiagramPaymentLive(r.Context(), dir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.render(w, "diagrams.html", map[string]any{
 		"Flash":   r.URL.Query().Get("flash"),
-		"Expense": s.app.DiagramExpenseStructure(),
+		"Expense": s.app.DiagramExpenseStructure(dir),
 		"Payment": payment,
+		"Dir":     string(dir),
 	})
+}
+
+// diagramDir reads the diagram-orientation switcher's ?dir= query parameter,
+// normalized so the templates can highlight the active choice (the library
+// would normalize unknown values anyway).
+func diagramDir(r *http.Request) workflow.DiagramDirection {
+	switch d := workflow.DiagramDirection(r.URL.Query().Get("dir")); d {
+	case workflow.DiagramDirectionBottomUp, workflow.DiagramDirectionLeftRight, workflow.DiagramDirectionRightLeft:
+		return d
+	default:
+		return workflow.DiagramDirectionTopDown
+	}
 }
 
 func (s *Server) batchPage(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +398,8 @@ func (s *Server) batchPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	diagram, err := s.app.DiagramPaymentLive(r.Context())
+	dir := diagramDir(r)
+	diagram, err := s.app.DiagramPaymentLive(r.Context(), dir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -391,6 +408,7 @@ func (s *Server) batchPage(w http.ResponseWriter, r *http.Request) {
 		"Flash":   r.URL.Query().Get("flash"),
 		"P":       payment,
 		"Diagram": diagram,
+		"Dir":     string(dir),
 	})
 }
 

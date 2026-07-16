@@ -33,6 +33,7 @@ workflow:
         color: "#27AE60"
         icon: "dollar-sign"
         team: "finance"
+        diagram_group: "Finance"
     
     - name: budget_approved
       metadata:
@@ -40,6 +41,7 @@ workflow:
         color: "#2ECC71"
         icon: "check-circle"
         team: "finance"
+        diagram_group: "Finance"
     
     - name: design_review
       metadata:
@@ -47,6 +49,7 @@ workflow:
         color: "#9B59B6"
         icon: "design"
         team: "design"
+        diagram_group: "Design"
     
     - name: development
       metadata:
@@ -62,6 +65,7 @@ workflow:
         color: "#E74C3C"
         icon: "testing"
         team: "qa"
+        diagram_group: "QA"
     
     - name: security_review
       metadata:
@@ -69,6 +73,7 @@ workflow:
         color: "#F39C12"
         icon: "security"
         team: "security"
+        diagram_group: "Security"
         critical: true
     
     - name: legal_review
@@ -77,6 +82,7 @@ workflow:
         color: "#16A085"
         icon: "legal"
         team: "legal"
+        diagram_group: "Legal"
     
     - name: qa_complete
       metadata:
@@ -84,6 +90,7 @@ workflow:
         ready_for_approval: false
         color: "#3498DB"
         icon: "qa-done"
+        diagram_group: "QA"
     
     - name: security_complete
       metadata:
@@ -91,6 +98,7 @@ workflow:
         ready_for_approval: false
         color: "#F39C12"
         icon: "security-done"
+        diagram_group: "Security"
     
     - name: legal_complete
       metadata:
@@ -98,6 +106,7 @@ workflow:
         ready_for_approval: false
         color: "#16A085"
         icon: "legal-done"
+        diagram_group: "Legal"
     
     - name: approved
       metadata:
@@ -153,6 +162,7 @@ workflow:
       to: [budget_approved]
       guard: "hasRole('project_manager') or hasRole('admin') or hasRole('finance_manager')"
       metadata:
+        diagram_class: person
         icon: "check-circle"
         label: "Approve Budget"
         priority: "high"
@@ -168,6 +178,7 @@ workflow:
       to: [planning]
       guard: "hasRole('project_manager') or hasRole('admin') or hasRole('finance_manager')"
       metadata:
+        diagram_class: person
         icon: "times-circle"
         label: "Reject Budget"
         requires_reason: true
@@ -239,6 +250,7 @@ workflow:
       to: [qa_testing, security_review]
       guard: "(hasRole('design_lead') or hasRole('designer')) and (inPlace('legal_complete') or workflow.Context('requires_legal') != true)"
       metadata:
+        diagram_class: person
         icon: "check-circle"
         label: "Approve Design"
         triggers_parallel: true
@@ -255,6 +267,7 @@ workflow:
       to: [development]
       guard: "hasRole('design_lead') or hasRole('designer')"
       metadata:
+        diagram_class: person
         icon: "times-circle"
         label: "Reject Design"
         requires_reason: true
@@ -321,6 +334,7 @@ workflow:
       to: [approved]
       guard: "(hasRole('project_manager') or hasRole('admin')) and workflow.Context('requires_legal') != true"
       metadata:
+        diagram_class: person
         icon: "check-circle"
         label: "Approve (Standard Reviews)"
         requires_both: true
@@ -337,6 +351,7 @@ workflow:
       to: [approved]
       guard: "(hasRole('project_manager') or hasRole('admin')) and workflow.Context('requires_legal') == true"
       metadata:
+        diagram_class: person
         icon: "check-circle"
         label: "Approve (All Reviews Including Legal)"
         requires_all_three: true
@@ -353,6 +368,7 @@ workflow:
       to: [deployment_ready]
       guard: "hasRole('project_manager') or hasRole('admin')"
       metadata:
+        diagram_class: person
         icon: "check-circle"
         label: "Mark Deployment Ready"
       notes: "Project marked as ready for deployment"
@@ -378,136 +394,39 @@ workflow:
         deployment_url: "{{deployment_url}}"
         rollback_plan: "{{rollback_plan}}"
     
-    # ==================== REJECTION PATHS ====================
-    # BEST PRACTICE: Use transition names to distinguish different rejection reasons
-    # Users call ApplyTransition("reject_design_issues") instead of Apply([rejected])
-    
-    - name: reject_design_issues
-      from: [design_review]
+    # ==================== REJECTION ====================
+    # ONE rejection serves every review stage: an OR-input transition
+    # (from_any) consumes whichever review place is marked, and its reset
+    # arcs clear every sibling branch's token atomically — no stranded
+    # parallel work, no zombie state. This replaced SEVEN copy-paste
+    # reject_* twins (one per stage), the exact pattern the library's
+    # from_any + resets features exist to collapse.
+    - name: reject_project
+      from: [design_review, qa_testing, security_review, legal_review, qa_complete, security_complete, legal_complete]
+      from_any: true
+      resets: [design_review, qa_testing, security_review, legal_review, qa_complete, security_complete, legal_complete]
       to: [rejected]
       guard: "hasRole('admin') or hasRole('project_manager')"
       metadata:
         icon: "ban"
-        label: "Reject (Design Issues)"
+        label: "Reject Project"
         requires_reason: true
         critical: true
-        rejection_type: "design"
-      notes: "Project rejected due to design issues"
+        diagram_class: person
+      notes: "Project rejected"
       actor: "admin"
       custom_fields:
         rejection_reason: "{{rejection_reason}}"
         rejected_at: "now()"
-        rejection_category: "design"
-    
-    - name: reject_qa_failures
-      from: [qa_testing]
-      to: [rejected]
-      guard: "hasRole('admin') or hasRole('project_manager')"
-      metadata:
-        icon: "ban"
-        label: "Reject (QA Failures)"
-        requires_reason: true
-        critical: true
-        rejection_type: "qa"
-      notes: "Project rejected due to QA failures"
-      actor: "admin"
-      custom_fields:
-        rejection_reason: "{{rejection_reason}}"
-        rejected_at: "now()"
-        rejection_category: "qa"
-    
-    - name: reject_security_vulnerabilities
-      from: [security_review]
-      to: [rejected]
-      guard: "hasRole('admin') or hasRole('project_manager')"
-      metadata:
-        icon: "ban"
-        label: "Reject (Security Vulnerabilities)"
-        requires_reason: true
-        critical: true
-        rejection_type: "security"
-      notes: "Project rejected due to security vulnerabilities"
-      actor: "admin"
-      custom_fields:
-        rejection_reason: "{{rejection_reason}}"
-        rejected_at: "now()"
-        rejection_category: "security"
-    
-    - name: reject_legal_compliance
-      from: [legal_review]
-      to: [rejected]
-      guard: "hasRole('admin') or hasRole('project_manager')"
-      metadata:
-        icon: "ban"
-        label: "Reject (Legal/Compliance Issues)"
-        requires_reason: true
-        critical: true
-        rejection_type: "legal"
-      notes: "Project rejected due to legal/compliance issues"
-      actor: "admin"
-      custom_fields:
-        rejection_reason: "{{rejection_reason}}"
-        rejected_at: "now()"
-        rejection_category: "legal"
-    
-    # Rejections from completed states
-    - name: reject_after_qa_complete
-      from: [qa_complete]
-      to: [rejected]
-      guard: "hasRole('admin') or hasRole('project_manager')"
-      metadata:
-        icon: "ban"
-        label: "Reject (Post-QA)"
-        requires_reason: true
-        critical: true
-        rejection_type: "post_qa"
-      notes: "Project rejected after QA completion"
-      actor: "admin"
-      custom_fields:
-        rejection_reason: "{{rejection_reason}}"
-        rejected_at: "now()"
-        rejection_category: "post_qa"
-    
-    - name: reject_after_security_complete
-      from: [security_complete]
-      to: [rejected]
-      guard: "hasRole('admin') or hasRole('project_manager')"
-      metadata:
-        icon: "ban"
-        label: "Reject (Post-Security)"
-        requires_reason: true
-        critical: true
-        rejection_type: "post_security"
-      notes: "Project rejected after security completion"
-      actor: "admin"
-      custom_fields:
-        rejection_reason: "{{rejection_reason}}"
-        rejected_at: "now()"
-        rejection_category: "post_security"
-    
-    - name: reject_after_legal_complete
-      from: [legal_complete]
-      to: [rejected]
-      guard: "hasRole('admin') or hasRole('project_manager')"
-      metadata:
-        icon: "ban"
-        label: "Reject (Post-Legal)"
-        requires_reason: true
-        critical: true
-        rejection_type: "post_legal"
-      notes: "Project rejected after legal completion"
-      actor: "admin"
-      custom_fields:
-        rejection_reason: "{{rejection_reason}}"
-        rejected_at: "now()"
-        rejection_category: "post_legal"
-    
+        rejection_category: "review"
+
     # ==================== RESTART ====================
     - name: restart_from_rejected
       from: [rejected]
       to: [planning]
       guard: "hasRole('project_manager')"
       metadata:
+        diagram_class: person
         icon: "refresh"
         label: "Restart Project"
       notes: "Project restarted from rejected state"

@@ -7,412 +7,23 @@
     <link rel="stylesheet" href="/static/style.css">
     <script type="module">
         import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-        mermaid.initialize({ 
-            startOnLoad: true, 
+        mermaid.initialize({
+            startOnLoad: true,
             securityLevel: 'loose',
-            theme: 'default',
-            deterministicIds: true,
-            flowchart: {
-                htmlLabels: true,
-                padding: 20,
-                rankSpacing: 70,
-                nodeSpacing: 50,
-                curve: 'basis'
-            }
+            theme: 'neutral',
+            flowchart: { htmlLabels: true, padding: 16, curve: 'basis' }
         });
     </script>
-    <style>        
-        /* Transition label styling */
-        .mermaid .edgeLabel .transition-label {
-            cursor: help;
-        }
-        
-        /* Fancy tooltip - positioned outside SVG */
-        #diagram-tooltip {
-            position: fixed;
-            min-width: 280px;
-            max-width: 500px;
-            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
-            color: #ffffff;
-            text-align: left;
-            border-radius: 8px;
-            padding: 0;
-            z-index: 10000;
-            opacity: 0;
-            display: none;
-            transition: opacity 0.2s ease-in-out, transform 0.1s ease-out;
-            font-size: 13px;
-            line-height: 1.6;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
-            white-space: normal;
-            word-wrap: break-word;
-            pointer-events: auto;
-            transform: translateY(-5px);
-            overflow: visible;
-        }
-        
-        #diagram-tooltip.show {
-            opacity: 1;
-            display: block;
-            transform: translateY(0);
-        }
-        
-        /* Tooltip arrow */
-        #diagram-tooltip::after {
-            content: "";
-            position: absolute;
-            width: 0;
-            height: 0;
-            border-style: solid;
-            z-index: 10001;
-        }
-        
-        /* Arrow pointing down (tooltip above label) */
-        #diagram-tooltip.arrow-down::after {
-            bottom: -8px;
-            left: 50%;
-            transform: translateX(-50%);
-            border-width: 8px 8px 0 8px;
-            border-color: #1f2937 transparent transparent transparent;
-        }
-        
-        /* Arrow pointing up (tooltip below label) */
-        #diagram-tooltip.arrow-up::after {
-            top: -8px;
-            left: 50%;
-            transform: translateX(-50%);
-            border-width: 0 8px 8px 8px;
-            border-color: transparent transparent #1f2937 transparent;
-        }
-        
-        /* Arrow pointing right (tooltip on left of label) */
-        #diagram-tooltip.arrow-right::after {
-            right: -8px;
-            top: 50%;
-            transform: translateY(-50%);
-            border-width: 8px 0 8px 8px;
-            border-color: transparent transparent transparent #1f2937;
-        }
-        
-        /* Arrow pointing left (tooltip on right of label) */
-        #diagram-tooltip.arrow-left::after {
-            left: -8px;
-            top: 50%;
-            transform: translateY(-50%);
-            border-width: 8px 8px 8px 0;
-            border-color: transparent #1f2937 transparent transparent;
-        }
-        
-        /* Tooltip header with title */
-        #diagram-tooltip .tooltip-header {
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-            padding: 12px 16px;
-            font-weight: 600;
-            font-size: 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        #diagram-tooltip .tooltip-title {
-            flex: 1;
-            margin-right: 8px;
-        }
-        
-        #diagram-tooltip .tooltip-copy-btn {
-            background: rgba(255, 255, 255, 0.2);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            color: #ffffff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        #diagram-tooltip .tooltip-copy-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: scale(1.05);
-        }
-        
-        #diagram-tooltip .tooltip-copy-btn:active {
-            transform: scale(0.95);
-        }
-        
-        #diagram-tooltip .tooltip-copy-btn.copied {
-            background: rgba(34, 197, 94, 0.3);
-            border-color: rgba(34, 197, 94, 0.5);
-        }
-        
-        /* Tooltip body */
-        #diagram-tooltip .tooltip-body {
-            padding: 12px 16px;
-        }
-        
-        #diagram-tooltip .tooltip-section {
-            margin-bottom: 12px;
-        }
-        
-        #diagram-tooltip .tooltip-section:last-child {
-            margin-bottom: 0;
-        }
-        
-        #diagram-tooltip .tooltip-label {
-            font-size: 11px;
-            color: #9ca3af;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 6px;
-            font-weight: 600;
-        }
-        
-        #diagram-tooltip .tooltip-content {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 8px 12px;
-            border-radius: 4px;
-            border-left: 3px solid #3b82f6;
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 12px;
-            color: #e5e7eb;
-            word-break: break-all;
-            position: relative;
-            padding-right: 32px;
-        }
-        
-        #diagram-tooltip .tooltip-content-copy {
-            position: absolute;
-            right: 1px;
-            top: 50%;
-            transform: translateY(-50%);
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: #ffffff;
-            padding: 2px 6px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 10px;
-            transition: all 0.2s;
-        }
-        
-        #diagram-tooltip .tooltip-content-copy:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
-        
-        #diagram-tooltip .tooltip-content-copy.copied {
-            background: rgba(34, 197, 94, 0.3);
-            border-color: rgba(34, 197, 94, 0.5);
-        }
-        
-        /* Improve spacing between edges */
-        .mermaid .edgePath {
-            stroke-width: 2px;
-        }
-        
-        /* Better state node spacing */
-        .mermaid .stateNode {
-            margin: 10px;
-        }
-        
-        /* Prevent label overlap with better positioning */
-        .mermaid svg {
-            overflow: visible;
-        }
+    <style>
+        .dir-switcher { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0 0 14px; font-size: 13px; }
+        .dir-switcher .lbl { font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 11px; color: #6b7280; margin-right: 4px; }
+        .dir-switcher a { color: #6b7280; text-decoration: none; border: 1px solid #d1d5db; border-radius: 99px; padding: 4px 12px; font-family: ui-monospace, monospace; }
+        .dir-switcher a:hover { border-color: #6b7280; color: #111827; }
+        .dir-switcher a.on { color: #14532d; border-color: #15803d; background: #dcfce7; }
+        .legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin: 10px 0 16px; font-size: 12px; color: #4b5563; }
+        .legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; border: 1px solid transparent; }
+        .mermaid { overflow-x: auto; }
     </style>
-    <script>
-        // Wait for Mermaid to render
-        document.addEventListener('DOMContentLoaded', function() {
-            // Create a single tooltip element
-            const tooltip = document.createElement('div');
-            tooltip.id = 'diagram-tooltip';
-            document.body.appendChild(tooltip);
-            
-            let currentElement = null;
-            let hideTimeout = null;
-            
-            // Function to copy text to clipboard
-            function copyToClipboard(text, button) {
-                navigator.clipboard.writeText(text).then(function() {
-                    const originalText = button.textContent;
-                    button.textContent = '✓';
-                    button.classList.add('copied');
-                    setTimeout(function() {
-                        button.textContent = originalText;
-                        button.classList.remove('copied');
-                    }, 2000);
-                }).catch(function(err) {
-                    console.error('Failed to copy:', err);
-                });
-            }
-            
-            // Function to create tooltip content
-            function createTooltipContent(transitionName, guard, guardSimplified) {
-                const header = document.createElement('div');
-                header.className = 'tooltip-header';
-                header.innerHTML = `
-                    <span class="tooltip-title">${escapeHtml(transitionName)}</span>
-                    <button class="tooltip-copy-btn" data-copy="${escapeHtml(transitionName)}">📋</button>
-                `;
-                
-                const body = document.createElement('div');
-                body.className = 'tooltip-body';
-                
-                if (guard) {
-                    const guardSection = document.createElement('div');
-                    guardSection.className = 'tooltip-section';
-                    guardSection.innerHTML = `
-                        <div class="tooltip-label">Guard Expression</div>
-                        <div class="tooltip-content">
-                            ${escapeHtml(guardSimplified || guard)}
-                            <button class="tooltip-content-copy" data-copy="${escapeHtml(guard)}">📋</button>
-                        </div>
-                    `;
-                    body.appendChild(guardSection);
-                }
-                
-                tooltip.innerHTML = '';
-                tooltip.appendChild(header);
-                tooltip.appendChild(body);
-                
-                // Add copy button handlers
-                const copyButtons = tooltip.querySelectorAll('[data-copy]');
-                copyButtons.forEach(function(btn) {
-                    btn.addEventListener('click', function(e) {
-                        e.stopPropagation();
-                        copyToClipboard(btn.getAttribute('data-copy'), btn);
-                    });
-                });
-            }
-            
-            // Function to escape HTML
-            function escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
-            }
-            
-            // Function to position tooltip relative to label
-            function positionTooltip(labelElement) {
-                const labelRect = labelElement.getBoundingClientRect();
-                const tooltipRect = tooltip.getBoundingClientRect();
-                const offset = 12;
-                
-                // Remove all arrow classes
-                tooltip.classList.remove('arrow-up', 'arrow-down', 'arrow-left', 'arrow-right');
-                
-                // Calculate available space in each direction
-                const spaceAbove = labelRect.top;
-                const spaceBelow = window.innerHeight - labelRect.bottom;
-                const spaceLeft = labelRect.left;
-                const spaceRight = window.innerWidth - labelRect.right;
-                
-                // Determine best position (prefer above, then below, then sides)
-                let left, top, arrowClass;
-                
-                if (spaceAbove >= tooltipRect.height + offset) {
-                    // Position above label
-                    left = labelRect.left + (labelRect.width / 2) - (tooltipRect.width / 2);
-                    top = labelRect.top - tooltipRect.height - offset;
-                    arrowClass = 'arrow-down';
-                } else if (spaceBelow >= tooltipRect.height + offset) {
-                    // Position below label
-                    left = labelRect.left + (labelRect.width / 2) - (tooltipRect.width / 2);
-                    top = labelRect.bottom + offset;
-                    arrowClass = 'arrow-up';
-                } else if (spaceRight >= tooltipRect.width + offset) {
-                    // Position to the right of label
-                    left = labelRect.right + offset;
-                    top = labelRect.top + (labelRect.height / 2) - (tooltipRect.height / 2);
-                    arrowClass = 'arrow-left';
-                } else if (spaceLeft >= tooltipRect.width + offset) {
-                    // Position to the left of label
-                    left = labelRect.left - tooltipRect.width - offset;
-                    top = labelRect.top + (labelRect.height / 2) - (tooltipRect.height / 2);
-                    arrowClass = 'arrow-right';
-                } else {
-                    // Fallback: position above, adjust if needed
-                    left = labelRect.left + (labelRect.width / 2) - (tooltipRect.width / 2);
-                    top = labelRect.top - tooltipRect.height - offset;
-                    arrowClass = 'arrow-down';
-                }
-                
-                // Keep tooltip within viewport
-                if (left < 10) left = 10;
-                if (left + tooltipRect.width > window.innerWidth - 10) {
-                    left = window.innerWidth - tooltipRect.width - 10;
-                }
-                if (top < 10) top = 10;
-                if (top + tooltipRect.height > window.innerHeight - 10) {
-                    top = window.innerHeight - tooltipRect.height - 10;
-                }
-                
-                tooltip.style.left = left + 'px';
-                tooltip.style.top = top + 'px';
-                tooltip.classList.add(arrowClass);
-            }
-            
-            // Wait a bit for Mermaid to finish rendering
-            setTimeout(function() {
-                // Find all transition label elements
-                const transitionLabels = document.querySelectorAll('.mermaid .transition-label');
-                
-                transitionLabels.forEach(function(label) {
-                    const transitionName = label.getAttribute('data-transition-name') || '';
-                    const guard = label.getAttribute('data-guard') || '';
-                    const guardSimplified = label.getAttribute('data-guard-simplified') || '';
-                    
-                    if (transitionName) {
-                        label.addEventListener('mouseenter', function(e) {
-                            currentElement = label;
-                            if (hideTimeout) {
-                                clearTimeout(hideTimeout);
-                                hideTimeout = null;
-                            }
-                            
-                            createTooltipContent(transitionName, guard, guardSimplified);
-                            
-                            // Position tooltip relative to label
-                            // Need to show tooltip first to get its dimensions
-                            tooltip.style.display = 'block';
-                            tooltip.style.opacity = '0';
-                            tooltip.classList.add('show');
-                            
-                            // Use setTimeout to ensure tooltip has rendered
-                            setTimeout(function() {
-                                positionTooltip(label);
-                                tooltip.style.opacity = '1';
-                            }, 0);
-                        });
-                        
-                        label.addEventListener('mouseleave', function(e) {
-                            currentElement = null;
-                            // Small delay to allow moving to tooltip
-                            hideTimeout = setTimeout(function() {
-                                tooltip.classList.remove('show');
-                                tooltip.style.display = 'none';
-                            }, 100);
-                        });
-                    }
-                });
-                
-                // Allow hovering over tooltip itself
-                tooltip.addEventListener('mouseenter', function() {
-                    if (hideTimeout) {
-                        clearTimeout(hideTimeout);
-                        hideTimeout = null;
-                    }
-                });
-                
-                tooltip.addEventListener('mouseleave', function() {
-                    tooltip.classList.remove('show');
-                    tooltip.style.display = 'none';
-                });
-            }, 500);
-        });
-    </script>
 </head>
 <body>
     <div class="container">
@@ -423,25 +34,38 @@
 
         <div class="card">
             <div class="info-text">
-                This diagram shows the complete workflow structure with all places and transitions.
-                Multi-state transitions (forks/joins) are shown with special notation.
+                Rendered by the library itself (<code>Definition.Diagram</code>) from the same
+                definition the engine fires — the diagram can never drift from the code.
+            </div>
+            <div class="dir-switcher">
+                <span class="lbl">flow</span>
+                <a{{if eq .Dir "TD"}} class="on"{{end}} href="?dir=TD">↓ top-down</a>
+                <a{{if eq .Dir "LR"}} class="on"{{end}} href="?dir=LR">→ left-right</a>
+                <a{{if eq .Dir "BT"}} class="on"{{end}} href="?dir=BT">↑ bottom-up</a>
+                <a{{if eq .Dir "RL"}} class="on"{{end}} href="?dir=RL">← right-left</a>
+            </div>
+            <div class="legend">
+                <span><span class="sw" style="background:#fff;border-color:#6b7280"></span>place (state at rest)</span>
+                <span><span class="sw" style="background:#1d4ed8"></span>action</span>
+                <span><span class="sw" style="background:#15803d"></span>action by a person</span>
+                <span>◇+ = every branch (AND) · ◇× = exactly one (OR)</span>
+                <span>❰…❱ guard condition</span>
+                <span style="color:#b91c1c">⤳ cancels (reset arc)</span>
             </div>
             <div class="mermaid">
-{{. | safeHTML}}
+{{.Diagram | safeHTML}}
             </div>
         </div>
 
         <div class="info-box">
-            <h2>Diagram Features</h2>
+            <h2>What the notation shows</h2>
             <ul>
-                <li>All places (states) in the workflow</li>
-                <li>All transitions between places</li>
-                <li>Fork notation (→ multiple states) for parallel processing</li>
-                <li>Join notation (multiple states →) for synchronization</li>
-                <li>Current state highlighting (if applicable)</li>
+                <li>Team lanes (<code>diagram_group</code> place metadata) box each review team's places into a region</li>
+                <li>Splits and merges route through BPMN-style gateway diamonds: <strong>◇+</strong> fires every branch (AND), <strong>◇×</strong> consumes exactly one input (the OR-input <code>reject_project</code>)</li>
+                <li>Guards appear on the routing edges (<code>❰ hasRole('…') ❱</code>)</li>
+                <li>Dotted red <em>cancels</em> edges are reset arcs — rejecting from any review stage clears every sibling review token atomically</li>
             </ul>
         </div>
     </div>
 </body>
 </html>
-

@@ -3,65 +3,167 @@
 This example demonstrates **all advanced features** of the workflow system through a comprehensive project management workflow.
 
 ```mermaid
-stateDiagram-v2
-    direction TB
-    classDef currentPlace font-weight:bold,stroke-width:4px
-    planning
-    budget_review
-    budget_approved
-    design_review
-    development
-    qa_testing
-    security_review
-    legal_review
-    qa_complete
-    security_complete
-    legal_complete
-    approved
-    deployed
-    rejected
-    planning --> budget_review : <span class="transition-label" data-transition-name="submit_budget" data-guard="hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: project_manager">submit_budget</span>
-    budget_review --> budget_approved : <span class="transition-label" data-transition-name="approve_budget" data-guard="hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;) or hasRole(&#39;finance_manager&#39;)" data-guard-simplified="role: project_manager or role: admin or role: finance_manager">approve_budget</span>
-    budget_review --> planning : <span class="transition-label" data-transition-name="reject_budget" data-guard="hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;) or hasRole(&#39;finance_manager&#39;)" data-guard-simplified="role: project_manager or role: admin or role: finance_manager">reject_budget</span>
-    budget_approved --> development : <span class="transition-label" data-transition-name="start_development" data-guard="hasRole(&#39;project_manager&#39;) and workflow.Context(&#39;team_size&#39;) &lt;= 10" data-guard-simplified="role: project_manager and team_size &lt;= 10">start_development</span>
-    development --> design_review : <span class="transition-label" data-transition-name="submit_design_review" data-guard="(hasRole(&#39;developer&#39;) or hasRole(&#39;team_lead&#39;)) and workflow.Context(&#39;requires_legal&#39;) != true" data-guard-simplified="(role: developer or role: team_lead) and requires_legal != true">submit_design_review</span>
-    state submit_design_and_legal_review_fork <<fork>>
-    development --> submit_design_and_legal_review_fork : <span class="transition-label" data-transition-name="submit_design_and_legal_review" data-guard="(hasRole(&#39;developer&#39;) or hasRole(&#39;team_lead&#39;)) and workflow.Context(&#39;requires_legal&#39;) == true" data-guard-simplified="(role: developer or role: team_lead) and requires_legal == true">submit_design_and_legal_review</span>
-    submit_design_and_legal_review_fork --> design_review
-    submit_design_and_legal_review_fork --> legal_review
-    state approve_design_fork <<fork>>
-    design_review --> approve_design_fork : <span class="transition-label" data-transition-name="approve_design" data-guard="(hasRole(&#39;design_lead&#39;) or hasRole(&#39;designer&#39;)) and (inPlace(&#39;legal_complete&#39;) or workflow.Context(&#39;requires_legal&#39;) != true)" data-guard-simplified="(role: design_lead or role: designer) and (place: legal_complete or requires_legal != true)">approve_design</span>
-    approve_design_fork --> qa_testing
-    approve_design_fork --> security_review
-    design_review --> development : <span class="transition-label" data-transition-name="reject_design" data-guard="hasRole(&#39;design_lead&#39;) or hasRole(&#39;designer&#39;)" data-guard-simplified="role: design_lead or role: designer">reject_design</span>
-    qa_testing --> qa_complete : <span class="transition-label" data-transition-name="complete_qa" data-guard="(hasRole(&#39;qa_lead&#39;) or hasRole(&#39;tester&#39;)) and workflow.Context(&#39;test_coverage&#39;) &gt;= 80" data-guard-simplified="(role: qa_lead or role: tester) and test_coverage &gt;= 80">complete_qa</span>
-    security_review --> security_complete : <span class="transition-label" data-transition-name="complete_security_review" data-guard="hasRole(&#39;security_lead&#39;) or hasRole(&#39;security_analyst&#39;)" data-guard-simplified="role: security_lead or role: security_analyst">complete_security_review</span>
-    legal_review --> legal_complete : <span class="transition-label" data-transition-name="complete_legal_review" data-guard="hasRole(&#39;legal_advisor&#39;) or hasRole(&#39;lawyer&#39;)" data-guard-simplified="role: legal_advisor or role: lawyer">complete_legal_review</span>
-    state approve_standard_reviews_join <<join>>
-    qa_complete --> approve_standard_reviews_join : <span class="transition-label" data-transition-name="approve_standard_reviews" data-guard="(hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;)) and workflow.Context(&#39;requires_legal&#39;) != true" data-guard-simplified="(role: project_manager or role: admin) and requires_legal != true">approve_standard_reviews</span>
-    security_complete --> approve_standard_reviews_join : <span class="transition-label" data-transition-name="approve_standard_reviews" data-guard="(hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;)) and workflow.Context(&#39;requires_legal&#39;) != true" data-guard-simplified="(role: project_manager or role: admin) and requires_legal != true">approve_standard_reviews</span>
-    approve_standard_reviews_join --> approved
-    state approve_all_reviews_including_legal_join <<join>>
-    qa_complete --> approve_all_reviews_including_legal_join : <span class="transition-label" data-transition-name="approve_all_reviews_including_legal" data-guard="(hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;)) and workflow.Context(&#39;requires_legal&#39;) == true" data-guard-simplified="(role: project_manager or role: admin) and requires_legal == true">approve_all_reviews_including_legal</span>
-    security_complete --> approve_all_reviews_including_legal_join : <span class="transition-label" data-transition-name="approve_all_reviews_including_legal" data-guard="(hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;)) and workflow.Context(&#39;requires_legal&#39;) == true" data-guard-simplified="(role: project_manager or role: admin) and requires_legal == true">approve_all_reviews_including_legal</span>
-    legal_complete --> approve_all_reviews_including_legal_join : <span class="transition-label" data-transition-name="approve_all_reviews_including_legal" data-guard="(hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;)) and workflow.Context(&#39;requires_legal&#39;) == true" data-guard-simplified="(role: project_manager or role: admin) and requires_legal == true">approve_all_reviews_including_legal</span>
-    approve_all_reviews_including_legal_join --> approved
-    approved --> deployment_ready : <span class="transition-label" data-transition-name="mark_deployment_ready" data-guard="hasRole(&#39;project_manager&#39;) or hasRole(&#39;admin&#39;)" data-guard-simplified="role: project_manager or role: admin">mark_deployment_ready</span>
-    deployment_ready --> deployed : <span class="transition-label" data-transition-name="deploy" data-guard="hasRole(&#39;devops&#39;) or hasRole(&#39;admin&#39;)" data-guard-simplified="role: devops or role: admin">deploy</span>
-    design_review --> rejected : <span class="transition-label" data-transition-name="reject_design_issues" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_design_issues</span>
-    qa_testing --> rejected : <span class="transition-label" data-transition-name="reject_qa_failures" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_qa_failures</span>
-    security_review --> rejected : <span class="transition-label" data-transition-name="reject_security_vulnerabilities" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_security_vulnerabilities</span>
-    legal_review --> rejected : <span class="transition-label" data-transition-name="reject_legal_compliance" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_legal_compliance</span>
-    qa_complete --> rejected : <span class="transition-label" data-transition-name="reject_after_qa_complete" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_after_qa_complete</span>
-    security_complete --> rejected : <span class="transition-label" data-transition-name="reject_after_security_complete" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_after_security_complete</span>
-    legal_complete --> rejected : <span class="transition-label" data-transition-name="reject_after_legal_complete" data-guard="hasRole(&#39;admin&#39;) or hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: admin or role: project_manager">reject_after_legal_complete</span>
-    rejected --> planning : <span class="transition-label" data-transition-name="restart_from_rejected" data-guard="hasRole(&#39;project_manager&#39;)" data-guard-simplified="role: project_manager">restart_from_rejected</span>
-
-    %% Current places
-    class planning currentPlace
-
-    %% Initial place
-    [*] --> planning
+flowchart TD
+    START((( )))
+    class START startMarker
+    START --> p_planning
+    subgraph grp_Finance ["Finance"]
+        p_budget_review(["budget review"])
+        p_budget_approved(["budget approved"])
+    end
+    subgraph grp_Design ["Design"]
+        p_design_review(["design review"])
+    end
+    subgraph grp_QA ["QA"]
+        p_qa_testing(["qa testing"])
+        p_qa_complete(["qa complete"])
+    end
+    subgraph grp_Security ["Security"]
+        p_security_review(["security review"])
+        p_security_complete(["security complete"])
+    end
+    subgraph grp_Legal ["Legal"]
+        p_legal_review(["legal review"])
+        p_legal_complete(["legal complete"])
+    end
+    p_planning(["planning"])
+    p_development(["development"])
+    p_approved(["approved"])
+    p_deployment_ready(["deployment ready"])
+    p_deployed(["deployed"])
+    p_rejected(["rejected"])
+    class p_planning current
+    class p_budget_review place
+    class p_budget_approved place
+    class p_design_review place
+    class p_development place
+    class p_qa_testing place
+    class p_security_review place
+    class p_legal_review place
+    class p_qa_complete place
+    class p_security_complete place
+    class p_legal_complete place
+    class p_approved place
+    class p_deployment_ready place
+    class p_deployed terminal
+    class p_rejected place
+    t_submit_budget["submit budget"]
+    class t_submit_budget action
+    p_planning --> t_submit_budget
+    t_submit_budget -->|"❰ role project_manager ❱"| p_budget_review
+    t_approve_budget["approve budget"]
+    class t_approve_budget person
+    p_budget_review --> t_approve_budget
+    t_approve_budget -->|"❰ role project_manager or role admin or role finance_manager ❱"| p_budget_approved
+    t_reject_budget["reject budget"]
+    class t_reject_budget person
+    p_budget_review --> t_reject_budget
+    t_reject_budget -->|"❰ role project_manager or role admin or role finance_manager ❱"| p_planning
+    t_start_development["start development"]
+    class t_start_development action
+    p_budget_approved --> t_start_development
+    t_start_development -->|"❰ role project_manager and team_size ≤ 10 ❱"| p_development
+    t_submit_design_review["submit design review"]
+    class t_submit_design_review action
+    p_development --> t_submit_design_review
+    t_submit_design_review -->|"❰ (role developer or role team_lead) and requires_legal != true ❱"| p_design_review
+    t_submit_design_and_legal_review["submit design and legal review"]
+    class t_submit_design_and_legal_review action
+    p_development --> t_submit_design_and_legal_review
+    f_submit_design_and_legal_review{"+"}
+    class f_submit_design_and_legal_review gateway
+    t_submit_design_and_legal_review -->|"❰ (role developer or role team_lead) and requires_legal = true ❱"| f_submit_design_and_legal_review
+    f_submit_design_and_legal_review --> p_design_review
+    f_submit_design_and_legal_review --> p_legal_review
+    t_approve_design["approve design"]
+    class t_approve_design person
+    p_design_review --> t_approve_design
+    f_approve_design{"+"}
+    class f_approve_design gateway
+    t_approve_design -->|"❰ (role design_lead or role designer) and (inPlace(#39;legal_complete#39;) or requires_legal != true) ❱"| f_approve_design
+    f_approve_design --> p_qa_testing
+    f_approve_design --> p_security_review
+    t_reject_design["reject design"]
+    class t_reject_design person
+    p_design_review --> t_reject_design
+    t_reject_design -->|"❰ role design_lead or role designer ❱"| p_development
+    t_complete_qa["complete qa"]
+    class t_complete_qa action
+    p_qa_testing --> t_complete_qa
+    t_complete_qa -->|"❰ (role qa_lead or role tester) and getContext(#39;test_coverage#39;, 0) ≥ 80 ❱"| p_qa_complete
+    t_complete_security_review["complete security review"]
+    class t_complete_security_review action
+    p_security_review --> t_complete_security_review
+    t_complete_security_review -->|"❰ role security_lead or role security_analyst ❱"| p_security_complete
+    t_complete_legal_review["complete legal review"]
+    class t_complete_legal_review action
+    p_legal_review --> t_complete_legal_review
+    t_complete_legal_review -->|"❰ role legal_advisor or role lawyer ❱"| p_legal_complete
+    t_approve_standard_reviews["approve standard reviews"]
+    class t_approve_standard_reviews person
+    j_approve_standard_reviews{"+"}
+    class j_approve_standard_reviews gateway
+    p_qa_complete --> j_approve_standard_reviews
+    p_security_complete --> j_approve_standard_reviews
+    j_approve_standard_reviews --> t_approve_standard_reviews
+    t_approve_standard_reviews -->|"❰ (role project_manager or role admin) and requires_legal != true ❱"| p_approved
+    t_approve_all_reviews_including_legal["approve all reviews including legal"]
+    class t_approve_all_reviews_including_legal person
+    j_approve_all_reviews_including_legal{"+"}
+    class j_approve_all_reviews_including_legal gateway
+    p_qa_complete --> j_approve_all_reviews_including_legal
+    p_security_complete --> j_approve_all_reviews_including_legal
+    p_legal_complete --> j_approve_all_reviews_including_legal
+    j_approve_all_reviews_including_legal --> t_approve_all_reviews_including_legal
+    t_approve_all_reviews_including_legal -->|"❰ (role project_manager or role admin) and requires_legal = true ❱"| p_approved
+    t_mark_deployment_ready["mark deployment ready"]
+    class t_mark_deployment_ready person
+    p_approved --> t_mark_deployment_ready
+    t_mark_deployment_ready -->|"❰ role project_manager or role admin ❱"| p_deployment_ready
+    t_deploy["deploy"]
+    class t_deploy action
+    p_deployment_ready --> t_deploy
+    t_deploy -->|"❰ role devops or role admin ❱"| p_deployed
+    t_reject_project["reject project"]
+    class t_reject_project person
+    j_reject_project{"×"}
+    class j_reject_project gateway
+    p_design_review --> j_reject_project
+    p_qa_testing --> j_reject_project
+    p_security_review --> j_reject_project
+    p_legal_review --> j_reject_project
+    p_qa_complete --> j_reject_project
+    p_security_complete --> j_reject_project
+    p_legal_complete --> j_reject_project
+    j_reject_project --> t_reject_project
+    t_reject_project -->|"❰ role admin or role project_manager ❱"| p_rejected
+    t_reject_project -. cancels .-> p_design_review
+    t_reject_project -. cancels .-> p_qa_testing
+    t_reject_project -. cancels .-> p_security_review
+    t_reject_project -. cancels .-> p_legal_review
+    t_reject_project -. cancels .-> p_qa_complete
+    t_reject_project -. cancels .-> p_security_complete
+    t_reject_project -. cancels .-> p_legal_complete
+    t_restart_from_rejected["restart from rejected"]
+    class t_restart_from_rejected person
+    p_rejected --> t_restart_from_rejected
+    t_restart_from_rejected -->|"❰ role project_manager ❱"| p_planning
+    classDef place fill:#FFFFFF,stroke:#6B7280,stroke-width:1px,color:#111827
+    classDef current fill:#DCFCE7,stroke:#15803D,stroke-width:3px,color:#14532D,font-weight:bold
+    classDef terminal fill:#F3F4F6,stroke:#6B7280,stroke-dasharray:3 3,color:#374151
+    classDef action fill:#1D4ED8,stroke:#1E3A8A,color:#FFFFFF
+    classDef person fill:#15803D,stroke:#14532D,color:#FFFFFF
+    classDef auto fill:#E0F2FE,stroke:#0369A1,color:#0C4A6E
+    classDef timer fill:#FEF3C7,stroke:#B45309,color:#92400E
+    classDef startMarker fill:#111827,stroke:#111827,color:#111827
+    classDef gateway fill:#F8FAFC,stroke:#334155,stroke-width:2px,color:#334155,font-weight:bold
+    linkStyle 49 stroke:#B91C1C
+    linkStyle 50 stroke:#B91C1C
+    linkStyle 51 stroke:#B91C1C
+    linkStyle 52 stroke:#B91C1C
+    linkStyle 53 stroke:#B91C1C
+    linkStyle 54 stroke:#B91C1C
+    linkStyle 55 stroke:#B91C1C
 ```
 
 ## Features Demonstrated
@@ -221,10 +323,28 @@ The workflow demonstrates parallel processing:
 
 ### 8. Complex Workflow Paths
 
-- **Forks**: Single state → multiple states (parallel processing)
-- **Joins**: Multiple states → single state (synchronization)
+- **Forks**: Single state → multiple states (parallel processing, the ◇+ gateway)
+- **Joins**: Multiple states → single state (synchronization, ◇+ again)
 - **Loops**: Rejected projects can restart from planning
 - **Conditional paths**: Legal review only if `requires_legal == true`
+
+### 9. OR-input rejection with cancellation (one transition, no twins)
+
+`reject_project` is a single **OR-input** transition (`from_any: true`): it is
+enabled by whichever review place holds the project and consumes exactly that
+one — the ◇× exclusive gateway in the diagram. Its **reset arcs** (`resets:`)
+clear every sibling review token atomically, so rejecting from QA also cancels
+an in-flight security or legal review. This replaced seven copy-paste
+`reject_*` transitions, one per stage.
+
+### 10. Library-rendered diagrams with team lanes and a direction switcher
+
+The `/diagram` page renders `Definition.Diagram()` — the same definition the
+engine fires, so it can never drift. Places carry a `diagram_group` metadata
+key mapping each review team to a boxed **lane**; human decisions carry
+`diagram_class: person` for actor-typed coloring; and the page's **flow
+switcher** re-renders top-down / left-right / bottom-up / right-left
+(`Diagram(workflow.DiagramDirectionLeftRight)`).
 
 ## Running the Example
 

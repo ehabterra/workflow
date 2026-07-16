@@ -1,33 +1,49 @@
-# Best Practices: Handling OR Semantics in Workflows
+# Handling OR Semantics in Workflows
 
-## The Problem
+> **Update: the engine now expresses OR-inputs natively.** `from_any: true`
+> makes a transition enabled by ANY ONE of its `from` places, consuming
+> exactly the marked one — and `resets:` clears sibling branches atomically
+> when the OR outcome ends parallel work. This example's seven per-stage
+> `reject_*` twins collapsed into ONE transition:
+>
+> ```yaml
+> - name: reject_project
+>   from: [design_review, qa_testing, security_review, legal_review,
+>          qa_complete, security_complete, legal_complete]
+>   from_any: true
+>   resets: [design_review, qa_testing, security_review, legal_review,
+>            qa_complete, security_complete, legal_complete]
+>   to: [rejected]
+> ```
+>
+> The engine also ships `Workflow.ApplyAny(ctx, names...)` for the XOR side:
+> fire the first of several guarded alternatives the state allows.
+>
+> **The patterns below remain the right tool for one case**: when each
+> source place needs *different* behavior — different guards, different
+> outputs, or different audit fields per source. Then one transition per
+> source is the honest model, and this document shows how to keep that
+> tidy. Everything below reads with that lens.
 
-The workflow engine's `from` field uses **AND logic** - it requires ALL listed places to be present. This means you cannot directly express:
+## The Problem (when per-source behavior differs)
 
-> "Transition from **A OR B** to C"
-
-Since `from: [a, b]` means "from A **AND** B", not "from A **OR** B".
-
----
-
-## ✅ Solution: Separate Transitions Pattern
-
-The best practice is to **create separate transitions for each OR path**, then use transition names to select the correct one.
-
----
+A plain `from: [a, b]` is an **AND-join** — it requires ALL listed places.
+`from_any: true` gives you the OR-input. But when "from A" and "from B"
+must behave differently, a single transition (either kind) cannot express
+the difference, and you want **separate transitions selected by name**:
 
 ## Pattern 1: Simple OR (A OR B → C)
 
-### ❌ What You Want (But Can't Do)
+### The native form (same behavior from every source)
 
 ```yaml
-# This doesn't work - requires BOTH a AND b
 - name: to_c
-  from: [a, b]  # ❌ AND logic, not OR!
+  from: [a, b]
+  from_any: true   # enabled by A OR B, consumes only the marked one
   to: [c]
 ```
 
-### ✅ Best Practice: Separate Transitions
+### Separate transitions (different behavior per source)
 
 ```yaml
 # Create separate transitions for each path

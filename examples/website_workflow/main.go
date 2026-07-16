@@ -326,14 +326,28 @@ func handleWorkflowPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDiagram(w http.ResponseWriter, r *http.Request) {
-	// Create a temporary workflow to generate the diagram from the definition
-	tempWf, err := workflow.NewWorkflow("diagram-generator", workflowDef, "draft")
-	if err != nil {
-		http.Error(w, "Failed to create diagram generator", http.StatusInternalServerError)
-		return
+	// The ?dir= switcher picks the flow orientation.
+	dir := workflow.DiagramDirection(r.URL.Query().Get("dir"))
+	switch dir {
+	case workflow.DiagramDirectionBottomUp, workflow.DiagramDirectionLeftRight, workflow.DiagramDirectionRightLeft:
+	default:
+		dir = workflow.DiagramDirectionTopDown
 	}
-	diagram := tempWf.Diagram()
-	if err := templates.ExecuteTemplate(w, "diagram.html", diagram); err != nil {
+	// Render a FRESH instance built from the YAML's initial_marking (not the
+	// bare definition, which cannot know where instances start): that draws
+	// the ◉ start marker and lights the initial place exactly the way every
+	// new document begins.
+	diagram := ""
+	if wf, err := yamlLoader.LoadWorkflow(yamlConfig, "structure"); err == nil {
+		diagram = wf.Diagram(dir)
+	} else {
+		diagram = workflowDef.Diagram(dir) // structure-only fallback
+	}
+	data := struct {
+		Diagram string
+		Dir     string
+	}{Diagram: diagram, Dir: string(dir)}
+	if err := templates.ExecuteTemplate(w, "diagram.html", data); err != nil {
 		log.Printf("Error executing template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

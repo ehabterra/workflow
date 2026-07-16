@@ -44,6 +44,47 @@ const diagramClassMeta = "diagram_class"
 // parallel lanes read as distinct regions.
 const diagramGroupMeta = "diagram_group"
 
+// DiagramDirection is the flow orientation of a rendered diagram — Mermaid's
+// flowchart direction token. The zero value renders with the default
+// (DiagramDirectionTopDown); pass one to Definition.Diagram or
+// Workflow.Diagram to override, e.g. LeftRight for wide nets embedded in
+// landscape layouts.
+type DiagramDirection string
+
+const (
+	// DiagramDirectionTopDown flows top to bottom — the default; tall
+	// diagrams suit scrolling pages.
+	DiagramDirectionTopDown DiagramDirection = "TD"
+	// DiagramDirectionBottomUp flows bottom to top (Mermaid's BT).
+	DiagramDirectionBottomUp DiagramDirection = "BT"
+	// DiagramDirectionLeftRight flows left to right.
+	DiagramDirectionLeftRight DiagramDirection = "LR"
+	// DiagramDirectionRightLeft flows right to left.
+	DiagramDirectionRightLeft DiagramDirection = "RL"
+)
+
+// normalizeDirection maps a caller-supplied direction to a valid Mermaid
+// token, falling back to the default for the zero value or anything unknown
+// (a typo must not produce an unparseable diagram).
+func normalizeDirection(d DiagramDirection) DiagramDirection {
+	switch d {
+	case DiagramDirectionTopDown, DiagramDirectionBottomUp,
+		DiagramDirectionLeftRight, DiagramDirectionRightLeft:
+		return d
+	default:
+		return DiagramDirectionTopDown
+	}
+}
+
+// firstDirection resolves the variadic direction parameter of the Diagram
+// methods: the first value wins, absence means the default.
+func firstDirection(direction []DiagramDirection) DiagramDirection {
+	if len(direction) > 0 {
+		return normalizeDirection(direction[0])
+	}
+	return DiagramDirectionTopDown
+}
+
 // escapeMermaidLabel escapes characters that would break or restyle Mermaid
 // labels, using HTML entity numbers without the & prefix (Mermaid's own
 // convention, e.g. #58; for a colon).
@@ -109,15 +150,18 @@ func humanizeName(name string) string {
 // Diagram renders the definition's structure as a Mermaid flowchart (no
 // instance state — a Definition does not know its initial marking; use
 // Workflow.Diagram for the entry marker, current marking, and token badges).
-// See the notes at the top of mermaid.go for the visual language.
-func (d *Definition) Diagram() string {
-	return renderDiagram(d, nil, nil, nil)
+// The optional direction sets the flow orientation (default top-down); only
+// the first value is used. See the notes at the top of mermaid.go for the
+// visual language.
+func (d *Definition) Diagram(direction ...DiagramDirection) string {
+	return renderDiagram(d, nil, nil, nil, firstDirection(direction))
 }
 
 // Diagram renders this instance's net as a Mermaid flowchart with the
 // current marking highlighted; places holding colored tokens carry a ⬤×N
-// count badge.
-func (w *Workflow) Diagram() string {
+// count badge. The optional direction sets the flow orientation (default
+// top-down); only the first value is used.
+func (w *Workflow) Diagram(direction ...DiagramDirection) string {
 	w.mu.RLock()
 	current := make(map[Place]bool)
 	tokenCounts := make(map[Place]int)
@@ -134,16 +178,17 @@ func (w *Workflow) Diagram() string {
 	def := w.definition
 	initial := w.initialPlaces
 	w.mu.RUnlock()
-	return renderDiagram(def, initial, current, tokenCounts)
+	return renderDiagram(def, initial, current, tokenCounts, firstDirection(direction))
 }
 
 // renderDiagram is the shared flowchart generator. initial marks the entry
 // place(s) (classic ●-marker edges); current marks the live places (nil for
 // structure-only); tokenCounts carries per-place colored token counts for
-// the ⬤×N badges.
-func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tokenCounts map[Place]int) string {
+// the ⬤×N badges; direction is the flow orientation (already normalized by
+// the callers).
+func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tokenCounts map[Place]int, direction DiagramDirection) string {
 	var b strings.Builder
-	b.WriteString("flowchart LR\n")
+	fmt.Fprintf(&b, "flowchart %s\n", direction)
 	if def == nil {
 		return b.String()
 	}

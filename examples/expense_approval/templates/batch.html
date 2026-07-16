@@ -12,6 +12,7 @@
 
 <h2>Live token flow</h2>
 {{template "diagram-legend"}}
+{{template "dir-switcher" .Dir}}
 <div class="card diagram-card"><pre class="mermaid">{{.Diagram}}</pre></div>
 
 <h2>Awaiting payout · {{len .P.Payable}} token(s) · total <span class="mono">{{money .P.PayableTotal}}</span></h2>
