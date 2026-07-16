@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ehabterra/workflow/storage"
+	"github.com/ehabterra/workflow/workflowtest"
 )
 
 // TestPaymentAnchorMigration proves the place-removal upgrade path: a payment
@@ -48,9 +49,7 @@ func TestPaymentAnchorMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load after regression: %v", err)
 	}
-	if wf.Marking().HasPlace("batch_control") {
-		t.Fatal("anchor place survived the migration")
-	}
+	workflowtest.AssertNotHas(t, wf, "batch_control")
 	if got := len(wf.Marking().TokensAt("payable")); got != 1 {
 		t.Fatalf("payable token lost in migration: %+v", wf.Marking().AllTokens())
 	}
@@ -83,12 +82,7 @@ func TestPaymentAnchorMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load after batch: %v", err)
 	}
-	if wf.Marking().HasPlace("payable") {
-		t.Fatal("payable should be empty after the batch")
-	}
-	if wf.Marking().HasPlace("batch_control") {
-		t.Fatal("anchor must not reappear")
-	}
+	workflowtest.AssertNotHas(t, wf, "payable", "batch_control")
 
 	view, err := app.Expense(ctx, id)
 	if err != nil {

@@ -732,34 +732,35 @@ const draftGrace = 5 * time.Minute
 
 // DiagramExpenseStructure renders the expense net via the library's Mermaid
 // renderer, as a fresh instance: the entry marker and the draft place light
-// up exactly the way every new expense starts.
-func (a *App) DiagramExpenseStructure() string {
+// up exactly the way every new expense starts. dir is the flow orientation
+// (the UI's direction switcher).
+func (a *App) DiagramExpenseStructure(dir workflow.DiagramDirection) string {
 	wf, err := workflow.NewWorkflow("structure", a.expenseDef, "draft")
 	if err != nil {
-		return a.expenseDef.Diagram() // structure-only fallback
+		return a.expenseDef.Diagram(dir) // structure-only fallback
 	}
-	return wf.Diagram()
+	return wf.Diagram(dir)
 }
 
 // DiagramExpenseLive renders one expense's net with its current marking
 // highlighted.
-func (a *App) DiagramExpenseLive(ctx context.Context, id string) (string, error) {
+func (a *App) DiagramExpenseLive(ctx context.Context, id string, dir workflow.DiagramDirection) (string, error) {
 	wf, err := a.mgr.LoadWorkflow(ctx, id, a.expenseDef)
 	if err != nil {
 		return "", err
 	}
-	return wf.Diagram(), nil
+	return wf.Diagram(dir), nil
 }
 
 // DiagramPaymentLive renders the payment net with the current marking and
 // per-place colored-token count badges (the library renderer draws them;
 // amounts live in the tables below the diagram).
-func (a *App) DiagramPaymentLive(ctx context.Context) (string, error) {
+func (a *App) DiagramPaymentLive(ctx context.Context, dir workflow.DiagramDirection) (string, error) {
 	wf, err := a.mgr.LoadWorkflow(ctx, paymentID, a.paymentDef)
 	if err != nil {
 		return "", err
 	}
-	return wf.Diagram(), nil
+	return wf.Diagram(dir), nil
 }
 
 // --- read side (dashboard / detail pages) ---

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`workflowtest` package** (M5.2) — public test helpers, the counterpart
+  to the `storagetest` conformance kit: `AssertMarking` (exact set) /
+  `AssertHas` / `AssertNotHas` marking assertions; the `Apply` path runner
+  ("apply submit → legal_ok → finance_ok → finalize", failing with the step
+  and marking on the first error); the **`AssertGuard`** table harness,
+  which evaluates a transition's guards against context and token cases on
+  a throwaway instance — no storage, no Manager (`AssertGuardAllows` /
+  `AssertGuardRejects` shorthands); and **`Clock`** (frozen, `Advance`/`Set`)
+  plus `AssertDue` so timer tests never sleep. The dogfood adopted the
+  guard harness for its submit boundary and the marking assertions in the
+  payment-migration test.
 - **Observer listeners + OpenTelemetry contrib** (M5.3). `AddObserver` on
   `Definition`, `Manager`, and `Workflow` registers a **non-blocking**
   listener (`ObserverFunc`): it returns nothing, its panics are recovered,
@@ -129,7 +140,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   places are boxed in a Mermaid `subgraph` so parallel lanes read as regions
   (the dogfood boxes the expense net's Legal/Finance review lanes). On a live
   instance the current marking is highlighted and colored-token places carry
-  ⬤×N badges. The old stateDiagram output (and its HTML tooltip spans) is
+  ⬤×N badges. Both `Diagram` methods take an optional **`DiagramDirection`**
+  (`DiagramDirectionTopDown` — the default — `BottomUp`, `LeftRight`,
+  `RightLeft`; unknown values fall back to the default), and the default
+  orientation changed from left-right to **top-down**, which reads better on
+  scrolling pages. Every example UI gained a flow-direction switcher
+  (`?dir=` on the dogfood's diagrams/expense/batch pages, advanced_workflow,
+  and website_workflow), and `advanced_workflow` was aligned with the
+  current feature set: its seven per-stage `reject_*` twins collapsed into
+  one OR-input `reject_project` whose reset arcs cancel sibling reviews,
+  its team metadata became `diagram_group` lanes, human decisions carry
+  `diagram_class: person`, the drifted role→transition lists were fixed,
+  and both stale old-renderer diagram templates (tooltip JS for output
+  that no longer exists) were rewritten for the current renderer. The old stateDiagram output (and its HTML tooltip spans) is
   gone. The dogfood embeds these diagrams on `/diagrams`, every expense page,
   and the batch page, with an HTML legend.
 - **Per-place metadata on `Definition`** (`SetPlaceMetadata` /

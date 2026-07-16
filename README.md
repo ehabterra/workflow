@@ -1,7 +1,7 @@
 # Go Workflow
 
 [![CI](https://github.com/ehabterra/workflow/actions/workflows/ci.yml/badge.svg)](https://github.com/ehabterra/workflow/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ehabterra/workflow)](https://goreportcard.com/report/github.com/ehabterra/workflow)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ehabterra/workflow.svg)](https://pkg.go.dev/github.com/ehabterra/workflow)
 [![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ehabterra/workflow/blob/main/LICENSE)
 [![codecov](https://codecov.io/gh/ehabterra/workflow/branch/main/graph/badge.svg)](https://codecov.io/gh/ehabterra/workflow)
@@ -46,7 +46,7 @@ Inspired by [Symfony Workflow Component](https://symfony.com/doc/current/workflo
 * Support for multiple states and parallel transitions
 * Event system for workflow lifecycle hooks
 * Constraint system for custom validation logic
-* Comprehensive test coverage
+* Comprehensive test coverage — plus test kits for **your** code: `workflowtest` (marking assertions, a transition path runner, a guard table-harness, a deterministic clock for timer tests) and `storagetest` (the conformance suite for custom storage backends)
 
 ## Documentation
 
@@ -807,9 +807,12 @@ value, ok := wf.Context("key")
 The package includes a Mermaid diagram generator for visualizing workflows. The generated diagrams can be rendered in any Mermaid-compatible viewer (like GitHub, GitLab, or the Mermaid Live Editor).
 
 ```go
-// Generate a Mermaid diagram
+// Generate a Mermaid diagram (top-down by default)
 diagram := wf.Diagram()
 fmt.Println(diagram)
+
+// Or pick the flow orientation: TopDown (default), BottomUp, LeftRight, RightLeft
+wide := wf.Diagram(workflow.DiagramDirectionLeftRight)
 ```
 
 Example output — splits and merges route through gateway diamonds with the
@@ -819,7 +822,7 @@ transitions); guards appear on the routing edges and the live marking is
 highlighted:
 
 ```mermaid
-flowchart LR
+flowchart TD
     START((( )))
     class START startMarker
     START --> p_draft
