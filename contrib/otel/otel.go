@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Package otelworkflow instruments a workflow Manager with OpenTelemetry
 // traces and metrics. It is built entirely on the library's observer
 // listeners (workflow.ObserverFunc), so instrumentation can never error,

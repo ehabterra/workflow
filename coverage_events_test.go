@@ -36,6 +36,31 @@ func TestNewWorkflowFromMarkingValidation(t *testing.T) {
 	}
 }
 
+func TestDefinitionAddObserver(t *testing.T) {
+	ctx := context.Background()
+	def, err := workflow.NewDefinition(
+		[]workflow.Place{"a", "b"},
+		[]workflow.Transition{*workflow.MustNewTransition("t", []workflow.Place{"a"}, []workflow.Place{"b"})},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A definition-level observer fires for every workflow built from it.
+	var seen int
+	def.AddObserver(workflow.EventAfterTransition, func(workflow.Event) { seen++ })
+
+	wf, err := workflow.NewWorkflow("obs", def, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wf.ApplyTransitionWithContext(ctx, "t"); err != nil {
+		t.Fatal(err)
+	}
+	if seen == 0 {
+		t.Fatal("definition-level observer never fired")
+	}
+}
+
 func TestDefinitionAndManagerListenerErrorsAbortApply(t *testing.T) {
 	ctx := context.Background()
 	sentinel := errors.New("nope")

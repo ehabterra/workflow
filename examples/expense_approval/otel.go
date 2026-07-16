@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // OpenTelemetry wiring for the demo, enabled by -otel-endpoint: the
 // contrib/otel instrumentation attached to the app's Manager, exporting
 // traces and metrics over OTLP/HTTP to a collector. This is the M5.3
