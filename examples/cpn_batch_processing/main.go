@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Command cpn_batch_processing demonstrates Colored Petri Net (CPN) features of
 // the workflow engine: data-carrying tokens, whole-batch and per-token firing,
 // and token queries / aggregation / transformation.

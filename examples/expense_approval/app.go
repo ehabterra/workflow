@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // The M5 dogfood reference system (docs/DOGFOOD.md): a near-real
 // expense-approval service built the way a host application would build it.
 // One workflow instance per expense (parallel legal+finance review, 3-day

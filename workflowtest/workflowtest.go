@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Ehab Terra
+// SPDX-License-Identifier: MIT
+
 // Package workflowtest provides test helpers for code built on the workflow
 // library: marking assertions, a transition path runner, a guard harness
 // that table-tests guard expressions without storage or a Manager, and a
