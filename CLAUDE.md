@@ -32,6 +32,7 @@ This is a multi-module repo. The **root module** is dependency-light on purpose.
 | `yaml/` | root | YAML config loader + template resolution + storage-setup helpers. |
 | `storagetest/` | root | **Conformance kit** — one suite every `Storage` backend must pass (`storagetest.Run`). |
 | `workflowtest/` | root | Public test helpers: `AssertMarking`/`AssertHas`, the `Apply` path runner, the `AssertGuard` harness, and a fake `Clock`. |
+| `internal/spike/` | root | **Measurement artifacts, not shipped code and not examples.** `approval/` is the declarative-coverage spike (issue #45): a realistic approval workflow built against only what ships, so the value proposition has a number. `internal/` keeps it out of the public API; it stays in the root module so `go test -p 1 ./...` re-runs it and it can't rot. Excluded in `codecov.yml`. Its tests deliberately assert current *defects* — see `COVERAGE.md` before "fixing" one. |
 | `contrib/otel/` | **separate** go.mod | OpenTelemetry integration. Kept out of the root module so the core stays dependency-free. |
 | `examples/*/` | mostly **separate** go.mod each | Runnable demos (`expense_approval` is the dogfood reference system). |
 

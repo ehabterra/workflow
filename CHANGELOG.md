@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`spike/approval` — declarative-coverage measurement** (issue #45). A
+- **`internal/spike/approval` — declarative-coverage measurement** (issue #45). A
   realistic value-escalated approval workflow (threshold ladder, approvals
   ledger, separation of duties, admin last-resort, revision supersession,
   audit/notify/outbox in-tx plus a post-commit email) implemented against only
@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than estimated. Result: **10% of the workflow logic is declarative by line,
   30% by concern** — the library covers the status graph, while the dynamic
   approval join, guard inputs, effect binding, projection, and multi-instance
-  cascade all stay in Go. `spike/approval/COVERAGE.md` carries the measurement
-  and a friction log ranked by how much hand-written Go each gap forces.
+  cascade all stay in Go. Its `COVERAGE.md` carries the measurement and a
+  friction log ranked by how much hand-written Go each gap forces.
   `TestSupersedeCascade_DivergesMarking` documents a real defect the current
   workaround causes: a superseded record's status and its workflow marking
   disagree permanently, because there is no atomic multi-instance transition.

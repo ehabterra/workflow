@@ -4,7 +4,7 @@
 > fraction of a realistic approval workflow the library can express today, so the
 > feature roadmap is driven by a number rather than by intuition.
 >
-> Run it: `go test ./spike/approval/...`
+> Run it: `go test ./internal/spike/approval/...`
 
 ## What was built
 
@@ -220,7 +220,7 @@ Worth recording, because the spike is not an argument that the library is bad:
 The counts above are reproducible:
 
 ```bash
-cd spike/approval
+cd internal/spike/approval
 grep -vE '^\s*(#|$)' workflow.yaml | wc -l          # declarative lines
 ```
 
