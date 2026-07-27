@@ -19,6 +19,9 @@ coverage:
 ignore:
   - "examples/**"      # separate modules, not covered by the root test run
   - "storagetest/**"   # test-only conformance harness (exercised via other packages)
+  - "spike/**"         # measurement artifacts, not shipped code — a spike's own
+                       # coverage says nothing about library quality, and its
+                       # deliberately-hand-rolled wiring would drag the number down
   - "**/*_test.go"
 
 comment:
