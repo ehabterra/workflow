@@ -32,13 +32,32 @@ what guards them, what effects they fire, and what state results. Schema, record
 CRUD, the role ladder config, and the user directory are domain code that would
 exist with or without the library, and are excluded from both sides.
 
-| | non-comment lines |
-|---|---|
-| **Declarative** (`workflow.yaml`) | **36** |
-| **Go** (workflow logic the definition could not absorb) | **337** |
-| *(excluded: domain schema, CRUD, role/directory config)* | *(206)* |
+> **Re-measured after #36 (declarative effects) landed.** The pre-#36 baseline is
+> kept alongside every figure, because the point of this document is the delta.
 
-### **Declarative coverage: 10% by line**
+| | before #36 | after #36 |
+|---|---|---|
+| **Declarative** (`workflow.yaml`) | 36 | **85** |
+| **Go — orchestration** (binding, ordering, branch dispatch) | 303 | **167** |
+| **Go — effect implementations** (the SQL itself) | 34 | **142** |
+| *(excluded: domain schema, CRUD, role/directory config)* | *(206)* | *(206)* |
+
+### **Declarative coverage: 22% by line** (was 10%)
+
+Counting orchestration only — the sequencing decisions, excluding the SQL that
+would exist under any design — it is **34%**, up from 11%.
+
+**Total Go barely moved** (337 → 309), and that is the honest headline: #36 did
+not delete code so much as *relocate the decisions*. 49 lines of "which effects,
+in what order, on which branch" moved out of Go and into the definition, and the
+per-branch `switch` disappeared entirely.
+
+The effect implementations got **more verbose** (34 → 142 lines), which is a real
+cost worth recording: a registry entry extracts its parameters from the event and
+type-asserts the transaction, where the old closure captured typed values
+directly. That is the price of the indirection, and it is paid once per effect
+kind rather than once per transition — so it amortizes as a workflow grows, and
+would not amortize for a workflow with two transitions.
 
 Line-counting YAML against Go flatters neither side — YAML is denser per line — so
 here is the same question asked by **concern**, which is the fairer measure:
@@ -57,20 +76,24 @@ here is the same question asked by **concern**, which is the fairer measure:
 | 10 | Chain satisfaction (dynamic AND-join) | ❌ Go |
 | 11 | Separation of duties | ⚠️ half — guard declarative, input Go |
 | 12 | Last-resort override | ❌ Go |
-| 13 | Branch selection (partial vs final) | ⚠️ half — `ApplyAny` routes, effects don't follow |
-| 14 | Per-transition effect binding | ❌ Go |
-| 15 | Effect ordering | ❌ Go |
-| 16 | Post-commit phase | ❌ Go |
-| 17 | Status projection | ❌ Go |
+| 13 | Branch selection (partial vs final) | ✅ **declarative since #36** |
+| 14 | Per-transition effect binding | ✅ **declarative since #36** |
+| 15 | Effect ordering | ✅ **declarative since #36** |
+| 16 | Post-commit phase | ✅ **declarative since #36** |
+| 17 | Status projection | ⚠️ half since #36 — *when* it runs is declared, the place→status map is still host code (#39) |
 | 18 | Multi-instance cascade | ❌ Go — **and incorrect**, see friction 5 |
 | 19 | Guard rejection → error mapping | ❌ Go |
 | 20 | Actor authorization (is this actor even in the chain?) | ❌ Go — added in review, see below |
 
-### **Declarative coverage: 30% by concern** (5 full + 2 half of 20)
+### **Declarative coverage: 50% by concern** (9 full + 2 half of 20) — was 30%
 
-Both are far below the ~50% floor at which adoption starts paying for itself. The
-issue-#45 estimate of 15-20% was about right for concerns and **optimistic** on
-lines: the real line figure is 10%.
+That crosses the ~50% floor at which adoption starts paying for itself, on one
+feature. The prediction when #36 was filed was "near 50% after #36 **and** #39";
+#36 reached it alone, so the estimate was pessimistic by about one feature.
+
+What is left below the line is the part that was always the hard part: the
+dynamic approval join, the guard inputs it depends on, and the multi-instance
+cascade. Those are #34, #35, and #37 — no amount of effect plumbing reaches them.
 
 The shape of the result matters more than either number. What the library covers
 is the **status graph** — real, correct, and the part a host can hand-roll in a
@@ -121,23 +144,37 @@ concurrent *save* on the same instance, but not a stale *decision input* read
 before the cycle began. Real systems close this with an in-transaction re-check;
 here there is nowhere to put one.
 
-### 3 — Effects are opaque closures ([#36](https://github.com/ehabterra/workflow/issues/36)) · ~150 lines
+### 3 — Effects are opaque closures ([#36](https://github.com/ehabterra/workflow/issues/36)) — ✅ **RESOLVED**
 
-`WithTxSideEffect` takes one function. Everything else — which effects a transition
-fires, in what order, and which of them differ per branch — is assembled by hand.
-The `fire` wrapper, the `effect` type, the four effect constructors, the
-per-transition effect lists, and the post-commit collection all exist for this
-reason. It is the single largest block of Go in the spike.
+*Was: ~150 lines, the single largest block of Go in the spike.*
 
-The per-branch case is the sharpest: `Approve` fires `approve_partial` or
-`approve_final`, and the branch is known only inside a Go closure, so the differing
-effects are a `switch` rather than two transition declarations.
+`WithTxSideEffect` took one function, so which effects a transition fired, in what
+order, and which differed per branch was all assembled by hand: a `fire` wrapper
+threading effect-builders through `Execute`, an `effect` type, four effect
+constructors, a per-transition effect list in every service method, and a `switch`
+on which branch `ApplyAny` picked.
 
-### 4 — No post-commit phase ([#36](https://github.com/ehabterra/workflow/issues/36)) · ~15 lines
+All of that is now declared. `workflow.yaml` names the effects per transition;
+`effects.go` registers the implementations once at startup; `App.fire` is eight
+lines that seed context and apply. The per-branch switch is gone — `approve_partial`
+and `approve_final` carry their own effect lists, so the branch that wins fires its
+own effects with no host involvement.
 
-The email must not be in the transaction. There is no phase for it, so the host
-collects emails during the fire and flushes them after `Execute` returns —
-re-implementing per action what a declared `after_commit` would do once.
+What remains is the implementations themselves, which are host SQL and always were.
+They grew (34 → 142 lines) because a registry entry must extract its params from the
+event and assert the tx type where a closure captured typed values — see the note
+under the headline figures.
+
+### 4 — No post-commit phase ([#36](https://github.com/ehabterra/workflow/issues/36)) — ✅ **RESOLVED**
+
+*Was: ~15 lines.*
+
+The email must not be in the transaction. `after_commit:` is now a declared phase;
+the host registers one `email` implementation and the definition says which
+transitions send which template. The per-action collect-and-flush is gone.
+
+The at-least-once boundary is documented on `AfterCommitFunc` rather than left for
+the adopter to discover.
 
 ### 5 — No atomic multi-instance transition ([#37](https://github.com/ehabterra/workflow/issues/37)) · ~10 lines, **and a correctness bug**
 

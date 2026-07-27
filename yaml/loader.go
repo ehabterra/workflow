@@ -5,6 +5,7 @@ package yaml
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ehabterra/workflow"
@@ -133,6 +134,23 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 			}
 		}
 
+		// Declared effects. Order is semantic — it is the execution order — so
+		// the slices are carried through as written, never sorted.
+		if len(transConfig.Effects) > 0 {
+			decls, err := effectDecls(transConfig.Name, "effects", transConfig.Effects)
+			if err != nil {
+				return nil, err
+			}
+			transition.SetEffects(decls...)
+		}
+		if len(transConfig.AfterCommit) > 0 {
+			decls, err := effectDecls(transConfig.Name, "after_commit", transConfig.AfterCommit)
+			if err != nil {
+				return nil, err
+			}
+			transition.SetAfterCommit(decls...)
+		}
+
 		// Store history-related metadata (notes, actor, custom_fields) in metadata
 		// These will be used when saving history records
 		if transConfig.Notes != "" {
@@ -212,4 +230,18 @@ func (l *Loader) LoadWorkflow(config *Config, workflowID string) (*workflow.Work
 	}
 
 	return wf, nil
+}
+
+// effectDecls converts declared effects, rejecting an empty name: an effect
+// with no name can never resolve, and failing at load beats failing the first
+// time that transition fires.
+func effectDecls(transition, field string, cfgs []EffectConfig) ([]workflow.EffectDecl, error) {
+	decls := make([]workflow.EffectDecl, len(cfgs))
+	for i, c := range cfgs {
+		if strings.TrimSpace(c.Name) == "" {
+			return nil, fmt.Errorf("transition '%s': %s[%d] has an empty name", transition, field, i)
+		}
+		decls[i] = workflow.EffectDecl{Name: c.Name, Params: c.Params}
+	}
+	return decls, nil
 }

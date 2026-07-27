@@ -152,7 +152,37 @@ func transitionRecord(t *Transition) string {
 	writeLenPrefixed(&rec, guard)
 	writeLenPrefixedList(&rec, resets)
 	writeLenPrefixed(&rec, inputMode)
+
+	// Declared effects are structure: changing which effects a transition
+	// fires, their order, or their parameters is a definition change and must
+	// move the fingerprint.
+	//
+	// BACKWARD COMPATIBILITY: the segment is appended only when the transition
+	// declares effects. A definition written before effects existed serializes
+	// byte-for-byte as it did, so its fingerprint is unchanged and instances
+	// persisted by earlier versions still load without a migration. Do not
+	// hoist this out of the conditional.
+	effects := t.Effects()
+	afterCommit := t.AfterCommit()
+	if len(effects) > 0 || len(afterCommit) > 0 {
+		writeLenPrefixedList(&rec, effectRecords(effects))
+		writeLenPrefixedList(&rec, effectRecords(afterCommit))
+	}
 	return rec.String()
+}
+
+// effectRecords serializes declarations in DECLARED order — unlike places and
+// arcs, which are sorted, because effect order is semantic: it is the order
+// they execute in, so two orderings are two different definitions.
+func effectRecords(decls []EffectDecl) []string {
+	if len(decls) == 0 {
+		return nil
+	}
+	out := make([]string, len(decls))
+	for i, d := range decls {
+		out[i] = d.record()
+	}
+	return out
 }
 
 // writeLenPrefixed writes s preceded by its byte length ("3:abc"), making the

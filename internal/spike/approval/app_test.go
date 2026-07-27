@@ -214,18 +214,72 @@ func TestOutOfChainActorCannotApprove(t *testing.T) {
 	mustStatus(t, a, ctx, "rb", "Approved")
 }
 
-// TestApprovedPayloadIsValidJSON pins the outbox payload as marshalled rather
-// than formatted, including at a magnitude where %v would go exponential.
-func TestApprovedPayloadIsValidJSON(t *testing.T) {
+// TestOutboxPayloadIsValidJSON pins the payload written by the declared
+// `outbox` effect as marshalled rather than formatted, at a magnitude where %v
+// would go exponential.
+func TestOutboxPayloadIsValidJSON(t *testing.T) {
+	a, ctx := newApp(t)
+	const amount = 1.5e21 // needs the full chain, so approve as last-resort admin
+	if err := a.Create(ctx, "rj", "REQ-RJ", "dana", amount, []Line{costed("l1", "CC-100", amount)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "rj", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := a.Approve(ctx, "rj", "admin"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	var payload string
+	if err := a.db.QueryRowContext(ctx,
+		`SELECT payload FROM outbox WHERE req_id = 'rj'`).Scan(&payload); err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
 	var got struct {
 		Amount float64 `json:"amount"`
 	}
-	if err := json.Unmarshal([]byte(approvedPayload(1.5e21)), &got); err != nil {
-		t.Fatalf("payload is not valid JSON: %v", err)
+	if err := json.Unmarshal([]byte(payload), &got); err != nil {
+		t.Fatalf("payload %q is not valid JSON: %v", payload, err)
 	}
-	if got.Amount != 1.5e21 {
-		t.Errorf("amount = %v, want 1.5e21", got.Amount)
+	if got.Amount != amount {
+		t.Errorf("amount = %v, want %v", got.Amount, amount)
 	}
+}
+
+// TestDeclaredEffectsFireInOrder pins that the effects a transition declares
+// all run, in one transaction, for the branch that actually fired. Before #36
+// this ordering lived in a hand-assembled Go slice per action.
+func TestDeclaredEffectsFireInOrder(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "rk", "REQ-RK", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "rk", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := a.Approve(ctx, "rk", "sam"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	// approve_final declares: record_approval, project_status, supersede_prior,
+	// stamp_approver, audit, notify, outbox — all of which must have landed.
+	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'rk'`); n != 1 {
+		t.Errorf("ledger rows = %d, want 1", n)
+	}
+	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM outbox WHERE req_id = 'rk'`); n != 1 {
+		t.Errorf("outbox rows = %d, want 1", n)
+	}
+	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM notifications WHERE req_id = 'rk'`); n != 2 {
+		t.Errorf("notification rows = %d, want 2 (submitted + approved)", n)
+	}
+	var approvedBy string
+	if err := a.db.QueryRowContext(ctx, `SELECT approved_by FROM requisitions WHERE id = 'rk'`).Scan(&approvedBy); err != nil {
+		t.Fatalf("approved_by: %v", err)
+	}
+	if approvedBy != "sam" {
+		t.Errorf("approved_by = %q, want sam", approvedBy)
+	}
+	mustStatus(t, a, ctx, "rk", "Approved")
 }
 
 // TestAdminLastResort: a chain containing an unheld role (director) is

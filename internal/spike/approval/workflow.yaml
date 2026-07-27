@@ -37,26 +37,73 @@ workflow:
       from: [draft]
       to: [submitted]
       guard: "ready"
+      effects:
+        - name: project_status
+        - name: audit
+          params: {action: "requisition.submit"}
+        - name: notify
+          params: {target: "approvers", kind: "submitted"}
+      after_commit:
+        - name: email
+          params: {to: "approvers", template: "submitted"}
 
     # Both approve branches share the separation-of-duties guard. sod_ok is
     # host-computed as (actor != submitter) || last_resort.
+    #
+    # The two branches carry DIFFERENT effects — the whole point of binding
+    # effects per transition. Before #36 this was a Go switch on which branch
+    # ApplyAny picked; now the definition says it.
     - name: approve_partial
       from: [submitted]
       to: [submitted]
       guard: "sod_ok && !chain_satisfied"
+      effects:
+        - name: record_approval
+        - name: project_status
+        - name: audit
+          params: {action: "requisition.approve", detail: "pending"}
+        - name: notify
+          params: {target: "approvers", kind: "approval_pending"}
 
     - name: approve_final
       from: [submitted]
       to: [approved]
       guard: "sod_ok && chain_satisfied"
+      effects:
+        - name: record_approval
+        - name: project_status
+        - name: supersede_prior
+        - name: stamp_approver
+        - name: audit
+          params: {action: "requisition.approve"}
+        - name: notify
+          params: {target: "submitter", kind: "approved"}
+        - name: outbox
+          params: {event: "requisition.approved"}
+      after_commit:
+        - name: email
+          params: {to: "submitter", template: "approved"}
 
     - name: reject
       from: [submitted]
       to: [rejected]
+      effects:
+        - name: project_status
+        - name: audit
+          params: {action: "requisition.reject"}
+        - name: notify
+          params: {target: "submitter", kind: "rejected"}
+      after_commit:
+        - name: email
+          params: {to: "submitter", template: "rejected"}
 
     - name: resubmit
       from: [rejected]
       to: [draft]
+      effects:
+        - name: project_status
+        - name: audit
+          params: {action: "requisition.resubmit"}
 
     # revoke is the deliberate act of retiring an approved requisition.
     #
@@ -69,3 +116,9 @@ workflow:
     - name: revoke
       from: [approved]
       to: [superseded]
+      effects:
+        - name: project_status
+        - name: audit
+          params: {action: "requisition.revoke"}
+        - name: outbox
+          params: {event: "requisition.revoked", reversal: true}

@@ -94,6 +94,25 @@ type TransitionConfig struct {
 	Notes        string         `yaml:"notes,omitempty"`         // Default notes for history
 	Actor        string         `yaml:"actor,omitempty"`         // Default actor for history
 	CustomFields map[string]any `yaml:"custom_fields,omitempty"` // Default custom fields for history
+
+	// Effects are the transactional effects this transition fires, in
+	// execution order, resolved against the Manager's EffectRegistry. They
+	// commit with the state change.
+	Effects []EffectConfig `yaml:"effects,omitempty"`
+	// AfterCommit are effects that run only once the state transaction has
+	// committed — at-least-once, for work that must not be transactional.
+	AfterCommit []EffectConfig `yaml:"after_commit,omitempty"`
+}
+
+// EffectConfig declares one effect bound to a transition.
+//
+// The explicit {name, params} form is deliberate over the terser single-key
+// mapping (`- audit: {…}`): the config is strict-decoded, so a typo in a key
+// must be a load error rather than an arbitrary effect name, and only a named
+// field can give that.
+type EffectConfig struct {
+	Name   string         `yaml:"name"`
+	Params map[string]any `yaml:"params,omitempty"`
 }
 
 // StorageConfig defines generic storage configuration.

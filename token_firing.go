@@ -240,6 +240,7 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 		_ = w.marking.RemovePlace(p)
 	}
 	w.produce(to, []Token{tok})
+	w.recordFired(targetTransition.Name(), from, w.currentPlacesLocked())
 	w.mu.Unlock()
 
 	// Fire after-transition listeners.

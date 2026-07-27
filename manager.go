@@ -78,6 +78,10 @@ type Manager struct {
 	// onDefinitionMismatch, if set, is consulted when a loaded instance's stored
 	// fingerprint differs from the definition's; nil means mismatches are errors.
 	onDefinitionMismatch DefinitionMigrationFunc
+
+	// effects resolves the effect names transitions declare. Nil when the host
+	// never called WithEffectRegistry.
+	effects *EffectRegistry
 }
 
 // ManagerOption configures a Manager.
@@ -98,6 +102,18 @@ func WithRegistryCache() ManagerOption {
 // it. Without it, such a load fails with ErrDefinitionMismatch.
 func WithDefinitionMigration(fn DefinitionMigrationFunc) ManagerOption {
 	return func(m *Manager) { m.onDefinitionMismatch = fn }
+}
+
+// WithEffectRegistry installs the registry that resolves the effects a
+// definition's transitions declare (see Transition.SetEffects). Without it,
+// declared effects are inert: Execute reports them as unresolvable rather than
+// silently skipping writes the definition promised.
+//
+// Effects declared on the transitions that fired run inside the state-save
+// transaction, in declared order, after any effect passed via WithTxSideEffect.
+// After-commit effects run once the transaction has committed.
+func WithEffectRegistry(reg *EffectRegistry) ManagerOption {
+	return func(m *Manager) { m.effects = reg }
 }
 
 // NewManager creates a new workflow manager.
@@ -506,12 +522,22 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 
 	// Atomic side effects need transactional support; fail loudly rather than
 	// silently dropping the atomicity guarantee.
+	// Declared effects need the same transactional storage as WithTxSideEffect.
+	// Whether the definition declares any is knowable up front, before anything
+	// fires, so the requirement is checked here rather than mid-transaction.
+	declaresEffects := definitionDeclaresEffects(definition)
+	if declaresEffects && m.effects == nil {
+		return fmt.Errorf("definition declares transition effects but the Manager has no registry: %w "+
+			"(build it with workflow.WithEffectRegistry)", errors.ErrUnsupported)
+	}
+
 	var ts TransactionalStorage
 	var tds TransactionalDueStorage
-	if len(cfg.effects) > 0 {
+	if len(cfg.effects) > 0 || declaresEffects {
 		var ok bool
 		if ts, ok = m.storage.(TransactionalStorage); !ok {
-			return fmt.Errorf("WithTxSideEffect requires a TransactionalStorage backend: %w", errors.ErrUnsupported)
+			return fmt.Errorf("atomic side effects (WithTxSideEffect or declared transition effects) "+
+				"require a TransactionalStorage backend: %w", errors.ErrUnsupported)
 		}
 		// A backend that maintains a due index but cannot update it inside the
 		// state+effect transaction would leave the index silently corrupt for a
@@ -555,6 +581,22 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		ctxData = contextForSave(ctxData, definition)
 		due := m.dueForSave(definition, marking)
 
+		// Resolve the effects declared by whatever actually fired this attempt.
+		// Draining after fn (and after the snapshot) means a retried attempt
+		// starts from an empty log, so an abandoned attempt's effects can never
+		// leak into the one that commits.
+		var afterCommit []pendingAfterCommit
+		effects := cfg.effects
+		if declaresEffects {
+			steps := wf.drainFired()
+			txEffects, pending, rerr := m.resolveEffects(id, definition, steps, ctxData)
+			if rerr != nil {
+				return rerr
+			}
+			effects = append(append([]TxSideEffect(nil), cfg.effects...), txEffects...)
+			afterCommit = pending
+		}
+
 		switch {
 		case ts != nil:
 			// Keep the due index current even on the transactional path (state +
@@ -562,9 +604,9 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 			// due backend (DueStorage but not TransactionalDueStorage) with a timed
 			// definition was already rejected before the loop.
 			if tds != nil {
-				_, err = tds.SaveStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, cfg.effects...)
+				_, err = tds.SaveStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, effects...)
 			} else {
-				_, err = ts.SaveStateInTx(ctx, id, marking, ctxData, wf.Version(), cfg.effects...)
+				_, err = ts.SaveStateInTx(ctx, id, marking, ctxData, wf.Version(), effects...)
 			}
 		default:
 			_, err = m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
@@ -581,7 +623,10 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		if m.useCache {
 			_ = m.registry.RemoveWorkflow(id)
 		}
-		return nil
+		// The state transaction has committed. After-commit effects run now,
+		// deliberately outside it — and so AT-LEAST-ONCE: a crash here loses
+		// them, and an error from one is returned without undoing the commit.
+		return runAfterCommit(ctx, afterCommit)
 	}
 	return fmt.Errorf("%w: giving up after %d attempts", lastErr, maxAttempts)
 }

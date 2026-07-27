@@ -37,6 +37,32 @@ type Workflow struct {
 	// a VersionedStorage backend. It is 0 for a workflow that has never been
 	// persisted, and ignored by non-versioned backends.
 	version int64
+
+	// fired logs the transitions applied to this instance, in order, with the
+	// marking either side of each. Manager.Execute drains it after the caller's
+	// function returns to resolve the effects those transitions declare.
+	//
+	// It is per-instance and Execute loads a fresh instance on every conflict
+	// retry, so a retried attempt starts with an empty log — the effects of an
+	// abandoned attempt can never leak into the one that commits.
+	fired []FiredStep
+}
+
+// recordFired appends a firing to the log. Callers MUST already hold w.mu:
+// it is called from the firing paths between moveMarking and the after-event,
+// while the lock is held (the lock is NOT reentrant — see the caution in
+// CLAUDE.md).
+func (w *Workflow) recordFired(transition string, before, after []Place) {
+	w.fired = append(w.fired, FiredStep{Transition: transition, Before: before, After: after})
+}
+
+// drainFired returns the firings logged since the last drain and clears the log.
+func (w *Workflow) drainFired() []FiredStep {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := w.fired
+	w.fired = nil
+	return out
 }
 
 // Version returns the workflow's current optimistic-concurrency version. It is 0
@@ -667,6 +693,10 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 	// reset places), preserving colored token data and leaving unrelated
 	// places untouched.
 	w.moveMarking(from, to, targetTransition.Resets())
+	// Log the firing while still holding the lock, before the after-event runs
+	// listeners: a listener that errors aborts the caller's function, so
+	// Execute never reaches the drain and the log is discarded with the attempt.
+	w.recordFired(targetTransition.Name(), from, w.currentPlacesLocked())
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
@@ -761,6 +791,7 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 	// reset places), preserving colored token data and leaving unrelated
 	// places untouched.
 	w.moveMarking(from, targetPlaces, transition.Resets())
+	w.recordFired(transition.Name(), from, w.currentPlacesLocked())
 
 	// Fire after transition event (unlock before calling listeners)
 	w.mu.Unlock()
@@ -831,6 +862,13 @@ func (w *Workflow) EnabledTransitions() ([]Transition, error) {
 func (w *Workflow) CurrentPlaces() []Place {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.marking.Places()
+}
+
+// currentPlacesLocked is CurrentPlaces for callers that already hold w.mu. The
+// lock is a non-reentrant sync.RWMutex, so a firing path — which holds the
+// write lock across the marking move — must use this, never CurrentPlaces.
+func (w *Workflow) currentPlacesLocked() []Place {
 	return w.marking.Places()
 }
 
