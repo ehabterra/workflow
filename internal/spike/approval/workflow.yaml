@@ -1,0 +1,71 @@
+# The requisition-approval net — the DECLARATIVE half of the coverage spike
+# (see COVERAGE.md). This is everything about the workflow that the library
+# can express today.
+#
+# What it deliberately does NOT contain, because the library cannot express
+# it, is the interesting part: the approval chain is resolved by the host and
+# arrives here as three pre-computed booleans (ready, sod_ok, chain_satisfied)
+# that the guards can only read. The guards cannot compute them, because a
+# guard has no transaction and cannot query the ledger — so every one of them
+# is a value the host had to work out first and inject via SetContext.
+#
+# approve is split into two transitions with complementary guards precisely
+# because one action has two outcomes: recording an approval that does not yet
+# satisfy the chain (approve_partial, a self-loop) versus the one that does
+# (approve_final). ApplyAny picks between them. That split is the right shape
+# and it works — what does not work is that the effects each branch needs
+# cannot be attached here, so they live in a Go switch instead.
+workflow:
+  name: requisition_approval
+  initial_marking: draft
+  places:
+    - name: draft
+      metadata: {status: Draft, editable: true}
+    - name: submitted
+      metadata: {status: Submitted}
+    - name: approved
+      metadata: {status: Approved}
+    - name: rejected
+      metadata: {status: Rejected, editable: true}
+    - name: superseded
+      metadata: {status: Superseded}
+  transitions:
+    # `ready` is the ready-gate: every costed line carries a cost code. The
+    # host computes it by querying the lines and injects the answer; the guard
+    # only reads the boolean.
+    - name: submit
+      from: [draft]
+      to: [submitted]
+      guard: "ready"
+
+    # Both approve branches share the separation-of-duties guard. sod_ok is
+    # host-computed as (actor != submitter) || last_resort.
+    - name: approve_partial
+      from: [submitted]
+      to: [submitted]
+      guard: "sod_ok && !chain_satisfied"
+
+    - name: approve_final
+      from: [submitted]
+      to: [approved]
+      guard: "sod_ok && chain_satisfied"
+
+    - name: reject
+      from: [submitted]
+      to: [rejected]
+
+    - name: resubmit
+      from: [rejected]
+      to: [draft]
+
+    # revoke is the deliberate act of retiring an approved requisition.
+    #
+    # There was a second transition here — `supersede`, for what happens to a
+    # prior approved requisition when a newer one is approved. It was DEAD: the
+    # cascade cannot fire it (friction 5), so it is done with raw SQL instead,
+    # and nothing ever applied it. The library did not notice, and neither did
+    # the tests; a reviewer did. It is removed, and the episode is recorded in
+    # COVERAGE.md as unplanned evidence for the static-validation gap (#42).
+    - name: revoke
+      from: [approved]
+      to: [superseded]
