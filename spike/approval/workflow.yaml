@@ -58,15 +58,14 @@ workflow:
       from: [rejected]
       to: [draft]
 
-    # revoke and supersede are the same arc under two names: revoke is the
-    # deliberate act, supersede is what happens to a prior approved
-    # requisition when a newer one is approved. They are distinct transitions
-    # only so the audit trail can tell them apart — which is itself a symptom
-    # of effects not being bindable per transition.
+    # revoke is the deliberate act of retiring an approved requisition.
+    #
+    # There was a second transition here — `supersede`, for what happens to a
+    # prior approved requisition when a newer one is approved. It was DEAD: the
+    # cascade cannot fire it (friction 5), so it is done with raw SQL instead,
+    # and nothing ever applied it. The library did not notice, and neither did
+    # the tests; a reviewer did. It is removed, and the episode is recorded in
+    # COVERAGE.md as unplanned evidence for the static-validation gap (#42).
     - name: revoke
-      from: [approved]
-      to: [superseded]
-
-    - name: supersede
       from: [approved]
       to: [superseded]

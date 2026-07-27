@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 )
 
@@ -248,6 +249,16 @@ func chainSatisfied(ctx context.Context, q queryer, reqID string, chain []string
 		}
 	}
 	return true, nil
+}
+
+// roleInChain reports whether role is one of the roles the chain requires.
+//
+// This is an authorization check the net cannot make. The chain is a runtime
+// value, so "is this actor even a required approver?" cannot be a guard — and
+// without it any non-submitter can write a row into the append-only ledger.
+// A dynamic-cardinality join over role-tagged tokens (#34) would subsume it.
+func roleInChain(role string, chain []string) bool {
+	return slices.Contains(chain, role)
 }
 
 // lastResortAllowed reports whether actor may complete the chain alone. It is

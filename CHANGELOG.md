@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ledger, separation of duties, admin last-resort, revision supersession,
   audit/notify/outbox in-tx plus a post-commit email) implemented against only
   what the library ships today, so the value proposition can be measured rather
-  than estimated. Result: **11% of the workflow logic is declarative by line,
-  32% by concern** — the library covers the status graph, while the dynamic
+  than estimated. Result: **10% of the workflow logic is declarative by line,
+  30% by concern** — the library covers the status graph, while the dynamic
   approval join, guard inputs, effect binding, projection, and multi-instance
   cascade all stay in Go. `spike/approval/COVERAGE.md` carries the measurement
   and a friction log ranked by how much hand-written Go each gap forces.

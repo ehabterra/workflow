@@ -6,6 +6,7 @@ package approval
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -167,6 +168,64 @@ func TestSeparationOfDuties(t *testing.T) {
 		t.Fatalf("approve err = %v, want ErrForbidden", err)
 	}
 	mustStatus(t, a, ctx, "r4", "Submitted")
+}
+
+// TestRolelessActorCannotApprove: an actor holding no role at all must not be
+// able to write into the append-only ledger. The net cannot make this check —
+// chain membership is a runtime value — so the host makes it.
+func TestRolelessActorCannotApprove(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "ra", "REQ-RA", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "ra", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := a.Approve(ctx, "ra", "nobody"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("approve err = %v, want ErrForbidden", err)
+	}
+	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'ra'`); n != 0 {
+		t.Errorf("ledger rows = %d, want 0 — a roleless actor wrote to the ledger", n)
+	}
+	mustStatus(t, a, ctx, "ra", "Submitted")
+}
+
+// TestOutOfChainActorCannotApprove: holding a role is not enough — it must be a
+// role this requisition's value actually requires. A ceo is not an approver of
+// a $1,000 requisition whose chain is [site_manager].
+func TestOutOfChainActorCannotApprove(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "rb", "REQ-RB", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "rb", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := a.Approve(ctx, "rb", "ollie"); !errors.Is(err, ErrForbidden) { // ollie is ceo
+		t.Fatalf("approve err = %v, want ErrForbidden", err)
+	}
+	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'rb'`); n != 0 {
+		t.Errorf("ledger rows = %d, want 0", n)
+	}
+	// The legitimate approver still works.
+	if err := a.Approve(ctx, "rb", "sam"); err != nil {
+		t.Fatalf("approve by site_manager: %v", err)
+	}
+	mustStatus(t, a, ctx, "rb", "Approved")
+}
+
+// TestApprovedPayloadIsValidJSON pins the outbox payload as marshalled rather
+// than formatted, including at a magnitude where %v would go exponential.
+func TestApprovedPayloadIsValidJSON(t *testing.T) {
+	var got struct {
+		Amount float64 `json:"amount"`
+	}
+	if err := json.Unmarshal([]byte(approvedPayload(1.5e21)), &got); err != nil {
+		t.Fatalf("payload is not valid JSON: %v", err)
+	}
+	if got.Amount != 1.5e21 {
+		t.Errorf("amount = %v, want 1.5e21", got.Amount)
+	}
 }
 
 // TestAdminLastResort: a chain containing an unheld role (director) is

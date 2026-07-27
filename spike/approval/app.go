@@ -6,6 +6,7 @@ package approval
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -262,6 +263,14 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	sodOk := actor != req.Submitter || lastResort
 
 	role := a.dir.RoleOf(actor)
+	// Is this actor even a required approver? The chain is a runtime value, so
+	// this cannot be a guard — and without the check any non-submitter writes a
+	// row into the append-only ledger. It cannot forge an approval (an
+	// out-of-chain role never satisfies the join), but the junk entry is
+	// permanent. See COVERAGE.md, friction 1.
+	if !lastResort && (role == "" || !roleInChain(role, chain)) {
+		return ErrForbidden
+	}
 	satisfied, err := chainSatisfied(ctx, a.db, id, chain, role, lastResort)
 	if err != nil {
 		return err
@@ -299,7 +308,7 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 				supersedePriorEffect(id),
 				auditEffect(id, "requisition.approve", detailFor(lastResort), actor),
 				notifyEffect(id, req.Submitter, "approved"),
-				outboxEffect(id, "requisition.approved", fmt.Sprintf(`{"amount":%v}`, req.Amount)),
+				outboxEffect(id, "requisition.approved", approvedPayload(req.Amount)),
 				func(ctx context.Context, tx *sql.Tx) error {
 					_, err := tx.ExecContext(ctx, `UPDATE requisitions SET approved_by = ? WHERE id = ?`, actor, id)
 					return err
@@ -336,6 +345,20 @@ func supersedePriorEffect(newID string) effect {
 			`UPDATE requisitions SET status = 'Superseded' WHERE status = 'Approved' AND id != ?`, newID)
 		return err
 	}
+}
+
+// approvedPayload builds the outbox payload. Marshalled rather than formatted:
+// %v on a float64 switches to scientific notation at the extremes, and any
+// field added later would risk unescaped JSON.
+func approvedPayload(amount float64) string {
+	b, err := json.Marshal(struct {
+		Amount float64 `json:"amount"`
+	}{amount})
+	if err != nil {
+		// A float64 field cannot fail to marshal; keep the effect total.
+		return `{}`
+	}
+	return string(b)
 }
 
 func detailFor(lastResort bool) string {

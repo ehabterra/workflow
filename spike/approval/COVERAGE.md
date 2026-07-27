@@ -34,11 +34,11 @@ exist with or without the library, and are excluded from both sides.
 
 | | non-comment lines |
 |---|---|
-| **Declarative** (`workflow.yaml`) | **39** |
-| **Go** (workflow logic the definition could not absorb) | **322** |
+| **Declarative** (`workflow.yaml`) | **36** |
+| **Go** (workflow logic the definition could not absorb) | **337** |
 | *(excluded: domain schema, CRUD, role/directory config)* | *(206)* |
 
-### **Declarative coverage: 11% by line**
+### **Declarative coverage: 10% by line**
 
 Line-counting YAML against Go flatters neither side — YAML is denser per line — so
 here is the same question asked by **concern**, which is the fairer measure:
@@ -64,12 +64,13 @@ here is the same question asked by **concern**, which is the fairer measure:
 | 17 | Status projection | ❌ Go |
 | 18 | Multi-instance cascade | ❌ Go — **and incorrect**, see friction 5 |
 | 19 | Guard rejection → error mapping | ❌ Go |
+| 20 | Actor authorization (is this actor even in the chain?) | ❌ Go — added in review, see below |
 
-### **Declarative coverage: 32% by concern** (5 full + 2 half of 19)
+### **Declarative coverage: 30% by concern** (5 full + 2 half of 20)
 
 Both are far below the ~50% floor at which adoption starts paying for itself. The
 issue-#45 estimate of 15-20% was about right for concerns and **optimistic** on
-lines: the real line figure is 11%.
+lines: the real line figure is 10%.
 
 The shape of the result matters more than either number. What the library covers
 is the **status graph** — real, correct, and the part a host can hand-roll in a
@@ -79,7 +80,7 @@ two-level map. What stays in Go is every concern that made this workflow hard.
 
 Ranked by how much hand-written Go each one forces.
 
-### 1 — Dynamic-cardinality join ([#34](https://github.com/ehabterra/workflow/issues/34)) · ~32 lines
+### 1 — Dynamic-cardinality join ([#34](https://github.com/ehabterra/workflow/issues/34)) · ~43 lines
 
 `chainSatisfied` in `domain.go` is an AND-join whose arity is `len(chain)`, and
 `chain` is not known until the requisition's value is read. The library joins over
@@ -90,6 +91,21 @@ The tell is `chainSatisfied`'s `pending` parameter: the caller must ask *"would 
 chain be satisfied if this approval were recorded?"*, because the transition that
 records it is the one whose guard needs the answer. The host simulates the write it
 is about to make.
+
+**The authorization half.** Because chain membership is a runtime value, *"is this
+actor even a required approver?"* also cannot be a guard. The first draft of this
+spike omitted the check and a reviewer caught it: any non-submitter — including an
+actor holding no role at all, or one whose role is outside the required chain —
+could write a permanent row into the append-only ledger and audit log. It could not
+forge an approval (an out-of-chain role never satisfies the join, so no
+unauthorized requisition can be approved), but the junk entry is permanent in an
+append-only table.
+
+`roleInChain` plus the check in `Approve` fixes it, and
+`TestRolelessActorCannotApprove` / `TestOutOfChainActorCannotApprove` pin it. A
+join over **role-tagged tokens** would subsume both halves: only a token carrying a
+required role could enter the place, so membership would be structural rather than
+a check the host has to remember to write.
 
 ### 2 — Guards cannot query ([#35](https://github.com/ehabterra/workflow/issues/35)) · ~40 lines, plus a race
 
@@ -136,7 +152,7 @@ disagree, permanently, and nothing in the library notices.
 `TestSupersedeCascade_DivergesMarking` asserts the divergence rather than guarding
 against it:
 
-```
+```text
 DIVERGENCE (expected, documents issue #37): status=Superseded marking=[approved]
 ```
 
@@ -159,6 +175,29 @@ writes it in the transaction — repeated for every action. Forget it on one
 transition and the record silently reports a stale status. Note the design that
 already works: place metadata is **not** part of `Fingerprint()`, so labels and
 coordinates can change without invalidating running instances.
+
+## What peer review changed — and why it counts as data
+
+Both numbers moved **down** after review, which is the right direction for a
+measurement that exists to be honest rather than flattering.
+
+**A dead transition, undetected.** The definition declared a `supersede`
+transition that **nothing ever fired**. The cascade cannot fire it (friction 5), so
+it is done in raw SQL, and the transition sat in the net as unreachable surface —
+while being counted toward the declarative line total. Neither the library nor the
+test suite noticed; a reviewer did.
+
+That is unplanned evidence for [#42](https://github.com/ehabterra/workflow/issues/42).
+Dead-transition detection is the *first* check on that issue's list, this is a
+hand-authored net written by someone who knows the library, and the defect still
+shipped and inflated the headline number of a PR whose entire purpose was an
+honest measurement. A net authored in a UI by a non-developer will not do better.
+The transition is removed; declarative lines went 39 → 36.
+
+**A missing authorization check.** See friction 1 above — concern 20 in the table,
+and ~11 more lines of Go.
+
+Net effect: **11% → 10% by line, 32% → 30% by concern.**
 
 ## What worked well
 
