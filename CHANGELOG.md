@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Declarative transition effects** (issue #36) — a transition can now declare
+  what happens when it fires, not just that it may. `Transition.SetEffects`
+  (YAML `effects:`) binds named, ordered effects that run **inside the
+  state-save transaction**; `SetAfterCommit` (YAML `after_commit:`) declares the
+  phase that runs only once the transaction has committed, for work that must
+  not be transactional. Implementations are registered once against an
+  **`EffectRegistry`** (`Register` / `RegisterAfterCommit`, plus `Validate` to
+  catch an unimplemented name at startup rather than the first time a rare
+  branch fires) and wired in with `workflow.WithEffectRegistry`.
+  Effects receive an **`EffectEvent`** — instance id, transition, the marking
+  either side of the firing, declared params, and a copy of the instance context.
+  Because effects bind to the transition, two guarded transitions out of one
+  place fire *different* effect sets, so an `ApplyAny` branch no longer needs a
+  host-side switch. A definition that declares effects without a registry is a
+  loud error, never a silent skip. **After-commit effects are at-least-once** —
+  documented on `AfterCommitFunc`; the library provides the phase, not the
+  guarantee.
+  **Fingerprint compatibility:** the effects segment is appended to a
+  transition's structural record only when it declares effects, so a definition
+  written before this feature fingerprints exactly as it did and instances
+  persisted by earlier versions keep loading without a migration. Effect order
+  and params ARE fingerprinted (order is execution order, so two orderings are
+  two different definitions).
+  Measured on `internal/spike/approval`: declarative coverage **30% → 50% by
+  concern**, **10% → 22% by line**; the per-branch effect switch and the
+  post-commit collection are gone. Total Go barely moved — the win is that the
+  sequencing decisions left Go, not that lines vanished.
 - **`internal/spike/approval` — declarative-coverage measurement** (issue #45). A
   realistic value-escalated approval workflow (threshold ladder, approvals
   ledger, separation of duties, admin last-resort, revision supersession,

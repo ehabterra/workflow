@@ -47,6 +47,15 @@ type Transition struct {
 	// pending work — and any timer running on those tokens — in the same
 	// atomic firing.
 	resets []Place
+
+	// effects holds the transactional effects this transition declares, in
+	// execution order, resolved against the Manager's EffectRegistry when the
+	// transition fires. They commit with the state change.
+	effects []EffectDecl
+
+	// afterCommit holds effects that run only once the state transaction has
+	// committed — at-least-once, for work that must not be transactional.
+	afterCommit []EffectDecl
 }
 
 // Constraint represents a validation constraint for a transition
@@ -202,6 +211,43 @@ func (t *Transition) Resets() []Place {
 // AddConstraint adds a constraint to the transition
 func (t *Transition) AddConstraint(constraint Constraint) {
 	t.constraints = append(t.constraints, constraint)
+}
+
+// SetEffects declares the transactional effects this transition fires, in
+// execution order. They run inside the state-save transaction (see EffectFunc);
+// resolving them needs a Manager built WithEffectRegistry.
+//
+// Declaring effects here rather than passing closures per call is what lets two
+// transitions out of the same place carry different effects, so an ApplyAny
+// branch fires exactly the effects of the branch that won.
+func (t *Transition) SetEffects(effects ...EffectDecl) {
+	t.effects = cloneEffectDecls(effects)
+}
+
+// Effects returns the declared transactional effects, in declared order.
+func (t *Transition) Effects() []EffectDecl { return cloneEffectDecls(t.effects) }
+
+// SetAfterCommit declares effects that run only after the state transaction has
+// committed — the phase for work that must not be transactional. They are
+// AT-LEAST-ONCE; see AfterCommitFunc.
+func (t *Transition) SetAfterCommit(effects ...EffectDecl) {
+	t.afterCommit = cloneEffectDecls(effects)
+}
+
+// AfterCommit returns the declared after-commit effects, in declared order.
+func (t *Transition) AfterCommit() []EffectDecl { return cloneEffectDecls(t.afterCommit) }
+
+// cloneEffectDecls copies a declaration slice so neither the caller nor a
+// reader can mutate a definition's declared effects in place.
+func cloneEffectDecls(in []EffectDecl) []EffectDecl {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]EffectDecl, len(in))
+	for i, e := range in {
+		out[i] = e.clone()
+	}
+	return out
 }
 
 // SetMetadata sets metadata for the transition

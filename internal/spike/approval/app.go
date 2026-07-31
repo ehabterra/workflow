@@ -6,7 +6,6 @@ package approval
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,9 +29,8 @@ var (
 	ErrNotReady          = errors.New("approval: requisition not ready") // -> 422
 )
 
-// Email is a post-commit notification. The library has no post-commit effect
-// phase, so the host collects these during the transaction and flushes them
-// after Execute returns.
+// Email is a post-commit notification, produced by the declared `email`
+// after-commit effect.
 type Email struct {
 	To       string
 	Template string
@@ -72,13 +70,19 @@ func New(ctx context.Context, db *sql.DB, hier Hierarchy, dir *Directory) (*App,
 	if _, err := db.ExecContext(ctx, Schema); err != nil {
 		return nil, fmt.Errorf("host schema: %w", err)
 	}
-	return &App{
-		db:   db,
-		mgr:  workflow.NewManager(workflow.NewRegistry(), store),
-		def:  def,
-		hier: hier,
-		dir:  dir,
-	}, nil
+
+	a := &App{db: db, def: def, hier: hier, dir: dir}
+	reg, err := a.registerEffects()
+	if err != nil {
+		return nil, fmt.Errorf("register effects: %w", err)
+	}
+	// Fail at startup on an effect the definition names but nothing implements,
+	// rather than the first time a rare branch fires.
+	if err := reg.Validate(def); err != nil {
+		return nil, fmt.Errorf("effect wiring: %w", err)
+	}
+	a.mgr = workflow.NewManager(workflow.NewRegistry(), store, workflow.WithEffectRegistry(reg))
+	return a, nil
 }
 
 // Definition exposes the net for diagramming and tests.
@@ -104,112 +108,22 @@ func (a *App) Create(ctx context.Context, id, ref, submitter string, amount floa
 	return err
 }
 
-// effect is one write that must land in the state-change transaction. The
-// library takes a single opaque TxSideEffect, so the host builds and sequences
-// this list itself. See COVERAGE.md, friction 3.
-type effect func(ctx context.Context, tx *sql.Tx) error
-
-// fire is the shared load-fire-save wrapper every action goes through. It
-// exists only because effects, the status projection, and the post-commit
-// phase all have to be assembled by hand for every transition.
-func (a *App) fire(
-	ctx context.Context,
-	id string,
-	setup func(wf *workflow.Workflow),
-	apply func(wf *workflow.Workflow) (string, error),
-	effects func(fired string) []effect,
-	postCommit func(fired string) []Email,
-) (string, error) {
-	var fired string
-	err := a.mgr.Execute(ctx, id, a.def, func(wf *workflow.Workflow) error {
-		// Execute retries the whole cycle on ErrConflict, so setup must be
-		// re-applied on every attempt and must be idempotent.
-		setup(wf)
-		name, err := apply(wf)
-		if err != nil {
-			return err
+// fire applies one transition under Execute.
+//
+// Compare with the pre-#36 version: it took a setup func, an apply func, an
+// effects-builder keyed on which branch fired, and a post-commit builder —
+// because every one of those was the host's job. Effects and the post-commit
+// phase are declared now, so all that remains is seeding the context the guards
+// and effects read.
+func (a *App) fire(ctx context.Context, id string, seed map[string]any, apply func(*workflow.Workflow) error) error {
+	return a.mgr.Execute(ctx, id, a.def, func(wf *workflow.Workflow) error {
+		// Execute retries the whole cycle on ErrConflict, so seeding must be
+		// idempotent — it is, being a plain overwrite per attempt.
+		for k, v := range seed {
+			wf.SetContext(k, v)
 		}
-		fired = name
-		// The status projection is derived here and written in the effect
-		// below, because the library has no projection binding.
-		return nil
-	}, workflow.WithTxSideEffect(func(ctx context.Context, tx any) error {
-		sqlTx, ok := tx.(*sql.Tx)
-		if !ok {
-			return fmt.Errorf("unexpected tx type %T", tx)
-		}
-		for _, e := range effects(fired) {
-			if err := e(ctx, sqlTx); err != nil {
-				return err
-			}
-		}
-		return nil
-	}))
-	if err != nil {
-		return "", err
-	}
-	a.Sent = append(a.Sent, postCommit(fired)...)
-	return fired, nil
-}
-
-// statusOf maps the instance's marking back to the record's status column.
-// Place metadata carries the label; a marking with more than one marked place
-// would make this lossy, which is why the net stays single-token.
-func (a *App) statusOf(wf *workflow.Workflow) string {
-	for _, p := range wf.CurrentPlaces() {
-		if v, ok := a.def.PlaceMetadata(p, "status"); ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-	}
-	return ""
-}
-
-// project writes the derived status onto the record row inside the tx.
-func project(reqID, status string) effect {
-	return func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE requisitions SET status = ? WHERE id = ?`, status, reqID)
-		return err
-	}
-}
-
-func auditEffect(reqID, action, detail, actor string) effect {
-	return func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO audit_log (req_id, action, detail, actor) VALUES (?, ?, ?, ?)`,
-			reqID, action, detail, actor)
-		return err
-	}
-}
-
-func notifyEffect(reqID, target, kind string) effect {
-	return func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO notifications (req_id, target, kind) VALUES (?, ?, ?)`, reqID, target, kind)
-		return err
-	}
-}
-
-func outboxEffect(reqID, event, payload string) effect {
-	return func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO outbox (req_id, event, payload) VALUES (?, ?, ?)`, reqID, event, payload)
-		return err
-	}
-}
-
-func ledgerEffect(reqID, actor, role string, lastResort bool) effect {
-	return func(ctx context.Context, tx *sql.Tx) error {
-		lr := 0
-		if lastResort {
-			lr = 1
-		}
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO approvals (req_id, actor, role, last_resort) VALUES (?, ?, ?, ?)`,
-			reqID, actor, role, lr)
-		return err
-	}
+		return apply(wf)
+	})
 }
 
 // Submit fires the submit transition after evaluating the ready-gate.
@@ -219,25 +133,14 @@ func (a *App) Submit(ctx context.Context, id, actor string) error {
 		return err
 	}
 	ready := readyGate(req)
-	status := ""
-	_, err = a.fire(ctx, id,
-		func(wf *workflow.Workflow) { wf.SetContext("ready", ready) },
-		func(wf *workflow.Workflow) (string, error) {
-			if err := wf.ApplyTransitionWithContext(ctx, "submit"); err != nil {
-				return "", err
-			}
-			status = a.statusOf(wf)
-			return "submit", nil
-		},
-		func(string) []effect {
-			return []effect{
-				project(id, status),
-				auditEffect(id, "requisition.submit", req.Ref, actor),
-				notifyEffect(id, "approvers", "submitted"),
-			}
-		},
-		func(string) []Email { return []Email{{To: "approvers", Template: "submitted", ReqID: id}} },
-	)
+	err = a.fire(ctx, id, map[string]any{
+		"ready":     ready,
+		"actor":     actor,
+		"submitter": req.Submitter,
+		"amount":    req.Amount,
+	}, func(wf *workflow.Workflow) error {
+		return wf.ApplyTransitionWithContext(ctx, "submit")
+	})
 	if err != nil {
 		// The library cannot say WHICH guard rejected, so the host recomputes
 		// the gate to produce the right error. See COVERAGE.md, friction 6.
@@ -249,11 +152,10 @@ func (a *App) Submit(ctx context.Context, id, actor string) error {
 	return nil
 }
 
-// Approve is the core of the spike. It shows every friction at once.
+// Approve is the core of the spike. Everything before the fire is friction 1
+// and 2: the chain, the ledger read, and the authorization check all happen
+// OUTSIDE the transaction, because guards cannot query.
 func (a *App) Approve(ctx context.Context, id, actor string) error {
-	// ---- Phase 1: everything below happens OUTSIDE the transaction, because
-	// guards cannot query. The values computed here are already potentially
-	// stale by the time the guard reads them. See COVERAGE.md, friction 2.
 	req, err := loadRequisition(ctx, a.db, id)
 	if err != nil {
 		return err
@@ -263,11 +165,8 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	sodOk := actor != req.Submitter || lastResort
 
 	role := a.dir.RoleOf(actor)
-	// Is this actor even a required approver? The chain is a runtime value, so
-	// this cannot be a guard — and without the check any non-submitter writes a
-	// row into the append-only ledger. It cannot forge an approval (an
-	// out-of-chain role never satisfies the join), but the junk entry is
-	// permanent. See COVERAGE.md, friction 1.
+	// Is this actor even a required approver? Chain membership is a runtime
+	// value, so it cannot be a guard. See COVERAGE.md, friction 1.
 	if !lastResort && (role == "" || !roleInChain(role, chain)) {
 		return ErrForbidden
 	}
@@ -276,96 +175,28 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 		return err
 	}
 
-	status := ""
-	fired, err := a.fire(ctx, id,
-		func(wf *workflow.Workflow) {
-			wf.SetContext("sod_ok", sodOk)
-			wf.SetContext("chain_satisfied", satisfied)
-		},
-		func(wf *workflow.Workflow) (string, error) {
-			name, err := wf.ApplyAny(ctx, "approve_final", "approve_partial")
-			if err != nil {
-				return "", err
-			}
-			status = a.statusOf(wf)
-			return name, nil
-		},
-		func(fired string) []effect {
-			// ---- Effects differ per branch, and the branch is only known
-			// here, in Go. This switch is what a per-transition effect binding
-			// would replace. See COVERAGE.md, friction 3.
-			base := []effect{
-				ledgerEffect(id, actor, role, lastResort),
-				project(id, status),
-			}
-			if fired == "approve_partial" {
-				return append(base,
-					auditEffect(id, "requisition.approve", "pending", actor),
-					notifyEffect(id, "approvers", "approval_pending"),
-				)
-			}
-			return append(base,
-				supersedePriorEffect(id),
-				auditEffect(id, "requisition.approve", detailFor(lastResort), actor),
-				notifyEffect(id, req.Submitter, "approved"),
-				outboxEffect(id, "requisition.approved", approvedPayload(req.Amount)),
-				func(ctx context.Context, tx *sql.Tx) error {
-					_, err := tx.ExecContext(ctx, `UPDATE requisitions SET approved_by = ? WHERE id = ?`, actor, id)
-					return err
-				},
-			)
-		},
-		func(fired string) []Email {
-			if fired == "approve_final" {
-				return []Email{{To: req.Submitter, Template: "approved", ReqID: id}}
-			}
-			return nil
-		},
-	)
+	err = a.fire(ctx, id, map[string]any{
+		"sod_ok":          sodOk,
+		"chain_satisfied": satisfied,
+		"actor":           actor,
+		"role":            role,
+		"submitter":       req.Submitter,
+		"amount":          req.Amount,
+		"last_resort":     lastResort,
+		"audit_detail":    detailFor(lastResort, satisfied),
+	}, func(wf *workflow.Workflow) error {
+		// The branch is chosen by the guards, and its effects follow from the
+		// definition — no host-side switch on which one won.
+		_, err := wf.ApplyAny(ctx, "approve_final", "approve_partial")
+		return err
+	})
 	if err != nil {
 		if !sodOk {
 			return ErrForbidden
 		}
 		return classify(err)
 	}
-	_ = fired
 	return nil
-}
-
-// supersedePriorEffect marks every OTHER approved requisition superseded.
-//
-// This is a raw SQL write, and that is the point: the library has no atomic
-// multi-instance transition, so the prior requisitions' STATUS changes while
-// their workflow MARKINGS stay on `approved`. State and marking diverge, and
-// nothing in the library detects it. TestSupersedeCascade_DivergesMarking
-// proves the divergence. See COVERAGE.md, friction 5.
-func supersedePriorEffect(newID string) effect {
-	return func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`UPDATE requisitions SET status = 'Superseded' WHERE status = 'Approved' AND id != ?`, newID)
-		return err
-	}
-}
-
-// approvedPayload builds the outbox payload. Marshalled rather than formatted:
-// %v on a float64 switches to scientific notation at the extremes, and any
-// field added later would risk unescaped JSON.
-func approvedPayload(amount float64) string {
-	b, err := json.Marshal(struct {
-		Amount float64 `json:"amount"`
-	}{amount})
-	if err != nil {
-		// A float64 field cannot fail to marshal; keep the effect total.
-		return `{}`
-	}
-	return string(b)
-}
-
-func detailFor(lastResort bool) string {
-	if lastResort {
-		return "last-resort"
-	}
-	return "chain-satisfied"
 }
 
 // Reject fires reject.
@@ -374,70 +205,46 @@ func (a *App) Reject(ctx context.Context, id, actor string) error {
 	if err != nil {
 		return err
 	}
-	status := ""
-	_, err = a.fire(ctx, id,
-		func(*workflow.Workflow) {},
-		func(wf *workflow.Workflow) (string, error) {
-			if err := wf.ApplyTransitionWithContext(ctx, "reject"); err != nil {
-				return "", err
-			}
-			status = a.statusOf(wf)
-			return "reject", nil
-		},
-		func(string) []effect {
-			return []effect{
-				project(id, status),
-				auditEffect(id, "requisition.reject", req.Ref, actor),
-				notifyEffect(id, req.Submitter, "rejected"),
-			}
-		},
-		func(string) []Email { return []Email{{To: req.Submitter, Template: "rejected", ReqID: id}} },
-	)
-	return classify(err)
+	return classify(a.fire(ctx, id, map[string]any{
+		"actor": actor, "submitter": req.Submitter, "amount": req.Amount,
+	}, func(wf *workflow.Workflow) error {
+		return wf.ApplyTransitionWithContext(ctx, "reject")
+	}))
 }
 
 // Resubmit returns a rejected requisition to draft.
 func (a *App) Resubmit(ctx context.Context, id, actor string) error {
-	status := ""
-	_, err := a.fire(ctx, id,
-		func(*workflow.Workflow) {},
-		func(wf *workflow.Workflow) (string, error) {
-			if err := wf.ApplyTransitionWithContext(ctx, "resubmit"); err != nil {
-				return "", err
-			}
-			status = a.statusOf(wf)
-			return "resubmit", nil
-		},
-		func(string) []effect {
-			return []effect{project(id, status), auditEffect(id, "requisition.resubmit", "", actor)}
-		},
-		func(string) []Email { return nil },
-	)
-	return classify(err)
+	return classify(a.fire(ctx, id, map[string]any{"actor": actor},
+		func(wf *workflow.Workflow) error {
+			return wf.ApplyTransitionWithContext(ctx, "resubmit")
+		}))
 }
 
 // Revoke supersedes an approved requisition deliberately.
 func (a *App) Revoke(ctx context.Context, id, actor string) error {
-	status := ""
-	_, err := a.fire(ctx, id,
-		func(*workflow.Workflow) {},
-		func(wf *workflow.Workflow) (string, error) {
-			if err := wf.ApplyTransitionWithContext(ctx, "revoke"); err != nil {
-				return "", err
-			}
-			status = a.statusOf(wf)
-			return "revoke", nil
-		},
-		func(string) []effect {
-			return []effect{
-				project(id, status),
-				auditEffect(id, "requisition.revoke", "", actor),
-				outboxEffect(id, "requisition.revoked", `{"reversal":true}`),
-			}
-		},
-		func(string) []Email { return nil },
-	)
-	return classify(err)
+	req, err := loadRequisition(ctx, a.db, id)
+	if err != nil {
+		return err
+	}
+	return classify(a.fire(ctx, id, map[string]any{
+		"actor": actor, "amount": req.Amount,
+	}, func(wf *workflow.Workflow) error {
+		return wf.ApplyTransitionWithContext(ctx, "revoke")
+	}))
+}
+
+// detailFor is the audit marker distinguishing a last-resort completion from a
+// normally-satisfied chain. It travels in context because it depends on runtime
+// facts the definition cannot know.
+func detailFor(lastResort, satisfied bool) string {
+	switch {
+	case lastResort:
+		return "last-resort"
+	case satisfied:
+		return "chain-satisfied"
+	default:
+		return "pending"
+	}
 }
 
 // classify maps a library error onto the host's sentinels. Everything that is
