@@ -2,19 +2,21 @@
 # (see COVERAGE.md). This is everything about the workflow that the library
 # can express today.
 #
-# What it deliberately does NOT contain, because the library cannot express
-# it, is the interesting part: the approval chain is resolved by the host and
-# arrives here as three pre-computed booleans (ready, sod_ok, chain_satisfied)
-# that the guards can only read. The guards cannot compute them, because a
-# guard has no transaction and cannot query the ledger — so every one of them
-# is a value the host had to work out first and inject via SetContext.
+# What it still does NOT contain is the guard INPUTS: `ready` and `sod_ok` are
+# booleans the host computes and injects with SetContext, because a guard has
+# no transaction and cannot query (#35). `chain` is injected for the same
+# reason — but note that it is now a VALUE the net reasons about rather than a
+# pre-computed answer, which is the whole difference #34 made.
 #
-# approve is split into two transitions with complementary guards precisely
-# because one action has two outcomes: recording an approval that does not yet
-# satisfy the chain (approve_partial, a self-loop) versus the one that does
-# (approve_final). ApplyAny picks between them. That split is the right shape
-# and it works — what does not work is that the effects each branch needs
-# cannot be attached here, so they live in a Go switch instead.
+# approve is three transitions with complementary conditions because one action
+# has three outcomes, and ApplyAny picks between them in declaration order:
+#
+#   approve_last_resort  an admin completing a chain nobody can satisfy
+#   approve_final        this approval satisfies the chain
+#   approve_partial      it does not (yet)
+#
+# Nothing in the host decides which: approve_final is simply not ENABLED until
+# the approvals pool holds one token per required role.
 workflow:
   name: requisition_approval
   initial_marking: draft
@@ -23,6 +25,11 @@ workflow:
       metadata: {status: Draft, editable: true}
     - name: submitted
       metadata: {status: Submitted}
+    # approvals is a token POOL, not a state: one colored token per approval,
+    # carrying the approver's role. It is the ledger, and it is what the
+    # dynamic-cardinality join counts. It carries no status metadata precisely
+    # because it is not a state the record is "in".
+    - name: approvals
     - name: approved
       metadata: {status: Approved}
     - name: rejected
@@ -32,7 +39,7 @@ workflow:
   transitions:
     # `ready` is the ready-gate: every costed line carries a cost code. The
     # host computes it by querying the lines and injects the answer; the guard
-    # only reads the boolean.
+    # only reads the boolean. That is #35, still open.
     - name: submit
       from: [draft]
       to: [submitted]
@@ -47,30 +54,52 @@ workflow:
         - name: email
           params: {to: "approvers", template: "submitted"}
 
-    # Both approve branches share the separation-of-duties guard. sod_ok is
-    # host-computed as (actor != submitter) || last_resort.
-    #
-    # The two branches carry DIFFERENT effects — the whole point of binding
-    # effects per transition. Before #36 this was a Go switch on which branch
-    # ApplyAny picked; now the definition says it.
-    - name: approve_partial
-      from: [submitted]
-      to: [submitted]
-      guard: "sod_ok && !chain_satisfied"
-      effects:
-        - name: record_approval
-        - name: project_status
-        - name: audit
-          params: {action: "requisition.approve", detail: "pending"}
-        - name: notify
-          params: {target: "approvers", kind: "approval_pending"}
-
-    - name: approve_final
-      from: [submitted]
+    # An admin may complete a chain that contains a role nobody holds — without
+    # it such a requisition is unapprovable. It is tried FIRST because it is the
+    # narrowest condition.
+    - name: approve_last_resort
+      from: [submitted, approvals]
       to: [approved]
-      guard: "sod_ok && chain_satisfied"
+      guard: "last_resort"
+      resets: [approvals]
       effects:
-        - name: record_approval
+        - name: project_status
+        - name: supersede_prior
+        - name: stamp_approver
+        - name: audit
+          params: {action: "requisition.approve", detail: "last-resort"}
+        - name: notify
+          params: {target: "submitter", kind: "approved"}
+        - name: outbox
+          params: {event: "requisition.approved"}
+      after_commit:
+        - name: email
+          params: {to: "submitter", template: "approved"}
+
+    # THE DYNAMIC-CARDINALITY JOIN (#34).
+    #
+    # Wait until the approvals pool holds one token per role the chain requires
+    # — where the chain's LENGTH is len(chain), a runtime value. Before #34 this
+    # was `chain_satisfied`, a boolean the host computed by reading its own
+    # ledger table and simulating the approval it was about to write.
+    #
+    # `distinct: role` is what makes two approvals from one role count once, and
+    # `where` is what makes an out-of-chain approval count never — so chain
+    # membership is structural instead of a check the host must remember.
+    #
+    # The reset arc discards the pool with the same firing; the tokens the join
+    # selected have already flowed to `approved`.
+    - name: approve_final
+      from: [submitted, approvals]
+      to: [approved]
+      guard: "sod_ok"
+      resets: [approvals]
+      require:
+        - place: approvals
+          where: "token.role in chain"
+          distinct: role
+          count: "len(chain)"
+      effects:
         - name: project_status
         - name: supersede_prior
         - name: stamp_approver
@@ -84,9 +113,30 @@ workflow:
         - name: email
           params: {to: "submitter", template: "approved"}
 
+    # The approval landed but the chain is not satisfied yet. The self-loop
+    # records progress without advancing; the approval token itself is already
+    # in the pool, added inside the same atomic cycle.
+    #
+    # `role in chain` is the authorization check. It rejects an actor the chain
+    # does not require — and because the token was added inside the fire, a
+    # rejected approval is never persisted at all.
+    - name: approve_partial
+      from: [submitted]
+      to: [submitted]
+      guard: "sod_ok && role in chain"
+      effects:
+        - name: project_status
+        - name: audit
+          params: {action: "requisition.approve", detail: "pending"}
+        - name: notify
+          params: {target: "approvers", kind: "approval_pending"}
+
+    # Rejecting clears the pool: the approvals collected so far do not survive
+    # a rejection, and the reset arc says so in one place.
     - name: reject
       from: [submitted]
       to: [rejected]
+      resets: [approvals]
       effects:
         - name: project_status
         - name: audit

@@ -127,6 +127,16 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 			transition.SetResets(resets...)
 		}
 
+		// Dynamic-cardinality joins. Expressions are compiled here, so a
+		// malformed count fails the load rather than the first firing.
+		if len(transConfig.Require) > 0 {
+			reqs, err := requirements(transConfig.Name, transConfig.Require)
+			if err != nil {
+				return nil, err
+			}
+			transition.SetRequirements(reqs...)
+		}
+
 		// Add transition metadata
 		if len(transConfig.Metadata) > 0 {
 			for key, value := range transConfig.Metadata {
@@ -230,6 +240,25 @@ func (l *Loader) LoadWorkflow(config *Config, workflowID string) (*workflow.Work
 	}
 
 	return wf, nil
+}
+
+// requirements compiles the declared dynamic-cardinality joins for one
+// transition.
+func requirements(transition string, cfgs []RequireConfig) ([]workflow.Requirement, error) {
+	reqs := make([]workflow.Requirement, len(cfgs))
+	for i, c := range cfgs {
+		r, err := workflow.NewRequirement(workflow.RequirementSpec{
+			Place:    workflow.Place(c.Place),
+			Count:    string(c.Count),
+			Where:    c.Where,
+			Distinct: c.Distinct,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("transition '%s': require[%d]: %w", transition, i, err)
+		}
+		reqs[i] = r
+	}
+	return reqs, nil
 }
 
 // effectDecls converts declared effects, rejecting an empty name: an effect

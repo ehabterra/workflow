@@ -201,6 +201,28 @@ declared **reset arcs** (`resets: [...]`: firing atomically clears sibling
 branches — and any timers running on them). Cycles are just arcs. Pure
 token-pool nets are valid too: an **empty marking persists and reloads**.
 
+**Joins whose arity is a runtime value.** A plain AND-join asks "is this place
+marked?", so the number of things a transition waits for is fixed by the
+drawing. `require:` resolves it at fire time instead — the shape every approval
+chain has, where how many sign-offs are needed comes from the record:
+
+```yaml
+- name: approve_final
+  from: [submitted, approvals]
+  to: [approved]
+  require:
+    - place: approvals
+      where: "token.role in chain"   # only chain members count
+      distinct: role                 # two approvals from one role are one
+      count: "len(chain)"            # resolved now, from the instance context
+```
+
+The transition is simply not enabled until the pool satisfies it, so there is no
+host-side "is the chain complete?" check — and firing consumes exactly the
+tokens it selected, leaving the rest of the pool in place (that is also how you
+take a batch of N out of a queue of many). Requirements are fingerprinted and
+rendered on the diagram.
+
 **Colored tokens.** A place can hold multiple data-carrying tokens
 (`{order_id: "001", amount: 240.75}`); fire per token
 (`ApplyTransitionForToken`), guard on token data (`token.amount <= 5000`),

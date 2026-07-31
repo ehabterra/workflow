@@ -48,6 +48,11 @@ type Transition struct {
 	// atomic firing.
 	resets []Place
 
+	// requires holds the dynamic-cardinality joins over this transition's input
+	// places: enablement conditions whose arity is resolved at fire time rather
+	// than fixed by the arc structure. See SetRequirements.
+	requires []Requirement
+
 	// effects holds the transactional effects this transition declares, in
 	// execution order, resolved against the Manager's EffectRegistry when the
 	// transition fires. They commit with the state change.
@@ -205,6 +210,55 @@ func (t *Transition) Resets() []Place {
 	}
 	out := make([]Place, len(t.resets))
 	copy(out, t.resets)
+	return out
+}
+
+// SetRequirements declares dynamic-cardinality joins over this transition's
+// input places — the "wait for a set whose size is only known at runtime"
+// primitive. Requirements are part of the definition's Fingerprint.
+//
+// A requirement does two things:
+//
+//   - ENABLEMENT. On top of the structural check (its place must be marked),
+//     the place must hold at least `count` tokens matching `where`, counted
+//     `distinct` by a field when one is named. An unmet requirement is
+//     ErrNotEnabled, so an ApplyAny candidate simply loses to its sibling.
+//   - CONSUMPTION. Firing consumes EXACTLY the tokens the requirement selected
+//     and LEAVES THE REMAINDER in the place. This differs from an ordinary input
+//     place, which is drained entirely. Only the selected tokens are carried to
+//     the outputs.
+//
+// Two deliberate restrictions, both enforced by NewDefinition, because each
+// would mean two competing token selectors on one transition:
+//
+//   - a requirement's place must be one of the transition's own inputs, and at
+//     most one requirement may target a given place;
+//   - a transition may not combine requirements with FromAny.
+//
+// Per-token firing (ApplyTransitionForToken) is likewise rejected on a
+// transition with requirements: the requirement IS the token selection.
+//
+// Reset arcs are unchanged and still clear WHOLE places, so a place that is both
+// required and reset ends up empty regardless of what the requirement selected.
+// Requirements are not evaluated by the Due API — like guards, they are honored
+// when the transition actually fires.
+func (t *Transition) SetRequirements(reqs ...Requirement) {
+	if len(reqs) == 0 {
+		t.requires = nil
+		return
+	}
+	t.requires = make([]Requirement, len(reqs))
+	copy(t.requires, reqs)
+}
+
+// Requirements returns the transition's dynamic-cardinality joins. The returned
+// slice is a copy; the requirements themselves are immutable.
+func (t *Transition) Requirements() []Requirement {
+	if len(t.requires) == 0 {
+		return nil
+	}
+	out := make([]Requirement, len(t.requires))
+	copy(out, t.requires)
 	return out
 }
 

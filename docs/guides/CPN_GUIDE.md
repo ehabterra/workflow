@@ -75,6 +75,80 @@ Movement rules:
 - **No colored tokens involved**: falls back to boolean presence, so existing
   boolean workflows behave exactly as before.
 
+## Dynamic-cardinality joins: waiting for a runtime-resolved set
+
+The rules above answer "the transition is enabled, now move the tokens". They do
+not answer **"wait until enough tokens are here"** — and how many is *enough* is
+usually not a constant. An approval chain's length comes from the record's
+value; a shipping batch's size comes from configuration.
+
+`require:` puts that condition in the definition. Per input place it declares how
+many tokens are needed (an expression, evaluated at fire time), optionally which
+tokens count, and optionally a field they must be distinct by:
+
+```yaml
+transitions:
+  - name: approve_final
+    from: [submitted, approvals]
+    to: [approved]
+    resets: [approvals]                  # discard what the join did not take
+    require:
+      - place: approvals
+        where: "token.role in chain"     # only chain members count
+        distinct: role                   # two approvals from one role are one
+        count: "len(chain)"              # `chain` comes from the instance context
+```
+
+```go
+// The same thing in Go.
+final := workflow.MustNewTransition("approve_final",
+    []workflow.Place{"submitted", "approvals"}, []workflow.Place{"approved"})
+final.SetRequirements(workflow.MustNewRequirement(workflow.RequirementSpec{
+    Place: "approvals", Where: "token.role in chain", Distinct: "role", Count: "len(chain)",
+}))
+```
+
+Both expressions see the workflow context; `where` also sees the token's data as
+`token`, and `count` sees every token at the place as `tokens`. `count` must
+yield a non-negative integer (a `float64` that came back from JSON storage is
+fine — a fractional one is an error).
+
+**Consumption is the part to internalize.** An ordinary input place is drained
+when a transition fires. A *required* place is not: firing consumes exactly the
+tokens the requirement selected — in the place's own order, so it is
+deterministic — and leaves the remainder behind. That is what makes "take a
+batch of 10 out of a pool of 50" a definition rather than a loop:
+
+```yaml
+  - name: ship_batch
+    from: [pool]
+    to: [shipped]
+    require:
+      - place: pool
+        count: 10
+```
+
+Notes worth knowing before you reach for it:
+
+- An unmet requirement is `ErrNotEnabled`, so `ApplyAny` skips that candidate and
+  tries the next — which is how "record progress" and "complete the chain"
+  become two transitions with no host-side branch. A requirement that cannot be
+  *evaluated* (a broken expression, a count that is not a number) is a hard
+  error instead, so a broken definition is never silently skipped.
+- The selection is re-resolved under the write lock immediately before the move,
+  so concurrent firings split a pool rather than double-consuming it.
+- `require` cannot be combined with `from_any`, two requirements cannot target
+  the same place, and a requirement's place must be one of the transition's own
+  inputs. Each rule keeps exactly one selector per input; `NewDefinition`
+  enforces them.
+- `ApplyTransitionForToken` is rejected on a transition with requirements — the
+  requirement already chooses the tokens.
+- Reset arcs still clear **whole** places, so a place that is both required and
+  reset ends up empty regardless of what the join took.
+- Requirements are part of `Definition.Fingerprint()` and are rendered on the
+  transition in `Diagram()`. They are *not* evaluated by the `Due` API, exactly
+  like guards: a due transition still has to be enabled when it fires.
+
 Use `SelectTokens(place, pred)` to choose which token(s) to advance:
 
 ```go

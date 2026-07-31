@@ -116,13 +116,25 @@ use: operate on a **closed `*sql.DB`** to exercise query-error branches; seed a
 - **OR-input / XOR routing.** `from_any: true` enables a transition when *any* one input
   is marked and consumes only that one. `Workflow.ApplyAny(names...)` fires the first
   allowed candidate. Reset arcs (`resets:`) clear whole places when a transition fires.
+- **A required place is NOT drained.** Ordinary input places lose every token when a
+  transition fires; a place carrying a `require:` (dynamic-cardinality join) loses only
+  the tokens the requirement selected, and the remainder stays in declaration order.
+  That asymmetry is deliberate — it is what makes "take N out of a pool" expressible —
+  and it is why `require` cannot be combined with `from_any` or with per-token firing
+  (two selectors, one transition). `NewDefinition` rejects those combinations.
 
 ## Cautions / gotchas (learned the hard way)
 
 - **The workflow lock is a `sync.RWMutex` and is NOT reentrant.** A method already
-  holding the lock must call the lock-free `…Locked` variant (e.g. `coloredTokensAtLocked`),
-  never the public method — re-entering deadlocks or races. When you refresh a token
-  snapshot after re-resolving a consume-set, use the locked variant.
+  holding the lock must call the lock-free `…Locked` variant (e.g. `coloredTokensAtLocked`,
+  `selectRequirementsLocked`), never the public method — re-entering deadlocks or races.
+  The firing paths hold the write lock across the marking move, so anything they consult
+  in that window (token snapshots, requirement selection) must be the locked variant.
+- **A requirement's indexes are only valid under the lock that produced them.**
+  `selectRequirementsLocked` returns token INDEXES into the place's current token slice,
+  and `moveMarking` acts on them. They must be resolved and used inside one write-lock
+  hold — a pre-lock selection re-used after the lock would consume the wrong tokens under
+  concurrency. The firing paths re-resolve; do not "optimize" that away.
 - **Mermaid label escaping uses `#nnn;`, not `&#nnn;`.** `escapeMermaidLabel` emits
   Mermaid's own numeric-entity convention (`#39;` for `'`, `#58;` for `:`, `#34;` for `"`,
   `#60;`/`#62;` for `<`/`>`) — a `#` with **no** ampersand. This is correct and renders as

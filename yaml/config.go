@@ -7,6 +7,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -95,6 +98,10 @@ type TransitionConfig struct {
 	Actor        string         `yaml:"actor,omitempty"`         // Default actor for history
 	CustomFields map[string]any `yaml:"custom_fields,omitempty"` // Default custom fields for history
 
+	// Require declares dynamic-cardinality joins: inputs whose arity is
+	// resolved at fire time from an expression rather than fixed by the arcs.
+	Require []RequireConfig `yaml:"require,omitempty"`
+
 	// Effects are the transactional effects this transition fires, in
 	// execution order, resolved against the Manager's EffectRegistry. They
 	// commit with the state change.
@@ -113,6 +120,46 @@ type TransitionConfig struct {
 type EffectConfig struct {
 	Name   string         `yaml:"name"`
 	Params map[string]any `yaml:"params,omitempty"`
+}
+
+// RequireConfig declares one dynamic-cardinality join on a transition: the
+// transition waits until `place` holds `count` tokens matching `where`, counted
+// once per distinct value of a field, and consumes exactly those — leaving the
+// rest of the place behind.
+//
+//	require:
+//	  - place: submitted
+//	    where: "token.role in required_roles"
+//	    distinct: role
+//	    count: "len(required_roles)"
+//
+// See workflow.RequirementSpec for the semantics and workflow.Transition's
+// SetRequirements for the firing rules.
+type RequireConfig struct {
+	Place    string    `yaml:"place"`
+	Count    ExprOrInt `yaml:"count"`
+	Where    string    `yaml:"where,omitempty"`
+	Distinct string    `yaml:"distinct,omitempty"`
+}
+
+// ExprOrInt is an expression string that also accepts a bare YAML integer, so
+// the fixed-arity case reads as `count: 3` rather than forcing quotes around a
+// number that is not really an expression to the author.
+type ExprOrInt string
+
+// UnmarshalYAML accepts a string expression or a plain integer.
+func (e *ExprOrInt) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err == nil {
+		*e = ExprOrInt(s)
+		return nil
+	}
+	var i int
+	if err := value.Decode(&i); err != nil {
+		return fmt.Errorf("must be an expression string or an integer, got %q", value.Value)
+	}
+	*e = ExprOrInt(strconv.Itoa(i))
+	return nil
 }
 
 // StorageConfig defines generic storage configuration.
@@ -271,6 +318,24 @@ func (c *Config) Validate() error {
 		for _, reset := range trans.Resets {
 			if !placeSet[reset] {
 				return fmt.Errorf("transition '%s' resets undefined place '%s'", trans.Name, reset)
+			}
+		}
+
+		// A require block that names a place the transition does not consume
+		// from would be an enablement condition invisible in the arcs; the
+		// engine rejects it too, but saying so at load time points at the line.
+		for i, req := range trans.Require {
+			if req.Place == "" {
+				return fmt.Errorf("transition '%s': require[%d] has no place", trans.Name, i)
+			}
+			if !placeSet[req.Place] {
+				return fmt.Errorf("transition '%s' requires undefined place '%s'", trans.Name, req.Place)
+			}
+			if !slices.Contains(trans.From, req.Place) {
+				return fmt.Errorf("transition '%s': require place '%s' is not one of its 'from' places", trans.Name, req.Place)
+			}
+			if strings.TrimSpace(string(req.Count)) == "" {
+				return fmt.Errorf("transition '%s': require on place '%s' has no count", trans.Name, req.Place)
 			}
 		}
 	}

@@ -79,12 +79,45 @@ func NewDefinition(places []Place, transitions []Transition) (*Definition, error
 				return nil, fmt.Errorf("reset place '%s' in transition '%s' is not defined in workflow places", place, trans.Name())
 			}
 		}
+
+		if err := validateRequirements(&trans); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Definition{
 		Places:      places,
 		Transitions: transitions,
 	}, nil
+}
+
+// validateRequirements enforces the structural rules a dynamic-cardinality
+// join has to obey to have one unambiguous token selector per input place (see
+// Transition.SetRequirements).
+func validateRequirements(t *Transition) error {
+	reqs := t.Requirements()
+	if len(reqs) == 0 {
+		return nil
+	}
+	if t.FromAny() {
+		return fmt.Errorf("transition '%s': from_any cannot be combined with require (both resolve the input to consume)", t.Name())
+	}
+	inputs := make(map[Place]bool, len(t.from))
+	for _, p := range t.From() {
+		inputs[p] = true
+	}
+	seen := make(map[Place]bool, len(reqs))
+	for _, r := range reqs {
+		p := r.Place()
+		if !inputs[p] {
+			return fmt.Errorf("transition '%s': require place '%s' is not one of its 'from' places", t.Name(), p)
+		}
+		if seen[p] {
+			return fmt.Errorf("transition '%s': duplicate require for place '%s'", t.Name(), p)
+		}
+		seen[p] = true
+	}
+	return nil
 }
 
 // Fingerprint returns a stable SHA-256 hash of the definition's structure: its
@@ -162,13 +195,34 @@ func transitionRecord(t *Transition) string {
 	// byte-for-byte as it did, so its fingerprint is unchanged and instances
 	// persisted by earlier versions still load without a migration. Do not
 	// hoist this out of the conditional.
+	//
+	// Requirements ride in the same conditional and are written LAST, again only
+	// when present, so a definition that declares effects but no requirements
+	// still serializes exactly as it did before requirements existed.
 	effects := t.Effects()
 	afterCommit := t.AfterCommit()
-	if len(effects) > 0 || len(afterCommit) > 0 {
+	requires := t.Requirements()
+	if len(effects) > 0 || len(afterCommit) > 0 || len(requires) > 0 {
 		writeLenPrefixedList(&rec, effectRecords(effects))
 		writeLenPrefixedList(&rec, effectRecords(afterCommit))
+		if len(requires) > 0 {
+			writeLenPrefixedList(&rec, requirementRecords(requires))
+		}
 	}
 	return rec.String()
+}
+
+// requirementRecords serializes requirements SORTED: requirements are a
+// conjunction over distinct places, so the order they are declared in carries no
+// meaning and must not change the fingerprint (unlike effects, whose order is
+// their execution order).
+func requirementRecords(reqs []Requirement) []string {
+	out := make([]string, len(reqs))
+	for i, r := range reqs {
+		out[i] = r.record()
+	}
+	slices.Sort(out)
+	return out
 }
 
 // effectRecords serializes declarations in DECLARED order — unlike places and

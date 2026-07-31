@@ -63,6 +63,15 @@ context you supply (`hasRole(...)` and friends), and *who is asked* is your
 notification layer's job. Every org chart is different; a workflow engine
 that ships one is wrong for everyone but its author.
 
+**Where this boundary is NOT.** "Wait until a runtime-resolved set of
+participants has acted" is net semantics, not org modelling, and the library
+does express it: a dynamic-cardinality join (`require:`) counts tokens in a
+place against an expression evaluated at fire time, so an approval chain whose
+length comes from the record needs no host-side satisfaction check. What stays
+out is still everything about *who those participants are* — the chain itself
+is a value you resolve and hand in, and the roles a token carries mean nothing
+to the engine beyond being data it can count and de-duplicate.
+
 ## 6. Cross-instance atomicity is a seam, not a feature
 
 Saves are atomic per instance. A step spanning two instances is two

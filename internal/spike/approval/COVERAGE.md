@@ -15,7 +15,8 @@ systems:
 
 - a **threshold ladder** — the set of roles that must approve grows with the
   requisition's value, so the required approval count is not known until fire time
-- an append-only **approvals ledger**
+- an append-only **approvals ledger** — since #34 this is a pool of colored
+  tokens in the net itself, not a host table
 - **separation of duties** — the submitter may not approve their own record
 - an **admin last-resort** for chains containing a role nobody holds
 - **revision supersession** — approving a requisition supersedes prior approved ones
@@ -32,35 +33,47 @@ what guards them, what effects they fire, and what state results. Schema, record
 CRUD, the role ladder config, and the user directory are domain code that would
 exist with or without the library, and are excluded from both sides.
 
-> **Re-measured after #36 (declarative effects) landed.** The pre-#36 baseline is
-> kept alongside every figure, because the point of this document is the delta.
+> **Re-measured after #34 (dynamic-cardinality join) landed.** Both columns below
+> come from the same reproducible rule (see *Re-running the measurement*), so the
+> delta is apples-to-apples. The absolute numbers differ slightly from those
+> reported in the #36 PR, which applied the same rule by hand and did not count
+> each function's doc comment; the earlier figures are kept in the footnote.
 
-| | before #36 | after #36 |
+| | after #36 | after #34 |
 |---|---|---|
-| **Declarative** (`workflow.yaml`) | 36 | **85** |
-| **Go — orchestration** (binding, ordering, branch dispatch) | 303 | **167** |
-| **Go — effect implementations** (the SQL itself) | 34 | **142** |
-| *(excluded: domain schema, CRUD, role/directory config)* | *(206)* | *(206)* |
+| **Declarative** (`workflow.yaml`) | 85 | **109** |
+| **Go — orchestration** (branching, ledger, satisfaction, binding) | 208 | **151** |
+| **Go — effect implementations** (the SQL itself) | 180 | **164** |
+| **Total Go** | 388 | **315** |
 
-### **Declarative coverage: 22% by line** (was 10%)
+### **Declarative coverage: 26% by line** (was 18%)
 
 Counting orchestration only — the sequencing decisions, excluding the SQL that
-would exist under any design — it is **34%**, up from 11%.
+would exist under any design — it is **42%**, up from 29%.
 
-**Total Go barely moved** (337 → 309), and that is the honest headline: #36 did
-not delete code so much as *relocate the decisions*. 49 lines of "which effects,
-in what order, on which branch" moved out of Go and into the definition, and the
-per-branch `switch` disappeared entirely.
+The headline this time is that **Go went down**, by 73 lines. #36 relocated
+decisions from Go into the definition without deleting much; #34 deleted code
+outright. Three functions and an entire effect are simply gone:
 
-The effect implementations got **more verbose** (34 → 142 lines), which is a real
-cost worth recording: a registry entry extracts its parameters from the event and
-type-asserts the transaction, where the old closure captured typed values
-directly. That is the price of the indirection, and it is paid once per effect
-kind rather than once per transition — so it amortizes as a workflow grows, and
-would not amortize for a workflow with two transitions.
+- `chainSatisfied` (26 lines) — the AND-join whose arity was `len(chain)`,
+  including the `pending` parameter that forced the host to *simulate the write
+  it was about to make*
+- `approvedRoles` (17 lines) — the ledger read that fed it
+- `roleInChain` (9 lines) — the authorization check the net could not express
+- the `record_approval` effect and the `approvals` table it wrote (16 lines net)
 
-Line-counting YAML against Go flatters neither side — YAML is denser per line — so
-here is the same question asked by **concern**, which is the fairer measure:
+What replaced them is four lines of YAML:
+
+```yaml
+require:
+  - place: approvals
+    where: "token.role in chain"
+    distinct: role
+    count: "len(chain)"
+```
+
+Line-counting YAML against Go flatters neither side — YAML is denser per line —
+so here is the same question asked by **concern**, which is the fairer measure:
 
 | # | Workflow concern | Where it lives |
 |---|---|---|
@@ -69,80 +82,123 @@ here is the same question asked by **concern**, which is the fairer measure:
 | 3 | Initial marking | ✅ declarative |
 | 4 | Terminal detection | ✅ declarative |
 | 5 | Guard expressions | ✅ declarative |
-| 6 | Guard *inputs* (`ready`, `sod_ok`, `chain_satisfied`) | ❌ Go |
-| 7 | Ready-gate evaluation | ❌ Go |
-| 8 | Approval chain resolution | ❌ Go |
-| 9 | Approvals ledger | ❌ Go |
-| 10 | Chain satisfaction (dynamic AND-join) | ❌ Go |
+| 6 | Guard *inputs* (`ready`, `sod_ok`, ~~`chain_satisfied`~~) | ⚠️ half since #34 — one of the three is gone; the rest need #35 |
+| 7 | Ready-gate evaluation | ❌ Go (#35) |
+| 8 | Approval chain resolution | ❌ Go — the ladder is domain policy, but the net now consumes it as a *value* rather than an answer |
+| 9 | Approvals ledger | ✅ **declarative since #34** — the pool of colored tokens IS the ledger |
+| 10 | Chain satisfaction (dynamic AND-join) | ✅ **declarative since #34** |
 | 11 | Separation of duties | ⚠️ half — guard declarative, input Go |
-| 12 | Last-resort override | ❌ Go |
-| 13 | Branch selection (partial vs final) | ✅ **declarative since #36** |
-| 14 | Per-transition effect binding | ✅ **declarative since #36** |
-| 15 | Effect ordering | ✅ **declarative since #36** |
-| 16 | Post-commit phase | ✅ **declarative since #36** |
+| 12 | Last-resort override | ⚠️ half since #34 — a declared transition with its own guard and effects; the input is Go |
+| 13 | Branch selection (partial vs final) | ✅ declarative since #36 |
+| 14 | Per-transition effect binding | ✅ declarative since #36 |
+| 15 | Effect ordering | ✅ declarative since #36 |
+| 16 | Post-commit phase | ✅ declarative since #36 |
 | 17 | Status projection | ⚠️ half since #36 — *when* it runs is declared, the place→status map is still host code (#39) |
 | 18 | Multi-instance cascade | ❌ Go — **and incorrect**, see friction 5 |
-| 19 | Guard rejection → error mapping | ❌ Go |
-| 20 | Actor authorization (is this actor even in the chain?) | ❌ Go — added in review, see below |
+| 19 | Guard rejection → error mapping | ❌ Go (#38) |
+| 20 | Actor authorization (is this actor even in the chain?) | ⚠️ half since #34 — `role in chain` is the guard; the directory lookup is Go |
 
-### **Declarative coverage: 50% by concern** (9 full + 2 half of 20) — was 30%
+### **Declarative coverage: 68% by concern** (11 full + 5 half of 20) — was 50%
 
-That crosses the ~50% floor at which adoption starts paying for itself, on one
-feature. The prediction when #36 was filed was "near 50% after #36 **and** #39";
-#36 reached it alone, so the estimate was pessimistic by about one feature.
+The target this document set after #36 was "**above 70%** by concern once #34,
+#35 and #36 have all landed". Two of the three are in and it stands at 68%, so
+the estimate is holding: #35 is what carries concerns 6, 7, 11 and 20, and it is
+the only one of the three still open.
 
-What is left below the line is the part that was always the hard part: the
-dynamic approval join, the guard inputs it depends on, and the multi-instance
-cascade. Those are #34, #35, and #37 — no amount of effect plumbing reaches them.
+Read the shape rather than the number. What #34 moved is not plumbing — it is
+the part that made this workflow hard. The net now holds the ledger, counts it,
+de-duplicates it by role, and refuses an approver the chain does not require.
+What is left below the line is the *inputs* to guards (#35), the multi-instance
+cascade (#37), and error identity (#38).
 
-The shape of the result matters more than either number. What the library covers
-is the **status graph** — real, correct, and the part a host can hand-roll in a
-two-level map. What stays in Go is every concern that made this workflow hard.
+### An unplanned result: the authorization hole closed itself
+
+The first draft of this spike let any non-submitter write a permanent row into
+the append-only ledger; a reviewer caught it and the fix was a hand-written check
+the host had to remember (`roleInChain`, plus a branch in `Approve`).
+
+That class of bug is now **unreachable in this shape**, and not because of the
+check. The approval is a token created *inside* the `Execute` cycle, so appending
+it and firing the transition are one atomic unit: if the net refuses the firing,
+`Execute` returns before saving and the token never existed.
+`TestRolelessActorCannotApprove` and `TestOutOfChainActorCannotApprove` now
+assert an empty pool rather than an empty table, and they pass without the host
+check being load-bearing — it survives only to choose between 403 and 409, which
+is #38's job.
+
+### What #34 cost
+
+Recorded so the entry is not one-sided:
+
+- **The pool is a place, and places are visible.** `approvals` appears in the net
+  and in every diagram, and it has to be excluded from status projection by
+  carrying no `status` metadata. A modeller has to understand that a place can
+  be a pool rather than a state.
+- **A third approve transition.** The last-resort path became its own transition
+  (`approve_last_resort`) rather than a flag inside a satisfaction function. That
+  is more declaration for less Go, but it is more declaration — the +24
+  declarative lines are mostly it.
+- **`require` is the third way a transition can be conditional**, after guards
+  and `from_any` — and `require` cannot be combined with `from_any`, because both
+  resolve which input a firing consumes. That is a rule an author has to learn,
+  and the engine rejects the combination at `NewDefinition` rather than at run
+  time.
 
 ## Friction log
 
 Ranked by how much hand-written Go each one forces.
 
-### 1 — Dynamic-cardinality join ([#34](https://github.com/ehabterra/workflow/issues/34)) · ~43 lines
+### 1 — Dynamic-cardinality join ([#34](https://github.com/ehabterra/workflow/issues/34)) — ✅ **RESOLVED**
 
-`chainSatisfied` in `domain.go` is an AND-join whose arity is `len(chain)`, and
-`chain` is not known until the requisition's value is read. The library joins over
-statically declared input places, so the ledger, the required-set, and the
-satisfaction test all live in Go.
+*Was: ~43 lines, and the single reason the approval brain stayed hand-written.*
 
-The tell is `chainSatisfied`'s `pending` parameter: the caller must ask *"would the
-chain be satisfied if this approval were recorded?"*, because the transition that
-records it is the one whose guard needs the answer. The host simulates the write it
-is about to make.
+`chainSatisfied` was an AND-join whose arity was `len(chain)`, and `chain` was
+not known until the requisition's value was read. The library joined over
+statically declared input places, so the ledger, the required-set and the
+satisfaction test all lived in Go.
 
-**The authorization half.** Because chain membership is a runtime value, *"is this
-actor even a required approver?"* also cannot be a guard. The first draft of this
-spike omitted the check and a reviewer caught it: any non-submitter — including an
-actor holding no role at all, or one whose role is outside the required chain —
-could write a permanent row into the append-only ledger and audit log. It could not
-forge an approval (an out-of-chain role never satisfies the join, so no
-unauthorized requisition can be approved), but the junk entry is permanent in an
-append-only table.
+All three are now in the definition. `approvals` is a place holding one colored
+token per approval; `approve_final` declares:
 
-`roleInChain` plus the check in `Approve` fixes it, and
-`TestRolelessActorCannotApprove` / `TestOutOfChainActorCannotApprove` pin it. A
-join over **role-tagged tokens** would subsume both halves: only a token carrying a
-required role could enter the place, so membership would be structural rather than
-a check the host has to remember to write.
+```yaml
+require:
+  - place: approvals
+    where: "token.role in chain"     # only chain members count
+    distinct: role                   # two approvals from one role are one
+    count: "len(chain)"              # resolved at fire time
+```
 
-### 2 — Guards cannot query ([#35](https://github.com/ehabterra/workflow/issues/35)) · ~40 lines, plus a race
+The tell is gone with it. `chainSatisfied` took a `pending` parameter because the
+caller had to ask *"would the chain be satisfied IF this approval were
+recorded?"* — the transition that records the approval was the one whose guard
+needed the answer. Now the approval is a token, the host appends it, and the net
+answers a question about the state that actually exists.
 
-Every guard in `workflow.yaml` reads a boolean the host pre-computed: `ready`,
-`sod_ok`, `chain_satisfied`. None of them can be computed by the guard, because
-`envBuilder` receives an `Event` and an `Event` has no transaction.
+**The authorization half** is subsumed as predicted: `where` means an
+out-of-chain approval can never count toward the join, and `approve_partial`'s
+`role in chain` guard refuses to record one at all. See *An unplanned result*
+above for why this is now structural rather than a check.
 
-The consequence is not just volume. `Approve` does its entire phase-1 computation
-**outside** the transaction, then fires. Between the read and the fire, another
-approver can record an approval — and the guard will happily evaluate a
-`chain_satisfied` that was true a moment ago. Optimistic concurrency catches a
-concurrent *save* on the same instance, but not a stale *decision input* read
-before the cycle began. Real systems close this with an in-transaction re-check;
-here there is nowhere to put one.
+**What it did not solve.** `chain` still arrives from the host via `SetContext`,
+read before the transaction opens — so the *value* the join counts against can
+still be stale. That is #35, and #34 does not touch it.
+
+### 2 — Guards cannot query ([#35](https://github.com/ehabterra/workflow/issues/35)) · ~37 lines, plus a race — **now the top item**
+
+Every guard in `workflow.yaml` still reads a boolean or a value the host
+pre-computed: `ready`, `sod_ok`, `chain`. None can be computed by the guard,
+because `envBuilder` receives an `Event` and an `Event` has no transaction.
+
+#34 changed the *shape* of this problem without solving it. The satisfaction
+test is no longer a pre-computed answer — the net works it out from tokens it
+holds, under the same lock as the firing, so the ledger half of the race is
+closed. What remains is the *inputs*: `chain` is derived from `req.Amount`, read
+outside the transaction. If the requisition's value changes between the read and
+the fire, the join counts against a chain that is no longer the right one.
+
+That is a narrower race than before (it needs the record to change, not merely a
+concurrent approval), but it is the same defect, and there is still nowhere to
+put an in-transaction re-check.
 
 ### 3 — Effects are opaque closures ([#36](https://github.com/ehabterra/workflow/issues/36)) — ✅ **RESOLVED**
 
@@ -161,9 +217,10 @@ and `approve_final` carry their own effect lists, so the branch that wins fires 
 own effects with no host involvement.
 
 What remains is the implementations themselves, which are host SQL and always were.
-They grew (34 → 142 lines) because a registry entry must extract its params from the
-event and assert the tx type where a closure captured typed values — see the note
-under the headline figures.
+They grew because a registry entry must extract its params from the event and
+assert the tx type where a closure captured typed values. (The 34 → 142 figure
+reported at the time predates the mechanical counting rule; see *Re-running the
+measurement*.)
 
 ### 4 — No post-commit phase ([#36](https://github.com/ehabterra/workflow/issues/36)) — ✅ **RESOLVED**
 
@@ -234,7 +291,7 @@ The transition is removed; declarative lines went 39 → 36.
 **A missing authorization check.** See friction 1 above — concern 20 in the table,
 and ~11 more lines of Go.
 
-Net effect: **11% → 10% by line, 32% → 30% by concern.**
+Net effect on the pre-#36 baseline: **11% → 10% by line, 32% → 30% by concern.**
 
 ## What worked well
 
@@ -244,8 +301,18 @@ Worth recording, because the spike is not an argument that the library is bad:
   state change rolls back with it. The marking stays on `submitted` even though the
   transition fired in memory. This guarantee is real and it is the reason to build
   on this library rather than a bare FSM.
-- **`ApplyAny` for branch routing** is the right primitive for "one action, two
-  outcomes". It is only let down by effects not binding to the chosen transition.
+- **A token created inside `Execute` commits with the firing.** This is what makes
+  the ledger safe: append the approval, fire, and either both land or neither
+  does. It needed no new feature — it falls out of "a fire mutates memory only;
+  persistence is a separate, version-guarded step".
+- **`require` + `ApplyAny` compose exactly as hoped.** Three approve branches in
+  declaration order, each enabled by its own condition, and the host asks for the
+  first that fires. No branch table, no satisfaction test, no switch.
+- **`distinct`** turned out to matter more than the count. Without it the join is
+  satisfiable by one enthusiastic approver, and that is the kind of rule a host
+  forgets to write. `TestPartialApprovalIsNotEnoughEvenTwice` pins it.
+- **`ApplyAny` for branch routing** is the right primitive for "one action, several
+  outcomes".
 - **The self-loop** (`approve_partial`: `submitted -> submitted`) models
   "record progress without advancing" cleanly and needed no special support.
 - **Optimistic concurrency** is on by default and cost nothing to adopt.
@@ -254,19 +321,32 @@ Worth recording, because the spike is not an argument that the library is bad:
 
 ## Re-running the measurement
 
-The counts above are reproducible:
+Declarative lines:
 
 ```bash
 cd internal/spike/approval
-grep -vE '^\s*(#|$)' workflow.yaml | wc -l          # declarative lines
+grep -vE '^\s*(#|$)' workflow.yaml | wc -l
 ```
 
-Go workflow-logic lines are the sum of the function spans listed in the table,
-excluding `App`/`New`/`Create`/`Status`/`Marking` in `app.go` and the
-role/directory/record/schema block in `domain.go`.
+Go workflow-logic lines are the sum of **function spans including each
+function's doc comment**, from `func` line to the closing brace at column 0:
+
+- **orchestration** — `fire`, `Submit`, `Approve`, `Reject`, `Resubmit`,
+  `Revoke`, `classify` in `app.go`, plus `readyGate` in `domain.go`
+- **effect implementations** — `registerEffects`, `resolveTarget`, `statusFor`,
+  `asTx`, `str` in `effects.go`
+- **excluded** — `App`/`New`/`Create`/`Status`/`Marking`/`Ledger` in `app.go`, and
+  the role/directory/record/schema block in `domain.go`
+
+Comparing across releases means measuring both revisions with this rule, not
+comparing against a number quoted in an older PR. The figures reported when #36
+landed (declarative 85, orchestration 167, effects 142) came from the same rule
+applied by hand without counting doc comments; re-measured mechanically the same
+tree gives 85 / 208 / 180.
 
 **Target after [#34](https://github.com/ehabterra/workflow/issues/34),
 [#35](https://github.com/ehabterra/workflow/issues/35), and
 [#36](https://github.com/ehabterra/workflow/issues/36):** the same workflow above
-**70%** by concern. If three features do not get it there, that is the signal to
-stop investing and keep the library scoped to nets that are genuinely parallel.
+**70%** by concern. Two of the three have landed and it stands at **68%**, so the
+target is intact and #35 decides it. If it does not get there, that is the signal
+to stop investing and keep the library scoped to nets that are genuinely parallel.

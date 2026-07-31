@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	_ "embed"
@@ -152,9 +153,15 @@ func (a *App) Submit(ctx context.Context, id, actor string) error {
 	return nil
 }
 
-// Approve is the core of the spike. Everything before the fire is friction 1
-// and 2: the chain, the ledger read, and the authorization check all happen
-// OUTSIDE the transaction, because guards cannot query.
+// Approve is the core of the spike, and since #34 it is mostly the ladder.
+//
+// What it no longer does: read the ledger, work out whether the chain would be
+// satisfied if this approval were recorded, or check that the actor is a
+// required approver. The net answers all three — the approvals are tokens, and
+// the join counts them.
+//
+// What it still does is #35: `sod_ok` is a boolean computed OUTSIDE the
+// transaction, because a guard cannot query the record.
 func (a *App) Approve(ctx context.Context, id, actor string) error {
 	req, err := loadRequisition(ctx, a.db, id)
 	if err != nil {
@@ -163,35 +170,37 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	chain := a.hier.ChainFor(req.Amount)
 	lastResort := lastResortAllowed(a.dir, actor, chain)
 	sodOk := actor != req.Submitter || lastResort
-
 	role := a.dir.RoleOf(actor)
-	// Is this actor even a required approver? Chain membership is a runtime
-	// value, so it cannot be a guard. See COVERAGE.md, friction 1.
-	if !lastResort && (role == "" || !roleInChain(role, chain)) {
-		return ErrForbidden
-	}
-	satisfied, err := chainSatisfied(ctx, a.db, id, chain, role, lastResort)
-	if err != nil {
-		return err
-	}
 
 	err = a.fire(ctx, id, map[string]any{
-		"sod_ok":          sodOk,
-		"chain_satisfied": satisfied,
-		"actor":           actor,
-		"role":            role,
-		"submitter":       req.Submitter,
-		"amount":          req.Amount,
-		"last_resort":     lastResort,
-		"audit_detail":    detailFor(lastResort, satisfied),
+		"sod_ok":      sodOk,
+		"chain":       chain,
+		"actor":       actor,
+		"role":        role,
+		"submitter":   req.Submitter,
+		"amount":      req.Amount,
+		"last_resort": lastResort,
 	}, func(wf *workflow.Workflow) error {
-		// The branch is chosen by the guards, and its effects follow from the
-		// definition — no host-side switch on which one won.
-		_, err := wf.ApplyAny(ctx, "approve_final", "approve_partial")
+		// The approval IS a token. Appending it and firing happen in one atomic
+		// cycle, so an approval the net refuses is never persisted — the
+		// authorization hole a reviewer found in the first draft of this spike
+		// cannot exist in this shape.
+		if _, err := wf.CreateToken("approvals", workflow.TokenData{
+			"role": role, "by": actor, "last_resort": lastResort,
+		}); err != nil {
+			return err
+		}
+		// The branch is chosen by enablement and guards; its effects follow from
+		// the definition. No host-side switch, and no host-side satisfaction test.
+		_, err := wf.ApplyAny(ctx, "approve_last_resort", "approve_final", "approve_partial")
 		return err
 	})
 	if err != nil {
-		if !sodOk {
+		// The library reports only THAT the net refused, so the host re-derives
+		// which rule it was to choose a status code. That is #38 — and it is now
+		// the only reason these values are recomputed here; nothing about the
+		// decision itself depends on them any more.
+		if !sodOk || (!lastResort && !slices.Contains(chain, role)) {
 			return ErrForbidden
 		}
 		return classify(err)
@@ -233,20 +242,6 @@ func (a *App) Revoke(ctx context.Context, id, actor string) error {
 	}))
 }
 
-// detailFor is the audit marker distinguishing a last-resort completion from a
-// normally-satisfied chain. It travels in context because it depends on runtime
-// facts the definition cannot know.
-func detailFor(lastResort, satisfied bool) string {
-	switch {
-	case lastResort:
-		return "last-resort"
-	case satisfied:
-		return "chain-satisfied"
-	default:
-		return "pending"
-	}
-}
-
 // classify maps a library error onto the host's sentinels. Everything that is
 // not a recognised library condition collapses to ErrIllegalTransition,
 // because the library does not report which guard rejected.
@@ -275,4 +270,15 @@ func (a *App) Marking(ctx context.Context, id string) ([]workflow.Place, error) 
 		return nil, err
 	}
 	return wf.CurrentPlaces(), nil
+}
+
+// Ledger returns the approvals recorded so far. Since #34 the ledger is the
+// marking — one colored token per approval in the `approvals` pool — so there
+// is no ledger table to read and no effect that writes one.
+func (a *App) Ledger(ctx context.Context, id string) ([]workflow.Token, error) {
+	wf, err := a.mgr.LoadWorkflow(ctx, id, a.def)
+	if err != nil {
+		return nil, err
+	}
+	return wf.GetTokens("approvals"), nil
 }

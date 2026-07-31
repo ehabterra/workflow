@@ -106,6 +106,22 @@ workflow:
       from: [string]        # Required: Source places
       to: [string]          # Required: Target places
       guard: string         # Optional: Expression guard
+      after: string         # Optional: Timeout duration, e.g. "72h" (host-driven timers)
+      from_any: bool        # Optional: OR-input — enabled by ANY one marked input, consuming only it
+      resets: [string]      # Optional: Places cleared when this transition fires (cancellation region)
+      require:              # Optional: Dynamic-cardinality joins over input places
+        - place: string     #   Required: which input place's tokens are counted
+          count: string|int #   Required: how many are needed (expression, or a literal)
+          where: string     #   Optional: per-token predicate; `token` is the token's data
+          distinct: string  #   Optional: token field the counted tokens must be unique by
+      effects:              # Optional: effects run INSIDE the state-save transaction, in order
+        - name: string
+          params:
+            key: value
+      after_commit:         # Optional: effects run only after the transaction commits (at-least-once)
+        - name: string
+          params:
+            key: value
       metadata:             # Optional: Transition metadata
         key: value
       notes: string         # Optional: Default notes for history

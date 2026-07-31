@@ -45,16 +45,28 @@ func (w *Workflow) coloredTokensAtLocked(places []Place) []Token {
 // moveMarking consumes the tokens at the from places and produces them at the to
 // places, leaving every other place untouched. This is the token-aware
 // replacement for a whole-marking reset: it preserves colored tokens (and their
-// data) as they flow through a transition.
+// data) as they flow through a transition. It returns the colored tokens it
+// consumed, which is what the after-transition event reports as moved.
+//
+// An input place is normally drained entirely. The exception is a place listed
+// in picked — a dynamic-cardinality join (see Transition.SetRequirements) — from
+// which exactly the selected tokens are taken and the REMAINDER IS LEFT BEHIND,
+// in its original order. The indexes in picked address the place's tokens as
+// they stand right now, so the caller must have resolved them under this same
+// lock hold.
 //
 // When a single output place is involved, consumed colored tokens keep their
 // identities (the common linear/batch case). For an AND-split (multiple outputs)
 // each output receives a fresh copy of every consumed token. When no colored
 // tokens are consumed it falls back to boolean presence (one uncolored token per
 // output). Callers must hold w.mu.
-func (w *Workflow) moveMarking(from, to, resets []Place) {
+func (w *Workflow) moveMarking(from, to, resets []Place, picked map[Place][]int) []Token {
 	var carried []Token
 	for _, f := range from {
+		if idx, partial := picked[f]; partial {
+			carried = append(carried, w.takeTokens(f, idx)...)
+			continue
+		}
 		for _, tok := range w.marking.TokensAt(f) {
 			if isColored(tok) {
 				carried = append(carried, tok)
@@ -71,6 +83,47 @@ func (w *Workflow) moveMarking(from, to, resets []Place) {
 		_ = w.marking.RemovePlace(p)
 	}
 	w.produce(to, carried)
+	return carried
+}
+
+// takeTokens removes the tokens at the given indexes from place and returns the
+// colored ones among them, leaving every other token in the place in its
+// original order. Removal goes through the Marking interface (clear, then
+// re-add the survivors) rather than by token ID, because uncolored presence
+// tokens all share the empty ID and could not be told apart by one.
+//
+// Callers must hold w.mu.
+func (w *Workflow) takeTokens(place Place, idx []int) []Token {
+	if len(idx) == 0 {
+		return nil
+	}
+	all := w.marking.TokensAt(place)
+	take := make(map[int]bool, len(idx))
+	for _, i := range idx {
+		take[i] = true
+	}
+
+	var taken, keep []Token
+	for i, tok := range all {
+		if take[i] {
+			taken = append(taken, tok)
+		} else {
+			keep = append(keep, tok)
+		}
+	}
+
+	_ = w.marking.RemovePlace(place) // no-op error when already empty
+	for _, tok := range keep {
+		w.marking.AddToken(place, tok)
+	}
+
+	var carried []Token
+	for _, tok := range taken {
+		if isColored(tok) {
+			carried = append(carried, tok)
+		}
+	}
+	return carried
 }
 
 // produce places carried tokens at each output place (see moveMarking). When the
@@ -167,6 +220,14 @@ func (w *Workflow) ApplyTransitionForToken(ctx context.Context, transitionName s
 	}
 	if targetTransition == nil {
 		return fmt.Errorf("%w: %s", ErrTransitionNotFound, transitionName)
+	}
+
+	// A dynamic-cardinality join already decides which tokens a firing consumes;
+	// naming one here would be a second, conflicting selector. Reject it rather
+	// than silently letting one win.
+	if len(targetTransition.requires) > 0 {
+		return fmt.Errorf("%w: transition %s declares require, which selects the tokens to consume; per-token firing is not available for it",
+			ErrInvalidTransition, transitionName)
 	}
 
 	from := targetTransition.From()

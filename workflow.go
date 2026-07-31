@@ -502,6 +502,13 @@ func (w *Workflow) CanTransitionWithContext(ctx context.Context, transitionName 
 		return ErrNotEnabled
 	}
 
+	// Dynamic-cardinality joins: the marked-place check above is structural, so a
+	// transition that waits for a runtime-resolved number of tokens is only
+	// really enabled once its requirements are satisfied too.
+	if err := w.requirementsMet(targetTransition); err != nil {
+		return err
+	}
+
 	// Validate guard constraints
 	tokens := w.coloredTokensAt(consumeFrom)
 	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), tokens, w)
@@ -633,6 +640,13 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return ErrNotEnabled
 	}
 
+	// Dynamic-cardinality joins (see CanTransitionWithContext). This is the
+	// cheap pre-lock answer; it is re-resolved under the write lock below, which
+	// is also where the tokens to consume are selected.
+	if err := w.requirementsMet(targetTransition); err != nil {
+		return err
+	}
+
 	// Validate guard constraints
 	guardTokens := w.coloredTokensAt(consumeFrom)
 	event := NewGuardEvent(ctx, targetTransition, currentPlaces, targetTransition.To(), guardTokens, w)
@@ -683,16 +697,21 @@ func (w *Workflow) ApplyTransitionWithContext(ctx context.Context, transitionNam
 		return ErrNotEnabled
 	}
 
-	// The pre-lock token snapshot may now be stale — the re-resolved consume
-	// set can differ from the pre-lock pick — so refresh it while the tokens
-	// are still at the inputs: the after-event must report the tokens
-	// actually consumed.
-	moved = w.coloredTokensAtLocked(from)
+	// Re-resolve the requirements under the write lock and, with them, exactly
+	// which tokens this firing consumes. The pre-lock answer is not good enough:
+	// a concurrent approval may have landed in the meantime, which would make a
+	// stale index set consume the wrong tokens.
+	picked, err := w.selectRequirementsLocked(targetTransition)
+	if err != nil {
+		return err
+	}
 
 	// Move tokens from the input places to the output places (clearing any
 	// reset places), preserving colored token data and leaving unrelated
-	// places untouched.
-	w.moveMarking(from, to, targetTransition.Resets())
+	// places untouched. The consumed colored tokens replace the pre-lock
+	// snapshot, which may be stale — the after-event must report the tokens
+	// actually consumed.
+	moved = w.moveMarking(from, to, targetTransition.Resets(), picked)
 	// Log the firing while still holding the lock, before the after-event runs
 	// listeners: a listener that errors aborts the caller's function, so
 	// Execute never reaches the drain and the log is discarded with the attempt.
@@ -749,6 +768,14 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 				}
 			}
 			if matches {
+				// A transition whose dynamic-cardinality join is not satisfied
+				// is not enabled; keep looking for a sibling that is.
+				if _, rerr := w.selectRequirementsLocked(&t); rerr != nil {
+					if errors.Is(rerr, ErrNotEnabled) {
+						continue
+					}
+					return rerr
+				}
 				from = consumed
 				transition = &t
 				break
@@ -773,24 +800,23 @@ func (w *Workflow) ApplyWithContext(ctx context.Context, targetPlaces []Place) e
 
 	// Re-verify enablement under the write lock (see ApplyTransitionWithContext):
 	// a concurrent firing may have consumed the input places while the lock was
-	// released for the before-listeners. The OR-input consume set is
-	// re-resolved for the same reason.
+	// released for the before-listeners. The OR-input consume set and the
+	// dynamic-cardinality selection are re-resolved for the same reason.
 	var enabled bool
 	from, enabled = transition.consumeSet(w.marking.HasPlace)
 	if !enabled {
 		return ErrNotEnabled
 	}
-
-	// The pre-lock token snapshot may now be stale — the re-resolved consume
-	// set can differ from the pre-lock pick — so refresh it while the tokens
-	// are still at the inputs: the after-event must report the tokens
-	// actually consumed.
-	moved = w.coloredTokensAtLocked(from)
+	picked, err := w.selectRequirementsLocked(transition)
+	if err != nil {
+		return err
+	}
 
 	// Move tokens from the input places to the output places (clearing any
 	// reset places), preserving colored token data and leaving unrelated
-	// places untouched.
-	w.moveMarking(from, targetPlaces, transition.Resets())
+	// places untouched. The consumed colored tokens replace the pre-lock
+	// snapshot, which may be stale.
+	moved = w.moveMarking(from, targetPlaces, transition.Resets(), picked)
 	w.recordFired(transition.Name(), from, w.currentPlacesLocked())
 
 	// Fire after transition event (unlock before calling listeners)
@@ -847,13 +873,23 @@ func (w *Workflow) EnabledTransitions() ([]Transition, error) {
 	currentPlaces := w.marking.Places()
 
 	// Check each transition: all inputs marked (AND-join) or any one
-	// (OR-input / FromAny).
+	// (OR-input / FromAny), then any dynamic-cardinality join over those
+	// inputs. An unsatisfied requirement just means "not enabled yet"; a
+	// requirement that cannot be evaluated at all is a definition fault and is
+	// reported rather than silently hiding the transition.
 	for _, trans := range w.definition.Transitions {
 		if _, ok := trans.consumeSet(func(p Place) bool {
 			return slices.Contains(currentPlaces, p)
-		}); ok {
-			enabled = append(enabled, trans)
+		}); !ok {
+			continue
 		}
+		if _, err := w.selectRequirementsLocked(&trans); err != nil {
+			if errors.Is(err, ErrNotEnabled) {
+				continue
+			}
+			return nil, err
+		}
+		enabled = append(enabled, trans)
 	}
 	return enabled, nil
 }
