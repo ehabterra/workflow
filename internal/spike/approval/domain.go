@@ -22,7 +22,6 @@ import (
 	"database/sql"
 	"fmt"
 	"maps"
-	"slices"
 	"sort"
 )
 
@@ -141,13 +140,6 @@ CREATE TABLE IF NOT EXISTS requisition_lines (
 	cost_code TEXT NOT NULL DEFAULT '',
 	amount    REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS approvals (
-	seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-	req_id      TEXT NOT NULL,
-	actor       TEXT NOT NULL,
-	role        TEXT NOT NULL,
-	last_resort INTEGER NOT NULL DEFAULT 0
-);
 CREATE TABLE IF NOT EXISTS audit_log (
 	seq    INTEGER PRIMARY KEY AUTOINCREMENT,
 	req_id TEXT NOT NULL,
@@ -206,60 +198,23 @@ func readyGate(r Requisition) bool {
 	return true
 }
 
-// approvedRoles returns the set of roles that have already approved req.
-func approvedRoles(ctx context.Context, q queryer, reqID string) (map[string]bool, error) {
-	rows, err := q.QueryContext(ctx, `SELECT role FROM approvals WHERE req_id = ?`, reqID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	got := map[string]bool{}
-	for rows.Next() {
-		var role string
-		if err := rows.Scan(&role); err != nil {
-			return nil, err
-		}
-		got[role] = true
-	}
-	return got, rows.Err()
-}
-
-// chainSatisfied reports whether every role in chain has approved once the
-// pending role is counted, treating a last-resort approval as satisfying the
-// whole remainder. This is the dynamic-cardinality AND-join the net cannot
-// express: the number of tokens that must arrive is len(chain), and len(chain)
-// is not known until the requisition's value is read.
+// The approvals ledger, the "have all required roles approved?" test, and the
+// "is this actor even a required approver?" check all used to live here — some
+// 55 lines of Go, including a function that had to SIMULATE the write it was
+// about to make, because the transition that records an approval is the one
+// whose guard needed the answer.
 //
-// The `pending` parameter is the tell. The caller has to ask "would the chain
-// be satisfied IF this approval were recorded?", because the transition that
-// records it is the one whose guard needs the answer — and the guard cannot
-// query. So the host simulates the write it is about to make.
-func chainSatisfied(ctx context.Context, q queryer, reqID string, chain []string, pending string, lastResort bool) (bool, error) {
-	if lastResort {
-		return true, nil
-	}
-	got, err := approvedRoles(ctx, q, reqID)
-	if err != nil {
-		return false, err
-	}
-	got[pending] = true
-	for _, role := range chain {
-		if !got[role] {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-// roleInChain reports whether role is one of the roles the chain requires.
+// All of it is gone. Since #34 the approvals are colored tokens in the net's
+// `approvals` pool and the definition counts them itself:
 //
-// This is an authorization check the net cannot make. The chain is a runtime
-// value, so "is this actor even a required approver?" cannot be a guard — and
-// without it any non-submitter can write a row into the append-only ledger.
-// A dynamic-cardinality join over role-tagged tokens (#34) would subsume it.
-func roleInChain(role string, chain []string) bool {
-	return slices.Contains(chain, role)
-}
+//	require:
+//	  - place: approvals
+//	    where: "token.role in chain"
+//	    distinct: role
+//	    count: "len(chain)"
+//
+// What remains below is genuine domain code — the ladder that produces the
+// chain, and the escape hatch for a chain nobody can satisfy.
 
 // lastResortAllowed reports whether actor may complete the chain alone. It is
 // the escape hatch for a chain containing a role nobody holds — without it

@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Dynamic-cardinality joins** (issue #34) — a transition can now be enabled by
+  a token **count resolved at fire time**, not fixed by the arc structure. The
+  classic AND-join asks only "is this place marked?", so the number of things a
+  transition waits for is a property of the drawing; the recurring business
+  shape — an approval chain whose length comes from the record's value — is not.
+  `Transition.SetRequirements` (YAML `require:`) declares, per input place, a
+  `count` expression, an optional `where` predicate selecting which tokens
+  count, and an optional `distinct` field so two tokens carrying the same value
+  count once. Both expressions are compiled at definition-build time (a
+  malformed one fails the load, not the first firing of a rare branch) and are
+  evaluated against the workflow context plus the place's tokens.
+  A requirement is both an enablement condition **and a token selector**: firing
+  consumes exactly the tokens it selected and **leaves the remainder in the
+  place**, where an ordinary input place is drained. Selection is deterministic
+  (the place's own order) and is re-resolved under the write lock, so concurrent
+  firings split a pool instead of double-consuming it. An unmet requirement is
+  `ErrNotEnabled` — so an `ApplyAny` candidate simply loses to its sibling —
+  while a requirement that cannot be *evaluated* is a loud error rather than a
+  silent skip.
+  Two combinations are rejected at `NewDefinition`, because each would put two
+  competing token selectors on one transition: `require` with `from_any`, and
+  two requirements on the same place. A requirement's place must be one of the
+  transition's own inputs. Per-token firing (`ApplyTransitionForToken`) is
+  likewise rejected on a transition with requirements — the requirement *is* the
+  selection. Reset arcs are unchanged and still clear whole places.
+  Requirements are part of `Definition.Fingerprint()` and appear in
+  `Diagram()` on the transition node (the arity is an expression, not a number
+  of arcs, so a diagram that omitted it would misstate when the transition can
+  fire). **Fingerprint compatibility:** like the effects segment, the
+  requirements segment is written only when a transition declares one, so
+  definitions written before this feature fingerprint exactly as they did.
+  Re-measured on `internal/spike/approval`: declarative coverage **50% → 68% by
+  concern**, **18% → 25% by line**, and this time **Go shrank by 67 lines** —
+  the ledger read, the chain-satisfaction test (including the parameter that
+  forced the host to simulate the write it was about to make), the
+  chain-membership check, and the effect that appended to the ledger table are
+  all deleted, not relocated.
 - **Declarative transition effects** (issue #36) — a transition can now declare
   what happens when it fires, not just that it may. `Transition.SetEffects`
   (YAML `effects:`) binds named, ordered effects that run **inside the

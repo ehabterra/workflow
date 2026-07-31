@@ -283,6 +283,12 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
 		if d, ok := t.TimeoutAfter(); ok {
 			label = "⏱ " + label + "<br/>after " + escapeMermaidLabel(d.String())
 		}
+		// A dynamic-cardinality join is invisible in the arc structure — the
+		// arity is an expression, not a number of arcs — so it has to be on the
+		// node or the diagram lies about when the transition can fire.
+		for _, r := range t.Requirements() {
+			label += "<br/>❰ " + escapeMermaidLabel(r.String()) + " ❱"
+		}
 		fmt.Fprintf(&b, "    %s[\"%s\"]\n    class %s %s\n", id, label, id, class)
 
 		// Fork/join gateway diamonds with the BPMN symbols: + marks the

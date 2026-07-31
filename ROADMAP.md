@@ -257,10 +257,14 @@ feature, not a doc item.)
 
 Formerly M3–M8. None is deleted; none proceeds without a dogfood-proven need.
 
-- **Weighted transitions & advanced sync** (N-token thresholds, OR/XOR-join,
-  discriminator, cancellation regions). Note: per-token AND-join is impossible today
-  (`ApplyTransitionForToken` is single-input) — promote this specific gap if the dogfood
-  batch component hits it.
+- **Weighted transitions & advanced sync** (OR/XOR-join, discriminator,
+  cancellation regions). **N-token thresholds are no longer parked** — they
+  shipped as dynamic-cardinality joins (`require:`, issue #34), which resolve the
+  count at fire time from an expression rather than fixing it in the arcs, and
+  consume exactly the tokens they select. Note: per-token AND-join is still
+  impossible (`ApplyTransitionForToken` is single-input, and is rejected outright
+  on a transition that declares `require`, since the requirement already selects
+  the tokens).
 - **Static validation / `workflow lint`** (reachability, deadlock detection) — also the
   precondition for ever claiming "deadlock-free" in marketing.
 - **HCPN / nested workflows**; **compensation/saga**; **message correlation** beyond

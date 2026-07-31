@@ -67,6 +67,18 @@ func countRows(t *testing.T, a *App, ctx context.Context, query string, args ...
 	return n
 }
 
+// ledgerSize counts the approvals recorded so far. Since #34 the ledger is the
+// marking, so this reads the net rather than a table — there is no approvals
+// table any more.
+func ledgerSize(t *testing.T, a *App, ctx context.Context, id string) int {
+	t.Helper()
+	toks, err := a.Ledger(ctx, id)
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	return len(toks)
+}
+
 // TestChainForThresholds pins the ladder: the chain grows with value, which is
 // exactly why the number of required approvals is not knowable at definition
 // time.
@@ -127,17 +139,48 @@ func TestTwoStepChain(t *testing.T) {
 		t.Fatalf("first approve: %v", err)
 	}
 	mustStatus(t, a, ctx, "r2", "Submitted") // still pending
-	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'r2'`); n != 1 {
-		t.Errorf("ledger rows after first approval = %d, want 1", n)
+	if n := ledgerSize(t, a, ctx, "r2"); n != 1 {
+		t.Errorf("pool after first approval = %d tokens, want 1", n)
 	}
 
 	if err := a.Approve(ctx, "r2", "casey"); err != nil {
 		t.Fatalf("second approve: %v", err)
 	}
 	mustStatus(t, a, ctx, "r2", "Approved")
-	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'r2'`); n != 2 {
-		t.Errorf("ledger rows after second approval = %d, want 2", n)
+	// The join consumed both approvals into `approved` and the reset arc cleared
+	// what was left, so the pool is empty — the ledger did its job and closed.
+	if n := ledgerSize(t, a, ctx, "r2"); n != 0 {
+		t.Errorf("pool after the chain closed = %d tokens, want 0", n)
 	}
+}
+
+// TestPartialApprovalIsNotEnoughEvenTwice: the join counts DISTINCT roles, so
+// the same approver signing twice does not advance the requisition. Before #34
+// this was a de-duplication the host had to implement over its own ledger.
+func TestPartialApprovalIsNotEnoughEvenTwice(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "rd", "REQ-RD", "dana", 20_000, []Line{costed("l1", "CC-200", 20_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "rd", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	// sam and rae both hold site_manager — two approvals, one role.
+	if err := a.Approve(ctx, "rd", "sam"); err != nil {
+		t.Fatalf("first approve: %v", err)
+	}
+	if err := a.Approve(ctx, "rd", "rae"); err != nil {
+		t.Fatalf("second approve: %v", err)
+	}
+	mustStatus(t, a, ctx, "rd", "Submitted")
+	if n := ledgerSize(t, a, ctx, "rd"); n != 2 {
+		t.Errorf("pool = %d tokens, want 2 (both recorded, one role)", n)
+	}
+
+	if err := a.Approve(ctx, "rd", "casey"); err != nil {
+		t.Fatalf("third approve: %v", err)
+	}
+	mustStatus(t, a, ctx, "rd", "Approved")
 }
 
 // TestReadyGateBlocksSubmit: a line without a cost code blocks submission, and
@@ -171,8 +214,12 @@ func TestSeparationOfDuties(t *testing.T) {
 }
 
 // TestRolelessActorCannotApprove: an actor holding no role at all must not be
-// able to write into the append-only ledger. The net cannot make this check —
-// chain membership is a runtime value — so the host makes it.
+// able to write into the ledger.
+//
+// Since #34 the NET refuses this — `role in chain` is a guard over a runtime
+// value the definition can now reason about — and because the approval token is
+// created inside the same atomic cycle as the firing, a refused approval leaves
+// nothing behind at all. The host check that remains only picks the status code.
 func TestRolelessActorCannotApprove(t *testing.T) {
 	a, ctx := newApp(t)
 	if err := a.Create(ctx, "ra", "REQ-RA", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
@@ -184,8 +231,8 @@ func TestRolelessActorCannotApprove(t *testing.T) {
 	if err := a.Approve(ctx, "ra", "nobody"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("approve err = %v, want ErrForbidden", err)
 	}
-	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'ra'`); n != 0 {
-		t.Errorf("ledger rows = %d, want 0 — a roleless actor wrote to the ledger", n)
+	if n := ledgerSize(t, a, ctx, "ra"); n != 0 {
+		t.Errorf("pool = %d tokens, want 0 — a roleless actor left a trace", n)
 	}
 	mustStatus(t, a, ctx, "ra", "Submitted")
 }
@@ -204,8 +251,8 @@ func TestOutOfChainActorCannotApprove(t *testing.T) {
 	if err := a.Approve(ctx, "rb", "ollie"); !errors.Is(err, ErrForbidden) { // ollie is ceo
 		t.Fatalf("approve err = %v, want ErrForbidden", err)
 	}
-	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'rb'`); n != 0 {
-		t.Errorf("ledger rows = %d, want 0", n)
+	if n := ledgerSize(t, a, ctx, "rb"); n != 0 {
+		t.Errorf("pool = %d tokens, want 0", n)
 	}
 	// The legitimate approver still works.
 	if err := a.Approve(ctx, "rb", "sam"); err != nil {
@@ -261,10 +308,10 @@ func TestDeclaredEffectsFireInOrder(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	// approve_final declares: record_approval, project_status, supersede_prior,
-	// stamp_approver, audit, notify, outbox — all of which must have landed.
-	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM approvals WHERE req_id = 'rk'`); n != 1 {
-		t.Errorf("ledger rows = %d, want 1", n)
+	// approve_final declares: project_status, supersede_prior, stamp_approver,
+	// audit, notify, outbox — all of which must have landed.
+	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM audit_log WHERE req_id = 'rk'`); n != 2 {
+		t.Errorf("audit rows = %d, want 2 (submit + approve)", n)
 	}
 	if n := countRows(t, a, ctx, `SELECT COUNT(*) FROM outbox WHERE req_id = 'rk'`); n != 1 {
 		t.Errorf("outbox rows = %d, want 1", n)
@@ -305,6 +352,38 @@ func TestAdminLastResort(t *testing.T) {
 	if detail != "last-resort" {
 		t.Errorf("audit detail = %q, want %q", detail, "last-resort")
 	}
+}
+
+// TestAdminSubmitterCannotSelfApprove: the last-resort hatch is not a way around
+// separation of duties.
+//
+// `admin` submits a 200k requisition, whose chain needs a `director` nobody
+// holds — so the hatch IS available to them. It must still be refused, because
+// they are the submitter. Caught by review on #49: the host used to compute
+// `sod_ok` as `actor != submitter || lastResort` and `approve_last_resort`
+// carried no `sod_ok` guard, so both halves said yes.
+func TestAdminSubmitterCannotSelfApprove(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "sa", "REQ-SA", "admin", 200_000, []Line{costed("l1", "CC-900", 200_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "sa", "admin"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := a.Approve(ctx, "sa", "admin"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("approve err = %v, want ErrForbidden", err)
+	}
+	mustStatus(t, a, ctx, "sa", "Submitted")
+	if n := ledgerSize(t, a, ctx, "sa"); n != 0 {
+		t.Errorf("pool = %d tokens, want 0 — a refused approval left a trace", n)
+	}
+
+	// A different admin, same requisition, still works: the hatch is intact.
+	a.dir.admins["auditor"] = true
+	if err := a.Approve(ctx, "sa", "auditor"); err != nil {
+		t.Fatalf("last-resort by a non-submitting admin: %v", err)
+	}
+	mustStatus(t, a, ctx, "sa", "Approved")
 }
 
 // TestRejectResubmitCycle exercises the loop back to draft.
@@ -348,8 +427,8 @@ func TestEffectsAreAtomic(t *testing.T) {
 	if err := a.Submit(ctx, "r8", "dana"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	// Drop the ledger table so the approval effect fails mid-transaction.
-	if _, err := a.db.ExecContext(ctx, `DROP TABLE approvals`); err != nil {
+	// Drop the audit table so a declared effect fails mid-transaction.
+	if _, err := a.db.ExecContext(ctx, `DROP TABLE audit_log`); err != nil {
 		t.Fatalf("drop: %v", err)
 	}
 	if err := a.Approve(ctx, "r8", "sam"); err == nil {

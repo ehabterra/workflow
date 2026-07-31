@@ -46,15 +46,12 @@ func (a *App) registerEffects() (*workflow.EffectRegistry, error) {
 		if err != nil {
 			return err
 		}
-		// A declared param wins; otherwise fall back to what the firing knows.
-		// detailFor is the last-resort marker, which only the context carries.
-		detail := str(ev.Params["detail"])
-		if detail == "" {
-			detail = str(ev.Context["audit_detail"])
-		}
+		// The detail is a declared param throughout — including the last-resort
+		// marker, which used to travel in context because the host had to work
+		// out which branch it was about to take. The branch declares its own now.
 		_, err = sqlTx.ExecContext(ctx,
 			`INSERT INTO audit_log (req_id, action, detail, actor) VALUES (?, ?, ?, ?)`,
-			ev.WorkflowID, str(ev.Params["action"]), detail, str(ev.Context["actor"]))
+			ev.WorkflowID, str(ev.Params["action"]), str(ev.Params["detail"]), str(ev.Context["actor"]))
 		return err
 	}); err != nil {
 		return nil, err
@@ -93,25 +90,12 @@ func (a *App) registerEffects() (*workflow.EffectRegistry, error) {
 		return nil, err
 	}
 
-	// record_approval appends to the ledger. Still host code: the net cannot
-	// hold the ledger until a dynamic-cardinality join exists (#34), which
-	// would make the approval a token and this effect disappear.
-	if err := reg.Register("record_approval", func(ctx context.Context, tx any, ev workflow.EffectEvent) error {
-		sqlTx, err := asTx(tx)
-		if err != nil {
-			return err
-		}
-		lastResort := 0
-		if ev.Context["last_resort"] == true {
-			lastResort = 1
-		}
-		_, err = sqlTx.ExecContext(ctx,
-			`INSERT INTO approvals (req_id, actor, role, last_resort) VALUES (?, ?, ?, ?)`,
-			ev.WorkflowID, str(ev.Context["actor"]), str(ev.Context["role"]), lastResort)
-		return err
-	}); err != nil {
-		return nil, err
-	}
+	// There was a `record_approval` effect here, appending a row to an approvals
+	// table. #34 deleted it: an approval is a colored token in the net's pool
+	// now, written by the same atomic save as the marking, and the join counts
+	// the tokens directly. The prediction under friction 1 was that a
+	// dynamic-cardinality join "would make the approval a token and this effect
+	// disappear" — it did.
 
 	if err := reg.Register("stamp_approver", func(ctx context.Context, tx any, ev workflow.EffectEvent) error {
 		sqlTx, err := asTx(tx)
