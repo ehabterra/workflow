@@ -57,10 +57,17 @@ workflow:
     # An admin may complete a chain that contains a role nobody holds — without
     # it such a requisition is unapprovable. It is tried FIRST because it is the
     # narrowest condition.
+    #
+    # It carries `sod_ok` like every other approve branch. An earlier version did
+    # not, and the host exempted last-resort from separation of duties on top of
+    # that, so an admin could approve their own requisition. Being able to break a
+    # deadlocked chain is not a licence to sign off on your own record — and with
+    # the rule on all three branches, the definition says so rather than leaving
+    # it to a boolean the host computes.
     - name: approve_last_resort
       from: [submitted, approvals]
       to: [approved]
-      guard: "last_resort"
+      guard: "last_resort && sod_ok"
       resets: [approvals]
       effects:
         - name: project_status

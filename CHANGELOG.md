@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requirements segment is written only when a transition declares one, so
   definitions written before this feature fingerprint exactly as they did.
   Re-measured on `internal/spike/approval`: declarative coverage **50% → 68% by
-  concern**, **18% → 26% by line**, and this time **Go shrank by 73 lines** —
+  concern**, **18% → 25% by line**, and this time **Go shrank by 67 lines** —
   the ledger read, the chain-satisfaction test (including the parameter that
   forced the host to simulate the write it was about to make), the
   chain-membership check, and the effect that appended to the ledger table are

@@ -169,7 +169,13 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	}
 	chain := a.hier.ChainFor(req.Amount)
 	lastResort := lastResortAllowed(a.dir, actor, chain)
-	sodOk := actor != req.Submitter || lastResort
+	// Separation of duties applies to EVERY approve branch, last-resort included.
+	// This used to read `actor != req.Submitter || lastResort`, exempting the
+	// hatch — which let an admin approve a requisition they had submitted
+	// themselves, since `approve_last_resort` needs no role. The hatch exists for
+	// a chain nobody can satisfy; that is not a reason to let someone sign off on
+	// their own record. TestAdminSubmitterCannotSelfApprove pins it.
+	sodOk := actor != req.Submitter
 	role := a.dir.RoleOf(actor)
 
 	err = a.fire(ctx, id, map[string]any{

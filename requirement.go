@@ -149,12 +149,16 @@ func (r Requirement) record() string {
 // Selection is deterministic: matching tokens are taken in the order the place
 // holds them, so two evaluations of the same marking consume the same tokens.
 func (r Requirement) selectTokens(tokens []Token, ctxData map[string]any) (picked []int, met bool, err error) {
-	need, err := r.requiredCount(tokens, ctxData)
+	// One environment for both expressions: this runs on every enablement probe,
+	// and building it copies the context and every token's data. The count is
+	// evaluated first, before `matches` starts writing `token` into the map, so
+	// the count expression can never see a per-token value.
+	env := requirementEnv(tokens, ctxData)
+	need, err := r.requiredCount(env)
 	if err != nil {
 		return nil, false, err
 	}
 
-	env := requirementEnv(tokens, ctxData)
 	seen := make(map[string]bool)
 	for i := range tokens {
 		if len(picked) == need {
@@ -213,9 +217,10 @@ func (r Requirement) matches(tok Token, env map[string]any) (bool, error) {
 	return b, nil
 }
 
-// requiredCount evaluates the count expression to a non-negative integer.
-func (r Requirement) requiredCount(tokens []Token, ctxData map[string]any) (int, error) {
-	out, err := expr.Run(r.countPrg, requirementEnv(tokens, ctxData))
+// requiredCount evaluates the count expression to a non-negative integer against
+// the environment prepared by selectTokens.
+func (r Requirement) requiredCount(env map[string]any) (int, error) {
+	out, err := expr.Run(r.countPrg, env)
 	if err != nil {
 		return 0, fmt.Errorf("%w: requirement on place %q: count %q: %w",
 			ErrInvalidExpression, r.spec.Place, r.spec.Count, err)

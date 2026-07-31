@@ -42,16 +42,16 @@ exist with or without the library, and are excluded from both sides.
 | | after #36 | after #34 |
 |---|---|---|
 | **Declarative** (`workflow.yaml`) | 85 | **109** |
-| **Go — orchestration** (branching, ledger, satisfaction, binding) | 208 | **151** |
+| **Go — orchestration** (branching, ledger, satisfaction, binding) | 208 | **157** |
 | **Go — effect implementations** (the SQL itself) | 180 | **164** |
-| **Total Go** | 388 | **315** |
+| **Total Go** | 388 | **321** |
 
-### **Declarative coverage: 26% by line** (was 18%)
+### **Declarative coverage: 25% by line** (was 18%)
 
 Counting orchestration only — the sequencing decisions, excluding the SQL that
-would exist under any design — it is **42%**, up from 29%.
+would exist under any design — it is **41%**, up from 29%.
 
-The headline this time is that **Go went down**, by 73 lines. #36 relocated
+The headline this time is that **Go went down**, by 67 lines. #36 relocated
 decisions from Go into the definition without deleting much; #34 deleted code
 outright. Three functions and an entire effect are simply gone:
 
@@ -292,6 +292,29 @@ The transition is removed; declarative lines went 39 → 36.
 and ~11 more lines of Go.
 
 Net effect on the pre-#36 baseline: **11% → 10% by line, 32% → 30% by concern.**
+
+### Round two, on #34: separation of duties had a hole
+
+Review found that an **admin could approve a requisition they had submitted
+themselves**. Two things said yes independently: the host computed `sod_ok` as
+`actor != submitter || lastResort`, exempting the escape hatch, and
+`approve_last_resort` carried no `sod_ok` guard at all, because "last resort"
+felt like its own justification. Being able to break a chain nobody can satisfy
+is not a licence to sign off on your own record.
+
+Both halves are fixed. `sod_ok` is now plainly `actor != req.Submitter`, and all
+three approve branches carry it — so the rule is uniform and stated in the
+definition rather than assembled from a boolean the host computes.
+`TestAdminSubmitterCannotSelfApprove` pins it, including that a *different* admin
+can still use the hatch.
+
+Worth recording for the same reason as the first round: this **predates #34** —
+the `|| lastResort` term is in the original spike — and neither the tests nor the
+earlier review caught it. That is the second real defect found by review in a net
+small enough to read in one sitting, which argues for
+[#42](https://github.com/ehabterra/workflow/issues/42) better than any argument
+about it does. Orchestration went 151 → 157 lines, because the fix is worth
+explaining in place.
 
 ## What worked well
 

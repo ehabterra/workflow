@@ -354,6 +354,38 @@ func TestAdminLastResort(t *testing.T) {
 	}
 }
 
+// TestAdminSubmitterCannotSelfApprove: the last-resort hatch is not a way around
+// separation of duties.
+//
+// `admin` submits a 200k requisition, whose chain needs a `director` nobody
+// holds — so the hatch IS available to them. It must still be refused, because
+// they are the submitter. Caught by review on #49: the host used to compute
+// `sod_ok` as `actor != submitter || lastResort` and `approve_last_resort`
+// carried no `sod_ok` guard, so both halves said yes.
+func TestAdminSubmitterCannotSelfApprove(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "sa", "REQ-SA", "admin", 200_000, []Line{costed("l1", "CC-900", 200_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "sa", "admin"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := a.Approve(ctx, "sa", "admin"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("approve err = %v, want ErrForbidden", err)
+	}
+	mustStatus(t, a, ctx, "sa", "Submitted")
+	if n := ledgerSize(t, a, ctx, "sa"); n != 0 {
+		t.Errorf("pool = %d tokens, want 0 — a refused approval left a trace", n)
+	}
+
+	// A different admin, same requisition, still works: the hatch is intact.
+	a.dir.admins["auditor"] = true
+	if err := a.Approve(ctx, "sa", "auditor"); err != nil {
+		t.Fatalf("last-resort by a non-submitting admin: %v", err)
+	}
+	mustStatus(t, a, ctx, "sa", "Approved")
+}
+
 // TestRejectResubmitCycle exercises the loop back to draft.
 func TestRejectResubmitCycle(t *testing.T) {
 	a, ctx := newApp(t)
