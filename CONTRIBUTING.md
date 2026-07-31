@@ -33,8 +33,14 @@ Requirements:
    go test -race ./...
    ```
    For changes to an example module, also build it: `(cd examples/<name> && go build ./... && go vet ./...)`.
-5. Add a `CHANGELOG.md` entry under **[Unreleased]**.
-6. Open a pull request and fill in the template.
+5. **If the change is a user-visible feature, update `examples/feature_tour/`** —
+   the one example that must stay current. Use the feature in its
+   `workflow.yaml`, add a test named for it, add a row to its README table, and
+   wire any host code in `tour.go`. If it genuinely cannot be shown there, add a
+   row to that README's "not demonstrated, and why" table instead. It lives in
+   the root module, so `go test -p 1 ./...` already covers it.
+6. Add a `CHANGELOG.md` entry under **[Unreleased]**.
+7. Open a pull request and fill in the template.
 
 ## Standards
 

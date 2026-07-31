@@ -10,6 +10,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ehabterra/workflow"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -510,5 +511,159 @@ func TestGuardRejectionIsNotIdentifiable(t *testing.T) {
 	}
 	if readyGate(req) {
 		t.Fatal("expected the ready-gate to be the failing rule")
+	}
+}
+
+// TestStaleChainIsRefusedInTheTransaction closes friction 2.
+//
+// `Approve` reads the requisition's amount, derives the approval chain from it,
+// and only then fires. If the amount changes in between — a revision, a
+// correction, a race — the chain it is about to count approvals against is the
+// wrong one. Before #35 there was nowhere to notice: the guard had no
+// transaction and no way to ask.
+//
+// `tx_guard: "... && amountOf() == amount"` asks inside the firing transaction
+// and refuses. The requisition stays Submitted and the approval leaves no trace.
+func TestStaleChainIsRefusedInTheTransaction(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "st", "REQ-ST", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "st", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	// At 1,000 the chain is [site_manager], so sam alone would finalise it.
+	// Someone raises the requisition to 20,000 — which needs a second role —
+	// between the read and the fire.
+	if _, err := a.db.ExecContext(ctx, `UPDATE requisitions SET amount = 20000 WHERE id = 'st'`); err != nil {
+		t.Fatalf("revise: %v", err)
+	}
+
+	// The host still holds the chain it derived from the old amount. Firing on
+	// it would approve a 20,000 requisition on one signature.
+	err := a.fire(ctx, "st", map[string]any{
+		"chain":       a.hier.ChainFor(1_000), // stale: [site_manager]
+		"actor":       "sam",
+		"role":        "site_manager",
+		"submitter":   "dana",
+		"amount":      1_000.0, // stale
+		"last_resort": false,
+	}, func(wf *workflow.Workflow) error {
+		if _, err := wf.CreateToken("approvals", workflow.TokenData{"role": "site_manager", "by": "sam"}); err != nil {
+			return err
+		}
+		_, err := wf.ApplyAny(ctx, "approve_last_resort", "approve_final", "approve_partial")
+		return err
+	})
+	if !errors.Is(err, workflow.ErrGuardRejected) {
+		t.Fatalf("a chain derived from a stale amount must be refused BY THE GUARD, got %v", err)
+	}
+	mustStatus(t, a, ctx, "st", "Submitted")
+	if n := ledgerSize(t, a, ctx, "st"); n != 0 {
+		t.Errorf("pool = %d tokens, want 0 — the refused cycle left a trace", n)
+	}
+
+	// Re-reading the amount produces the right chain, and the same approval is
+	// then legal — as a partial, because 20,000 needs two roles.
+	if err := a.Approve(ctx, "st", "sam"); err != nil {
+		t.Fatalf("approve on the current amount: %v", err)
+	}
+	mustStatus(t, a, ctx, "st", "Submitted") // one of two roles
+	if err := a.Approve(ctx, "st", "casey"); err != nil {
+		t.Fatalf("second approve: %v", err)
+	}
+	mustStatus(t, a, ctx, "st", "Approved")
+}
+
+// TestLastResortAlsoRefusesAStaleChain: the escape hatch is not an exemption.
+//
+// `last_resort` is itself derived from the chain, which is derived from an
+// amount read outside the transaction — so the branch that uses it needs the
+// same in-transaction amount check as the other two. Caught by review on #51: it
+// had only the separation-of-duties half, so an admin could approve on a chain
+// computed from a value that had since moved.
+func TestLastResortAlsoRefusesAStaleChain(t *testing.T) {
+	a, ctx := newApp(t)
+	// 200,000 needs a director, which nobody holds, so admin's hatch is open.
+	if err := a.Create(ctx, "lr", "REQ-LR", "dana", 200_000, []Line{costed("l1", "CC-900", 200_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "lr", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if _, err := a.db.ExecContext(ctx, `UPDATE requisitions SET amount = 1000 WHERE id = 'lr'`); err != nil {
+		t.Fatalf("revise: %v", err)
+	}
+
+	err := a.fire(ctx, "lr", map[string]any{
+		"chain":       a.hier.ChainFor(200_000), // stale
+		"actor":       "admin",
+		"role":        "",
+		"submitter":   "dana",
+		"amount":      200_000.0, // stale
+		"last_resort": true,
+	}, func(wf *workflow.Workflow) error {
+		if _, err := wf.CreateToken("approvals", workflow.TokenData{"role": "", "by": "admin"}); err != nil {
+			return err
+		}
+		_, err := wf.ApplyAny(ctx, "approve_last_resort", "approve_final", "approve_partial")
+		return err
+	})
+	if !errors.Is(err, workflow.ErrGuardRejected) {
+		t.Fatalf("the last-resort branch must refuse a stale amount too, got %v", err)
+	}
+	mustStatus(t, a, ctx, "lr", "Submitted")
+
+	// On the current amount, 1,000 needs only a site_manager — and the hatch is
+	// no longer open, because that role IS held. The ordinary path works.
+	if err := a.Approve(ctx, "lr", "sam"); err != nil {
+		t.Fatalf("approve on the current amount: %v", err)
+	}
+	mustStatus(t, a, ctx, "lr", "Approved")
+}
+
+// TestSodOkFailsClosed: a separation-of-duties check that cannot read the record
+// must REFUSE, not approve.
+//
+// The first version of this guard exposed `submitterOf()` and let the expression
+// write `actor != submitterOf()`. On a query error it returned "" — and no actor
+// equals "", so the check passed and an unreadable requisition was approvable.
+// Returning a sentinel instead does not help: nothing equals that either. Only a
+// function that owns the whole comparison can choose which way a failure falls.
+func TestSodOkFailsClosed(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "sc", "REQ-SC", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Each case opens and closes its own transaction: the test database allows
+	// one connection, so holding one open would block everything else.
+	sodOk := func(t *testing.T, id, actor string) bool {
+		t.Helper()
+		wf, err := workflow.NewWorkflow(id, a.def, "draft")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wf.SetContext("actor", actor)
+		ev := workflow.NewGuardEvent(ctx, a.def.Transition("approve_final"), nil, nil, nil, wf)
+
+		tx, err := a.db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		return txGuardEnv(ctx, tx, ev)["sodOk"].(func() bool)()
+	}
+
+	// No such requisition: the read fails, and the answer must be "no".
+	if sodOk(t, "ghost", "dana") {
+		t.Error("an unreadable requisition must not satisfy separation of duties")
+	}
+	if sodOk(t, "sc", "dana") {
+		t.Error("the submitter must not satisfy separation of duties")
+	}
+	if !sodOk(t, "sc", "sam") {
+		t.Error("a different actor must satisfy separation of duties")
 	}
 }

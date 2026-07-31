@@ -2,11 +2,13 @@
 # (see COVERAGE.md). This is everything about the workflow that the library
 # can express today.
 #
-# What it still does NOT contain is the guard INPUTS: `ready` and `sod_ok` are
-# booleans the host computes and injects with SetContext, because a guard has
-# no transaction and cannot query (#35). `chain` is injected for the same
-# reason — but note that it is now a VALUE the net reasons about rather than a
-# pre-computed answer, which is the whole difference #34 made.
+# Since #35 the guards no longer read pre-computed booleans. `ready` and
+# `sod_ok` are gone: `tx_guard:` expressions ask the database inside the firing
+# transaction. What the host still injects is org data — `role`, `last_resort`,
+# and the `chain` the role ladder produces — because roles and hierarchies are
+# deliberately outside this library (docs/BOUNDARIES.md). The chain's INPUT is
+# verified in the transaction all the same: `amountOf() == amount` refuses to
+# count approvals against a chain derived from a value that has since moved.
 #
 # approve is three transitions with complementary conditions because one action
 # has three outcomes, and ApplyAny picks between them in declaration order:
@@ -37,13 +39,17 @@ workflow:
     - name: superseded
       metadata: {status: Superseded}
   transitions:
-    # `ready` is the ready-gate: every costed line carries a cost code. The
-    # host computes it by querying the lines and injects the answer; the guard
-    # only reads the boolean. That is #35, still open.
+    # THE TRANSACTION-SCOPED GUARD (#35).
+    #
+    # The ready-gate — every costed line carries a cost code — is a query, and
+    # until #35 a guard could not make one. The host ran it, injected the answer
+    # as a `ready` boolean, and hoped no line changed before the save.
+    # `tx_guard:` is evaluated INSIDE the firing transaction, so it asks at the
+    # moment it decides, against the state it is about to commit against.
     - name: submit
       from: [draft]
       to: [submitted]
-      guard: "ready"
+      tx_guard: "readyGate()"
       effects:
         - name: project_status
         - name: audit
@@ -58,16 +64,18 @@ workflow:
     # it such a requisition is unapprovable. It is tried FIRST because it is the
     # narrowest condition.
     #
-    # It carries `sod_ok` like every other approve branch. An earlier version did
-    # not, and the host exempted last-resort from separation of duties on top of
-    # that, so an admin could approve their own requisition. Being able to break a
-    # deadlocked chain is not a licence to sign off on your own record — and with
-    # the rule on all three branches, the definition says so rather than leaving
-    # it to a boolean the host computes.
+    # It carries the SAME tx_guard as every other approve branch, and that is
+    # the point. Two earlier versions got this wrong: one omitted `sod_ok`, so an
+    # admin could approve their own requisition; the next omitted the amount
+    # check, so an admin could approve on a chain derived from a value that had
+    # since moved — `last_resort` is itself derived from that chain. A branch
+    # that exists to break a deadlock is not a branch that gets to skip the
+    # rules, and identical text on all three is how you can see that at a glance.
     - name: approve_last_resort
       from: [submitted, approvals]
       to: [approved]
-      guard: "last_resort && sod_ok"
+      guard: "last_resort"
+      tx_guard: "sodOk() && amountOf() == amount"
       resets: [approvals]
       effects:
         - name: project_status
@@ -99,7 +107,7 @@ workflow:
     - name: approve_final
       from: [submitted, approvals]
       to: [approved]
-      guard: "sod_ok"
+      tx_guard: "sodOk() && amountOf() == amount"
       resets: [approvals]
       require:
         - place: approvals
@@ -124,13 +132,14 @@ workflow:
     # records progress without advancing; the approval token itself is already
     # in the pool, added inside the same atomic cycle.
     #
-    # `role in chain` is the authorization check. It rejects an actor the chain
-    # does not require — and because the token was added inside the fire, a
-    # rejected approval is never persisted at all.
+    # `role in chain` is the authorization check, over host-supplied org data.
+    # Because the token was added inside the fire, a rejected approval is never
+    # persisted at all.
     - name: approve_partial
       from: [submitted]
       to: [submitted]
-      guard: "sod_ok && role in chain"
+      guard: "role in chain"
+      tx_guard: "sodOk() && amountOf() == amount"
       effects:
         - name: project_status
         - name: audit

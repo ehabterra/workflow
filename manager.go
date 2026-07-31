@@ -178,7 +178,42 @@ func checkCachedDefinition(wf *Workflow, definition *Definition) error {
 // the definition. Execute uses it so each retry runs against fresh, validated
 // state.
 func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *Definition) (*Workflow, error) {
-	loaded, wfContext, version, err := m.readState(ctx, id)
+	return m.loadWith(ctx, id, definition, fingerprintMigrate, m.readState)
+}
+
+// fingerprintCheck selects how a load reacts to the stored definition
+// fingerprint. The ordinary path consults the migration handler; the
+// transaction-scoped path cannot, because the handler is host code that may
+// write to storage and would deadlock against the transaction we hold — so it
+// resolves the question before opening the scope and tells the load which
+// answer it got.
+type fingerprintCheck int
+
+const (
+	// fingerprintMigrate consults the migration handler on a mismatch.
+	fingerprintMigrate fingerprintCheck = iota
+	// fingerprintStrict makes a mismatch a hard error: it means the definition
+	// changed under us after the pre-scope check, not something to approve now.
+	fingerprintStrict
+	// fingerprintSkip is for a mismatch a handler already approved before the
+	// scope opened.
+	fingerprintSkip
+)
+
+// loadWith is loadFromStorage over a caller-supplied state reader, so the
+// transaction-scoped path can read through its own transaction (see
+// loadForCycle) while sharing every validation.
+//
+// check selects how a stored-fingerprint mismatch is handled; see
+// fingerprintCheck.
+func (m *Manager) loadWith(
+	ctx context.Context,
+	id string,
+	definition *Definition,
+	check fingerprintCheck,
+	read func(context.Context, string) (Marking, map[string]any, int64, error),
+) (*Workflow, error) {
+	loaded, wfContext, version, err := read(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -189,14 +224,24 @@ func (m *Manager) loadFromStorage(ctx context.Context, id string, definition *De
 	// migration exists for). After the handler approves, reload: a handler that
 	// migrated the persisted state expects the load to observe its rewrite, not
 	// clobber it with the pre-migration snapshot on the next save.
-	migrated, err := m.checkFingerprint(ctx, id, definition, wfContext)
-	if err != nil {
-		return nil, err
-	}
-	if migrated {
-		if loaded, wfContext, version, err = m.readState(ctx, id); err != nil {
-			return nil, fmt.Errorf("reloading after definition migration: %w", err)
+	switch check {
+	case fingerprintMigrate:
+		migrated, merr := m.checkFingerprint(ctx, id, definition, wfContext)
+		if merr != nil {
+			return nil, merr
 		}
+		if migrated {
+			if loaded, wfContext, version, err = read(ctx, id); err != nil {
+				return nil, fmt.Errorf("reloading after definition migration: %w", err)
+			}
+		}
+	case fingerprintStrict:
+		if stored, _ := wfContext[defFingerprintKey].(string); stored != definition.Fingerprint() {
+			return nil, fmt.Errorf("%w: instance %q stored fingerprint %s, definition fingerprint %s",
+				ErrDefinitionMismatch, id, stored, definition.Fingerprint())
+		}
+	case fingerprintSkip:
+		// A handler already approved this mismatch before the scope opened.
 	}
 	// Strip the fingerprint and shape so they never reach the workflow's
 	// user-visible context or guard environment.
@@ -552,6 +597,44 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		}
 	}
 
+	// Transaction-scoped guards invert the usual order: instead of firing in
+	// memory and opening a transaction at the save, the WHOLE cycle runs inside
+	// one transaction, so a guard can read host state as of the state it is
+	// about to commit against. It needs a backend that can lend out its
+	// transaction; say so loudly rather than evaluating the guard on stale data.
+	plan := executePlan{cfg: &cfg, declaresEffects: declaresEffects, ts: ts, tds: tds}
+	if definitionHasTxGuards(definition) {
+		var ok bool
+		if plan.tss, ok = m.storage.(TxScopedStorage); !ok {
+			return fmt.Errorf("definition has transaction-scoped guards, which require a TxScopedStorage backend "+
+				"(one that can run the whole load-fire-save cycle in a transaction it lends out): %w", errors.ErrUnsupported)
+		}
+		// Same reasoning as the TransactionalDueStorage check above: committing
+		// state without updating the due column in the same transaction leaves
+		// the index silently corrupt.
+		if _, isDue := m.storage.(DueStorage); isDue {
+			if plan.tsds, ok = m.storage.(TxScopedDueStorage); !ok && definitionHasTimers(definition) {
+				return fmt.Errorf("transaction-scoped guards on a DueStorage backend with a timed definition require "+
+					"a TxScopedDueStorage backend (implement SaveStateScopedWithDue): %w", errors.ErrUnsupported)
+			}
+		}
+		// The migration handler is host code that may write to storage, which
+		// would deadlock against the transaction we are about to open on the
+		// same rows. Consult it BEFORE the scope; in the common case (no handler
+		// registered) this costs nothing, because the in-scope check catches a
+		// mismatch identically.
+		plan.check = fingerprintStrict
+		if m.onDefinitionMismatch != nil {
+			approved, err := m.migrateBeforeScope(ctx, id, definition)
+			if err != nil {
+				return err
+			}
+			if approved {
+				plan.check = fingerprintSkip
+			}
+		}
+	}
+
 	maxAttempts := cfg.maxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 5
@@ -570,47 +653,7 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 			time.Sleep(time.Duration(attempt)*2*time.Millisecond + jitter)
 		}
 
-		wf, err := m.loadFromStorage(ctx, id, definition)
-		if err != nil {
-			return err
-		}
-		if err := fn(wf); err != nil {
-			return err
-		}
-		marking, ctxData := wf.snapshotState()
-		ctxData = contextForSave(ctxData, definition)
-		due := m.dueForSave(definition, marking)
-
-		// Resolve the effects declared by whatever actually fired this attempt.
-		// Draining after fn (and after the snapshot) means a retried attempt
-		// starts from an empty log, so an abandoned attempt's effects can never
-		// leak into the one that commits.
-		var afterCommit []pendingAfterCommit
-		effects := cfg.effects
-		if declaresEffects {
-			steps := wf.drainFired()
-			txEffects, pending, rerr := m.resolveEffects(id, definition, steps, ctxData)
-			if rerr != nil {
-				return rerr
-			}
-			effects = append(append([]TxSideEffect(nil), cfg.effects...), txEffects...)
-			afterCommit = pending
-		}
-
-		switch {
-		case ts != nil:
-			// Keep the due index current even on the transactional path (state +
-			// side effect commit together) when the backend supports it. A partial
-			// due backend (DueStorage but not TransactionalDueStorage) with a timed
-			// definition was already rejected before the loop.
-			if tds != nil {
-				_, err = tds.SaveStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, effects...)
-			} else {
-				_, err = ts.SaveStateInTx(ctx, id, marking, ctxData, wf.Version(), effects...)
-			}
-		default:
-			_, err = m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
-		}
+		afterCommit, err := m.runCycle(ctx, id, definition, fn, &plan)
 		if err != nil {
 			if errors.Is(err, ErrConflict) {
 				lastErr = err
@@ -629,6 +672,177 @@ func (m *Manager) Execute(ctx context.Context, id string, definition *Definition
 		return runAfterCommit(ctx, afterCommit)
 	}
 	return fmt.Errorf("%w: giving up after %d attempts", lastErr, maxAttempts)
+}
+
+// executePlan is the per-Execute decision about how one attempt persists: which
+// optional storage capabilities were resolved, and whether the definition needs
+// the whole cycle wrapped in a transaction. It is computed once, before the
+// retry loop, so every attempt behaves identically.
+type executePlan struct {
+	cfg             *executeConfig
+	declaresEffects bool
+
+	ts  TransactionalStorage
+	tds TransactionalDueStorage
+
+	// tss is non-nil when the definition has transaction-scoped guards; tsds is
+	// additionally non-nil when the backend also maintains the due index.
+	tss  TxScopedStorage
+	tsds TxScopedDueStorage
+
+	// check is how the in-scope load treats a stored-fingerprint mismatch.
+	check fingerprintCheck
+}
+
+// txScope is an open transaction that one cycle runs inside, or nil for the
+// ordinary path where the fire happens in memory and the transaction opens only
+// at the save.
+type txScope struct {
+	tss  TxScopedStorage
+	tsds TxScopedDueStorage
+	tx   any
+
+	// check is how the in-scope load treats the stored fingerprint, decided
+	// before the scope opened (see migrateBeforeScope).
+	check fingerprintCheck
+}
+
+// runCycle performs one load → fire → save attempt, opening a transaction
+// around the whole of it when the definition has transaction-scoped guards. It
+// returns the after-commit effects the caller must run once the state has
+// actually committed.
+func (m *Manager) runCycle(
+	ctx context.Context,
+	id string,
+	definition *Definition,
+	fn func(*Workflow) error,
+	p *executePlan,
+) ([]pendingAfterCommit, error) {
+	if p.tss == nil {
+		return m.cycle(ctx, nil, id, definition, fn, p)
+	}
+
+	var afterCommit []pendingAfterCommit
+	err := p.tss.BeginScope(ctx, func(ctx context.Context, tx any) error {
+		var err error
+		afterCommit, err = m.cycle(ctx, &txScope{tss: p.tss, tsds: p.tsds, tx: tx, check: p.check}, id, definition, fn, p)
+		return err
+	})
+	if err != nil {
+		// The scope rolled back, so nothing this attempt produced was committed
+		// — including the after-commit effects it had resolved.
+		return nil, err
+	}
+	return afterCommit, nil
+}
+
+// cycle is the body of one attempt. sc is nil on the ordinary path; when it is
+// set, the load, the guards, the save, and the effects all run inside sc.tx.
+func (m *Manager) cycle(
+	ctx context.Context,
+	sc *txScope,
+	id string,
+	definition *Definition,
+	fn func(*Workflow) error,
+	p *executePlan,
+) ([]pendingAfterCommit, error) {
+	wf, err := m.loadForCycle(ctx, sc, id, definition)
+	if err != nil {
+		return nil, err
+	}
+
+	if sc != nil {
+		// Bind for the duration of the fire only. A guard reached through a
+		// workflow value that outlived the scope must not find a committed
+		// transaction waiting for it.
+		wf.bindTx(sc.tx)
+		defer wf.bindTx(nil)
+	}
+	if err := fn(wf); err != nil {
+		return nil, err
+	}
+
+	marking, ctxData := wf.snapshotState()
+	ctxData = contextForSave(ctxData, definition)
+	due := m.dueForSave(definition, marking)
+
+	// Resolve the effects declared by whatever actually fired this attempt.
+	// Draining after fn (and after the snapshot) means a retried attempt
+	// starts from an empty log, so an abandoned attempt's effects can never
+	// leak into the one that commits.
+	var afterCommit []pendingAfterCommit
+	effects := p.cfg.effects
+	if p.declaresEffects {
+		steps := wf.drainFired()
+		txEffects, pending, rerr := m.resolveEffects(id, definition, steps, ctxData)
+		if rerr != nil {
+			return nil, rerr
+		}
+		effects = append(append([]TxSideEffect(nil), p.cfg.effects...), txEffects...)
+		afterCommit = pending
+	}
+
+	switch {
+	case sc != nil:
+		// Save into the very transaction the guards read from, then run the
+		// effects in it too. Same atomicity guarantee as SaveStateInTx — the
+		// difference is only who opened the transaction.
+		if sc.tsds != nil {
+			_, err = sc.tsds.SaveStateScopedWithDue(ctx, sc.tx, id, marking, ctxData, wf.Version(), due)
+		} else {
+			_, err = sc.tss.SaveStateScoped(ctx, sc.tx, id, marking, ctxData, wf.Version())
+		}
+		for _, effect := range effects {
+			if err != nil {
+				break
+			}
+			err = effect(ctx, sc.tx)
+		}
+	case p.ts != nil:
+		// Keep the due index current even on the transactional path (state +
+		// side effect commit together) when the backend supports it. A partial
+		// due backend (DueStorage but not TransactionalDueStorage) with a timed
+		// definition was already rejected before the loop.
+		if p.tds != nil {
+			_, err = p.tds.SaveStateInTxWithDue(ctx, id, marking, ctxData, wf.Version(), due, effects...)
+		} else {
+			_, err = p.ts.SaveStateInTx(ctx, id, marking, ctxData, wf.Version(), effects...)
+		}
+	default:
+		_, err = m.persistState(ctx, id, marking, ctxData, wf.Version(), due)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return afterCommit, nil
+}
+
+// loadForCycle loads the instance for one attempt, reading through the scope's
+// transaction when there is one so the marking and version a firing decides on
+// come from the same snapshot its guards read.
+func (m *Manager) loadForCycle(ctx context.Context, sc *txScope, id string, definition *Definition) (*Workflow, error) {
+	if sc == nil {
+		return m.loadFromStorage(ctx, id, definition)
+	}
+	return m.loadWith(ctx, id, definition, sc.check, func(ctx context.Context, id string) (Marking, map[string]any, int64, error) {
+		loaded, wfContext, version, err := sc.tss.LoadStateScoped(ctx, sc.tx, id)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("failed to load workflow state: %w", err)
+		}
+		return loaded, wfContext, version, nil
+	})
+}
+
+// migrateBeforeScope runs the definition-fingerprint check, and therefore the
+// migration handler, outside any transaction of ours. It reports whether a
+// mismatch was found AND approved, so the in-scope load knows not to re-check
+// against a fingerprint the handler deliberately accepted. See the call site.
+func (m *Manager) migrateBeforeScope(ctx context.Context, id string, definition *Definition) (bool, error) {
+	_, wfContext, _, err := m.readState(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return m.checkFingerprint(ctx, id, definition, wfContext)
 }
 
 // GetWorkflow gets a workflow instance, loading it fresh from storage (or from

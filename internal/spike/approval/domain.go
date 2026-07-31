@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+
+	"github.com/ehabterra/workflow"
 )
 
 // Role is a position in the approval hierarchy. Roles are ordered by Level:
@@ -235,4 +237,73 @@ func lastResortAllowed(d *Directory, actor string, chain []string) bool {
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// txGuardEnv is the transaction-scoped guard environment (#35): the functions a
+// `tx_guard:` expression may call, each reading the host's own tables THROUGH
+// the firing transaction.
+//
+// This is the half that used to be impossible. Before it, every one of these
+// answers had to be computed here, injected into the workflow context, and
+// trusted to still be true when the save committed — `ready`, `sod_ok`, and an
+// amount the approval chain was derived from. Now the guard asks, at the moment
+// it decides, against the state it is about to commit against.
+//
+// The queries are host SQL and always were. What changed is WHO asks and WHEN.
+func txGuardEnv(ctx context.Context, tx any, ev workflow.Event) map[string]any {
+	sqlTx, ok := tx.(*sql.Tx)
+	if !ok {
+		// Impossible with the SQL backends; returning an empty env makes the
+		// guard fail loudly rather than silently evaluating against nothing.
+		return map[string]any{}
+	}
+	id := ev.Workflow().Name() // the instance id IS the requisition id
+
+	return map[string]any{
+		// readyGate: every costed line carries a cost code. Was `readyGate(req)`
+		// in Go, with the answer injected as the `ready` context boolean.
+		"readyGate": func() bool {
+			var bad int
+			if err := sqlTx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM requisition_lines WHERE req_id = ? AND amount != 0 AND cost_code = ''`,
+				id).Scan(&bad); err != nil {
+				return false
+			}
+			return bad == 0
+		},
+
+		// sodOk: separation of duties, read live. Was the `sod_ok` boolean,
+		// computed from a row the host had read before the transaction opened.
+		//
+		// The COMPARISON is inside the function on purpose. An earlier version
+		// exposed `submitterOf()` and let the guard write
+		// `actor != submitterOf()` — which failed OPEN: a query error returned
+		// "", no actor equals "", so the check passed and an unreadable
+		// requisition could be approved. Returning a sentinel instead does not
+		// help, for exactly the same reason. Only a function that owns the whole
+		// question can decide which way a failure falls.
+		"sodOk": func() bool {
+			var submitter string
+			if err := sqlTx.QueryRowContext(ctx,
+				`SELECT submitter FROM requisitions WHERE id = ?`, id).Scan(&submitter); err != nil {
+				return false // unreadable record: refuse, do not approve
+			}
+			actor, _ := ev.Workflow().Context("actor")
+			name, _ := actor.(string)
+			return name != "" && name != submitter
+		},
+
+		// amountOf: the value the approval chain was derived from. The chain
+		// itself is still resolved by the host (it is a policy ladder, not a
+		// query), so the guard verifies the input it was derived FROM has not
+		// moved — a chain computed from a stale amount is the wrong chain.
+		"amountOf": func() float64 {
+			var amount float64
+			if err := sqlTx.QueryRowContext(ctx,
+				`SELECT amount FROM requisitions WHERE id = ?`, id).Scan(&amount); err != nil {
+				return -1
+			}
+			return amount
+		},
+	}
 }

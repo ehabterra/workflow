@@ -276,6 +276,26 @@ definition that declares effects without a registry is a loud error, never a
 silent skip — and after-commit effects are **at-least-once**: the library
 provides the phase, not the guarantee.
 
+**Guards that read live state.** A guard normally sees only what you put in the
+instance context — resolved before the transaction existed, and stale if
+anything moved in between. `tx_guard:` is evaluated **inside the firing
+transaction**:
+
+```yaml
+- name: submit
+  from: [draft]
+  to: [submitted]
+  tx_guard: "readyGate()"        # queries your tables, in THIS transaction
+```
+
+You supply the environment (`yaml.NewLoaderWithTxEnv`), the library supplies the
+transaction. A definition that uses one runs its whole load → fire → save cycle
+in a single transaction, so the guard decides against the same snapshot the
+version check is made against — and `ApplyAny` can route on it. The trade is
+explicit: that transaction is held open across your `fn` and its listeners, so
+keep them short. Needs a `TxScopedStorage` backend (both SQL backends are);
+anything else is a loud error rather than a quiet stale answer.
+
 **Definition evolution.** Every save stamps a structural fingerprint and a
 compact shape. When a deployed definition changes, your
 `WithDefinitionMigration` hook receives a **structural diff** — places and

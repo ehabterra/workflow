@@ -32,6 +32,7 @@ This is a multi-module repo. The **root module** is dependency-light on purpose.
 | `yaml/` | root | YAML config loader + template resolution + storage-setup helpers. |
 | `storagetest/` | root | **Conformance kit** — one suite every `Storage` backend must pass (`storagetest.Run`). |
 | `workflowtest/` | root | Public test helpers: `AssertMarking`/`AssertHas`, the `Apply` path runner, the `AssertGuard` harness, and a fake `Clock`. |
+| `examples/feature_tour/` | root | **The example that must stay current** — every shipped feature used once, one test each, kept in the root module so it can never rot. See the checklist in its README. |
 | `internal/spike/` | root | **Measurement artifacts, not shipped code and not examples.** `approval/` is the declarative-coverage spike (issue #45): a realistic approval workflow built against only what ships, so the value proposition has a number. `internal/` keeps it out of the public API; it stays in the root module so `go test -p 1 ./...` re-runs it and it can't rot. Excluded in `codecov.yml`. Its tests deliberately assert current *defects* — see `COVERAGE.md` before "fixing" one. |
 | `contrib/otel/` | **separate** go.mod | OpenTelemetry integration. Kept out of the root module so the core stays dependency-free. |
 | `examples/*/` | mostly **separate** go.mod each | Runnable demos (`expense_approval` is the dogfood reference system). |
@@ -82,6 +83,13 @@ use: operate on a **closed `*sql.DB`** to exercise query-error branches; seed a
 - **Branch + PR per change.** Branch off `main`; never commit straight to `main`.
 - **Commit trailer.** End commit messages with:
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
+- **Every user-visible feature updates `examples/feature_tour/`.** It is the one
+  example that must stay current: use the feature in its `workflow.yaml`, add a
+  test named for it, add a row to its README table, and wire any host code in
+  `tour.go`. A feature that cannot be shown there gets a row in the "not
+  demonstrated, and why" table instead — a written-down gap is a decision, a
+  missing one is a bug waiting. It lives in the ROOT module on purpose, so
+  `go test -p 1 ./...` always compiles it against the working tree.
 - **CHANGELOG + docs.** Add a `CHANGELOG.md` entry under **[Unreleased]** for every
   user-visible change. `CHANGELOG.md` and `ROADMAP.md` conflict on nearly every merge
   because parallel branches all append to them — resolve as the **union** of bullets
@@ -116,6 +124,19 @@ use: operate on a **closed `*sql.DB`** to exercise query-error branches; seed a
 - **OR-input / XOR routing.** `from_any: true` enables a transition when *any* one input
   is marked and consumes only that one. `Workflow.ApplyAny(names...)` fires the first
   allowed candidate. Reset arcs (`resets:`) clear whole places when a transition fires.
+- **Two write paths, chosen by the definition.** Ordinarily a fire mutates memory
+  and the transaction opens only at the save. A definition containing a
+  transaction-scoped guard (`tx_guard:` / `NewTxExpressionConstraint`) inverts
+  that: `Manager.Execute` opens ONE transaction and runs load → fire → save inside
+  it, so the guard reads the snapshot the version check is made against. That path
+  needs a `TxScopedStorage` backend, holds the transaction across the caller's `fn`
+  and its listeners, and consults the definition-migration handler BEFORE opening
+  the scope (the handler is host code that may write and would deadlock). Both
+  paths share `Manager.cycle`; keep them sharing it.
+- **A tx env builder ADDS to the standard guard environment, it does not replace
+  it.** A tx guard is nearly always `<read live> vs <passed in>`; replacing the
+  environment made the passed-in half evaluate to nil and the guard answer wrong.
+  This was found by converting the spike, not by review — do not "simplify" it back.
 - **A required place is NOT drained.** Ordinary input places lose every token when a
   transition fires; a place carrying a `require:` (dynamic-cardinality join) loses only
   the tokens the requirement selected, and the remainder stays in declaration order.

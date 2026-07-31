@@ -266,7 +266,10 @@ Formerly M3–M8. None is deleted; none proceeds without a dogfood-proven need.
   on a transition that declares `require`, since the requirement already selects
   the tokens).
 - **Static validation / `workflow lint`** (reachability, deadlock detection) — also the
-  precondition for ever claiming "deadlock-free" in marketing.
+  precondition for ever claiming "deadlock-free" in marketing. **Promoted by
+  evidence**: the #45 spike shipped a dead transition that neither the library nor
+  its tests noticed, and review has since found two more correctness holes in the
+  same small net (see `internal/spike/approval/COVERAGE.md`).
 - **HCPN / nested workflows**; **compensation/saga**; **message correlation** beyond
   id-keyed lookup.
 - **Enterprise**: full definition migration (beyond the M3.3 fingerprint), RBAC,

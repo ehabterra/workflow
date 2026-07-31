@@ -78,6 +78,18 @@ var (
 	// ErrTokenNotFound is returned when a token cannot be found in a place.
 	ErrTokenNotFound = errors.New("token not found")
 
+	// ErrNoTransaction is returned when a transaction-scoped guard (see
+	// NewTxExpressionConstraint) is evaluated with no firing transaction bound —
+	// a bare Workflow.ApplyTransition, or a CanTransition probe outside Execute.
+	// Such a guard exists precisely because a stale answer is wrong, so it
+	// refuses to give one rather than silently reading outside the transaction.
+	//
+	// A backend that cannot open a scope is a different failure and is reported
+	// differently: Manager.Execute rejects it with errors.ErrUnsupported before
+	// anything fires, so the problem is named as a missing capability rather
+	// than as a guard that happened to have no transaction.
+	ErrNoTransaction = errors.New("no active transaction for a transaction-scoped guard")
+
 	// ErrDefinitionMismatch is returned by the Manager when a persisted instance
 	// was created against a different workflow definition than the one supplied to
 	// load it (the stored definition fingerprint differs). It guards against

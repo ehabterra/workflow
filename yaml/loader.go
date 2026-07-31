@@ -15,6 +15,13 @@ import (
 type Loader struct {
 	// EnvBuilder allows customizing the expression evaluation environment
 	EnvBuilder func(workflow.Event) map[string]any
+
+	// TxEnvBuilder builds the environment for `tx_guard:` expressions, which are
+	// evaluated INSIDE the firing transaction and can therefore query host state
+	// as of the state the save is about to be checked against. A definition that
+	// uses `tx_guard:` without one fails to load — there would be nothing for the
+	// expression to call.
+	TxEnvBuilder workflow.TxEnvBuilder
 }
 
 // NewLoader creates a new YAML loader.
@@ -26,6 +33,19 @@ func NewLoader() *Loader {
 func NewLoaderWithEnv(envBuilder func(workflow.Event) map[string]any) *Loader {
 	return &Loader{
 		EnvBuilder: envBuilder,
+	}
+}
+
+// NewLoaderWithTxEnv creates a loader that can compile `tx_guard:` expressions:
+// guards evaluated inside the firing transaction, against an environment the
+// builder assembles from that transaction.
+//
+// Definitions loaded this way must be driven with Manager.Execute against a
+// workflow.TxScopedStorage backend; see workflow.TxEnvBuilder for the contract
+// (including what happens across ErrConflict retries).
+func NewLoaderWithTxEnv(txEnvBuilder workflow.TxEnvBuilder) *Loader {
+	return &Loader{
+		TxEnvBuilder: txEnvBuilder,
 	}
 }
 
@@ -98,6 +118,26 @@ func (l *Loader) LoadDefinition(config *Config) (*workflow.Definition, error) {
 			transition.AddConstraint(exprConstraint)
 			// Store guard string in metadata for diagram generation
 			transition.SetMetadata("guard", transConfig.Guard)
+		}
+
+		// Transaction-scoped guard: evaluated inside the firing transaction, so
+		// it can consult host state rather than a value read before the
+		// transaction opened. Without a builder there is nothing for it to call,
+		// so refuse at load rather than at the first firing.
+		if transConfig.TxGuard != "" {
+			if l.TxEnvBuilder == nil {
+				return nil, fmt.Errorf("transition '%s': tx_guard needs a loader built with NewLoaderWithTxEnv "+
+					"(the expression is evaluated inside the firing transaction and has nothing to query without one)",
+					transConfig.Name)
+			}
+			txConstraint, err := workflow.NewTxExpressionConstraint(transConfig.TxGuard, l.TxEnvBuilder)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create tx_guard constraint for transition '%s': %w", transConfig.Name, err)
+			}
+			transition.AddConstraint(txConstraint)
+			// Structural: the expression is part of the definition fingerprint
+			// and is rendered on the diagram, like a plain guard.
+			transition.SetMetadata("tx_guard", transConfig.TxGuard)
 		}
 
 		// Add timeout if provided ("after: 72h" — host-driven timers, roadmap M4)

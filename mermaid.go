@@ -328,10 +328,22 @@ func renderDiagram(def *Definition, initial []Place, current map[Place]bool, tok
 		// branch). XOR-splits (alternative guarded transitions out of one
 		// place) need no gateway: the place is the choice point.
 		outLabel := ""
+		guards := make([]string, 0, 2)
 		if g, ok := t.Metadata("guard"); ok {
 			if gs, ok := g.(string); ok && gs != "" {
-				outLabel = "|\"❰ " + prettifyGuard(gs) + " ❱\"|"
+				guards = append(guards, prettifyGuard(gs))
 			}
+		}
+		// A transaction-scoped guard gates the firing exactly like a plain one;
+		// it is marked with ⛁ because WHEN it is evaluated differs — inside the
+		// firing transaction, against live host state.
+		if g, ok := t.Metadata(txGuardMeta); ok {
+			if gs, ok := g.(string); ok && gs != "" {
+				guards = append(guards, "⛁ "+prettifyGuard(gs))
+			}
+		}
+		if len(guards) > 0 {
+			outLabel = "|\"❰ " + strings.Join(guards, " ❱<br/>❰ ") + " ❱\"|"
 		}
 		if len(t.To()) > 1 {
 			fid := "f_" + nodeID(t.Name())
