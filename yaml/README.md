@@ -106,6 +106,8 @@ workflow:
       from: [string]        # Required: Source places
       to: [string]          # Required: Target places
       guard: string         # Optional: Expression guard
+      tx_guard: string      # Optional: Expression evaluated INSIDE the firing transaction
+                            #   (needs yaml.NewLoaderWithTxEnv + a TxScopedStorage backend)
       after: string         # Optional: Timeout duration, e.g. "72h" (host-driven timers)
       from_any: bool        # Optional: OR-input — enabled by ANY one marked input, consuming only it
       resets: [string]      # Optional: Places cleared when this transition fires (cancellation region)

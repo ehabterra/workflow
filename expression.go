@@ -4,6 +4,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -18,6 +19,58 @@ type ExpressionConstraint struct {
 	expression string
 	program    *vm.Program
 	envBuilder func(Event) map[string]any
+
+	// txEnvBuilder, when set, makes this a TRANSACTION-SCOPED constraint: it is
+	// handed the transaction the firing runs inside, so the functions it puts in
+	// the environment can query host state as of that transaction. It is
+	// mutually exclusive with envBuilder.
+	txEnvBuilder TxEnvBuilder
+}
+
+// TxEnvBuilder contributes the transaction-backed part of a guard environment.
+// tx is the backend's own handle — *sql.Tx for the shipped SQL backends — and is
+// never nil when the builder is called.
+//
+// What it returns is ADDED to the standard guard environment (workflow context,
+// `token`/`tokens`, hasRole and friends), overriding same-named entries. So a
+// guard can compare something read live against something the host passed in —
+// `actor != submitterOf()` — which is what most of them do.
+//
+// The point is to close the gap between deciding and committing. Without it a
+// host resolves its decision inputs, THEN fires, and anything that changed in
+// between is silently stale; the values it injected into the workflow context
+// are a snapshot of a moment that has passed. A builder given the transaction
+// can instead expose functions that answer as of the transaction that is about
+// to commit:
+//
+//	wfyaml.NewLoaderWithTxEnv(func(ctx context.Context, tx any, ev workflow.Event) map[string]any {
+//	    q := sqlc.New(tx.(*sql.Tx))
+//	    return map[string]any{
+//	        "readyGate": func() bool { return q.EveryLineHasACostCode(ctx, ev.Workflow().Name()) },
+//	    }
+//	})
+//
+// RETRIES: Manager.Execute retries the whole load-fire-save cycle on
+// ErrConflict, and each attempt opens a NEW transaction, so the builder runs
+// again and the guard re-decides against the state the winning attempt will
+// actually commit against. That is the intended behavior — never cache the
+// answer across attempts.
+type TxEnvBuilder func(ctx context.Context, tx any, ev Event) map[string]any
+
+// TxScopedConstraint is a Constraint that must be evaluated inside the firing
+// transaction. Manager.Execute detects a definition containing one and runs the
+// whole load → fire → save cycle inside a single transaction (which requires a
+// TxScopedStorage backend), rather than firing in memory and opening the
+// transaction only at the save.
+//
+// Implement it on a custom Go constraint to opt into the same treatment;
+// NewTxExpressionConstraint is the expression-language version.
+type TxScopedConstraint interface {
+	Constraint
+
+	// NeedsTx reports that this constraint cannot be evaluated without the
+	// firing transaction.
+	NeedsTx() bool
 }
 
 // NewExpressionConstraint creates a new expression constraint.
@@ -65,10 +118,48 @@ func NewExpressionConstraintWithEnv(exprStr string, envBuilder func(Event) map[s
 	}, nil
 }
 
+// NewTxExpressionConstraint creates a TRANSACTION-SCOPED expression constraint:
+// the environment is built by a TxEnvBuilder that receives the transaction the
+// firing runs inside, so the guard can consult host state as of that
+// transaction instead of a value read before it opened.
+//
+// A definition containing one requires Manager.Execute against a
+// TxScopedStorage backend. Evaluating it outside a firing transaction — a bare
+// Workflow.ApplyTransition, a CanTransition probe, a non-transactional backend —
+// fails with ErrNoTransaction rather than quietly answering from stale state.
+// Keep ordinary preconditions in a plain guard, which works everywhere; reach
+// for this one only where staleness is a correctness problem.
+func NewTxExpressionConstraint(exprStr string, builder TxEnvBuilder) (*ExpressionConstraint, error) {
+	if exprStr == "" {
+		return nil, fmt.Errorf("expression cannot be empty")
+	}
+	if builder == nil {
+		return nil, fmt.Errorf("TxEnvBuilder cannot be nil")
+	}
+
+	program, err := expr.Compile(exprStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile expression '%s': %w", exprStr, err)
+	}
+
+	return &ExpressionConstraint{
+		expression:   exprStr,
+		program:      program,
+		txEnvBuilder: builder,
+	}, nil
+}
+
+// NeedsTx reports whether this constraint is transaction-scoped (built with
+// NewTxExpressionConstraint). It implements TxScopedConstraint.
+func (c *ExpressionConstraint) NeedsTx() bool { return c.txEnvBuilder != nil }
+
 // Validate evaluates the expression and returns error if transition should be blocked.
 func (c *ExpressionConstraint) Validate(event Event) error {
 	// Build evaluation environment from event
-	env := c.envBuilder(event)
+	env, err := c.buildEnv(event)
+	if err != nil {
+		return err
+	}
 
 	// Evaluate expression
 	result, err := expr.Run(c.program, env)
@@ -87,6 +178,32 @@ func (c *ExpressionConstraint) Validate(event Event) error {
 	}
 
 	return nil
+}
+
+// buildEnv assembles the evaluation environment. For a transaction-scoped
+// constraint it demands the firing transaction: a guard whose whole purpose is
+// to be current must never fall back to evaluating without one.
+func (c *ExpressionConstraint) buildEnv(event Event) (map[string]any, error) {
+	if c.txEnvBuilder == nil {
+		return c.envBuilder(event), nil
+	}
+	wf := event.Workflow()
+	if wf == nil {
+		return nil, fmt.Errorf("%w: transaction-scoped guard %q has no workflow", ErrNoTransaction, c.expression)
+	}
+	tx := wf.tx()
+	if tx == nil {
+		return nil, fmt.Errorf("%w: guard %q must be evaluated inside a firing transaction — "+
+			"drive it with Manager.Execute against a TxScopedStorage backend", ErrNoTransaction, c.expression)
+	}
+	// The builder's entries are ADDED to the standard environment rather than
+	// replacing it, because a transaction-scoped guard is almost always a mix:
+	// something read live (submitterOf()) compared against something the host
+	// passed in (actor). Making the builder responsible for re-supplying the
+	// context would turn every such guard into a silent nil comparison.
+	env := defaultEnvBuilder(event)
+	maps.Copy(env, c.txEnvBuilder(event.Context(), tx, event))
+	return env, nil
 }
 
 // defaultEnvBuilder creates the default evaluation environment from the event.

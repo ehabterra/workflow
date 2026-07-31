@@ -341,6 +341,144 @@ func Run(t *testing.T, newStore Factory) {
 	if _, ok := newStore(t).(workflow.DueStorage); ok {
 		runDue(t, newStore)
 	}
+
+	// Transaction-scoped cycle conformance, only if the backend supports it.
+	if _, ok := newStore(t).(workflow.TxScopedStorage); ok {
+		runScoped(t, newStore)
+	}
+}
+
+// runScoped exercises workflow.TxScopedStorage: the backend must lend out a
+// transaction in which a load and a version-guarded save behave exactly as they
+// do outside one — and which rolls everything back if the caller says so. This
+// is what lets a transaction-scoped guard read the state its own cycle is about
+// to commit against.
+func runScoped(t *testing.T, newStore Factory) {
+	t.Helper()
+	ctx := context.Background()
+
+	scoped := func(t *testing.T) workflow.TxScopedStorage {
+		ts, ok := newStore(t).(workflow.TxScopedStorage)
+		if !ok {
+			t.Fatal("store does not implement TxScopedStorage")
+		}
+		return ts
+	}
+
+	t.Run("Scoped/LoadAndSaveInsideOneTransaction", func(t *testing.T) {
+		s := scoped(t)
+		if _, err := s.SaveState(ctx, "wf", mk("draft"), map[string]any{"n": 1}, 0); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		err := s.BeginScope(ctx, func(ctx context.Context, tx any) error {
+			m, c, version, err := s.LoadStateScoped(ctx, tx, "wf")
+			if err != nil {
+				return fmt.Errorf("LoadStateScoped: %w", err)
+			}
+			if places := m.Places(); len(places) != 1 || places[0] != "draft" {
+				return fmt.Errorf("LoadStateScoped marking = %v, want [draft]", places)
+			}
+			if c["n"] == nil {
+				return fmt.Errorf("LoadStateScoped dropped the context: %v", c)
+			}
+			_, err = s.SaveStateScoped(ctx, tx, "wf", mk("review"), c, version)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("BeginScope: %v", err)
+		}
+
+		m, _, _, err := s.LoadState(ctx, "wf")
+		if err != nil {
+			t.Fatalf("load after commit: %v", err)
+		}
+		if places := m.Places(); len(places) != 1 || places[0] != "review" {
+			t.Fatalf("after commit = %v, want [review]", places)
+		}
+	})
+
+	t.Run("Scoped/RollsBackOnError", func(t *testing.T) {
+		s := scoped(t)
+		if _, err := s.SaveState(ctx, "wf", mk("draft"), nil, 0); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		sentinel := errors.New("caller said no")
+		err := s.BeginScope(ctx, func(ctx context.Context, tx any) error {
+			if _, err := s.SaveStateScoped(ctx, tx, "wf", mk("review"), nil, 1); err != nil {
+				return err
+			}
+			return sentinel // e.g. a guard rejected after the write
+		})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("BeginScope should surface the caller's error, got %v", err)
+		}
+
+		m, _, version, err := s.LoadState(ctx, "wf")
+		if err != nil {
+			t.Fatalf("load after rollback: %v", err)
+		}
+		if places := m.Places(); len(places) != 1 || places[0] != "draft" {
+			t.Fatalf("after rollback = %v, want [draft] — the scoped save was not undone", places)
+		}
+		if version != 1 {
+			t.Fatalf("version after rollback = %d, want 1", version)
+		}
+	})
+
+	t.Run("Scoped/VersionGuardStillApplies", func(t *testing.T) {
+		s := scoped(t)
+		if _, err := s.SaveState(ctx, "wf", mk("draft"), nil, 0); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		err := s.BeginScope(ctx, func(ctx context.Context, tx any) error {
+			_, err := s.SaveStateScoped(ctx, tx, "wf", mk("review"), nil, 99) // stale
+			return err
+		})
+		if !errors.Is(err, workflow.ErrConflict) {
+			t.Fatalf("a stale scoped save must return ErrConflict, got %v", err)
+		}
+	})
+
+	t.Run("Scoped/RejectsAForeignTransactionHandle", func(t *testing.T) {
+		s := scoped(t)
+		err := s.BeginScope(ctx, func(ctx context.Context, _ any) error {
+			_, _, _, err := s.LoadStateScoped(ctx, "not a transaction", "wf")
+			return err
+		})
+		if err == nil {
+			t.Fatal("a handle from another backend must be reported, not assumed")
+		}
+	})
+
+	// Scoped due-index conformance, only if the backend maintains one.
+	if _, ok := newStore(t).(workflow.TxScopedDueStorage); ok {
+		t.Run("Scoped/Due/CommitsWithState", func(t *testing.T) {
+			s, ok := newStore(t).(workflow.TxScopedDueStorage)
+			if !ok {
+				t.Fatal("store does not implement TxScopedDueStorage")
+			}
+			if _, err := s.SaveState(ctx, "wf", mk("draft"), nil, 0); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			due := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+			err := s.BeginScope(ctx, func(ctx context.Context, tx any) error {
+				_, err := s.SaveStateScopedWithDue(ctx, tx, "wf", mk("review"), nil, 1, &due)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("BeginScope: %v", err)
+			}
+			ids, err := s.ListDue(ctx, due, 0)
+			if err != nil {
+				t.Fatalf("ListDue: %v", err)
+			}
+			if want := []string{"wf"}; !reflect.DeepEqual(ids, want) {
+				t.Fatalf("ListDue = %v, want %v — the due index did not commit with the scoped save", ids, want)
+			}
+		})
+	}
 }
 
 // runDue exercises the workflow.DueStorage contract: the maintained next-due

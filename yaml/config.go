@@ -90,6 +90,7 @@ type TransitionConfig struct {
 	From         []string       `yaml:"from"`
 	To           []string       `yaml:"to"`
 	Guard        string         `yaml:"guard,omitempty"`         // Expression string
+	TxGuard      string         `yaml:"tx_guard,omitempty"`      // Expression evaluated INSIDE the firing transaction (needs a Loader TxEnvBuilder)
 	After        string         `yaml:"after,omitempty"`         // Timeout duration, e.g. "72h" (Go time.ParseDuration)
 	Resets       []string       `yaml:"resets,omitempty"`        // Places cleared when this transition fires (cancellation region)
 	FromAny      bool           `yaml:"from_any,omitempty"`      // OR-input: enabled by ANY one marked from-place; consumes only it

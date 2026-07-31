@@ -196,20 +196,51 @@ func transitionRecord(t *Transition) string {
 	// persisted by earlier versions still load without a migration. Do not
 	// hoist this out of the conditional.
 	//
-	// Requirements ride in the same conditional and are written LAST, again only
-	// when present, so a definition that declares effects but no requirements
-	// still serializes exactly as it did before requirements existed.
+	// Requirements and the transaction-scoped guard ride in the same scheme, each
+	// written only when it or a LATER segment is present. So: no trailing
+	// segments at all for a pre-effects definition, exactly two for an
+	// effects-only one, and so on — every shape that an earlier version could
+	// persist still hashes to the same value it did then.
 	effects := t.Effects()
 	afterCommit := t.AfterCommit()
 	requires := t.Requirements()
-	if len(effects) > 0 || len(afterCommit) > 0 || len(requires) > 0 {
+	txGuard := ""
+	if g, ok := t.Metadata(txGuardMeta); ok {
+		txGuard, _ = g.(string)
+	}
+	if len(effects) > 0 || len(afterCommit) > 0 || len(requires) > 0 || txGuard != "" {
 		writeLenPrefixedList(&rec, effectRecords(effects))
 		writeLenPrefixedList(&rec, effectRecords(afterCommit))
-		if len(requires) > 0 {
-			writeLenPrefixedList(&rec, requirementRecords(requires))
-		}
+	}
+	if len(requires) > 0 || txGuard != "" {
+		writeLenPrefixedList(&rec, requirementRecords(requires))
+	}
+	if txGuard != "" {
+		writeLenPrefixed(&rec, txGuard)
 	}
 	return rec.String()
+}
+
+// txGuardMeta is the transition-metadata key holding the transaction-scoped
+// guard's expression string, mirroring how the plain "guard" string is stored
+// for the fingerprint and for diagrams. The compiled constraint is the thing
+// that actually runs; this is its structural record.
+const txGuardMeta = "tx_guard"
+
+// definitionHasTxGuards reports whether any transition carries a constraint that
+// must be evaluated inside the firing transaction. Manager.Execute needs the
+// answer BEFORE anything fires, to decide whether to open a transaction around
+// the whole cycle and to reject a backend that cannot.
+func definitionHasTxGuards(def *Definition) bool {
+	if def == nil {
+		return false
+	}
+	for i := range def.Transitions {
+		if def.Transitions[i].needsTx() {
+			return true
+		}
+	}
+	return false
 }
 
 // requirementRecords serializes requirements SORTED: requirements are a

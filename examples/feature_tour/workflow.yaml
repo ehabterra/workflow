@@ -1,0 +1,108 @@
+# The feature tour's net. Every DECLARATIVE feature the library ships appears
+# here at least once, and each is labelled with the section of README.md that
+# explains it.
+#
+# ── ADDING A FEATURE? ────────────────────────────────────────────────────────
+# If it is declarable, it belongs in this file, is asserted in tour_test.go, and
+# is listed in README.md's table. See that file's checklist.
+# ─────────────────────────────────────────────────────────────────────────────
+workflow:
+  name: feature_tour
+
+  # [initial marking] A place with no token list gets a presence token.
+  initial_marking: draft
+
+  # [place metadata] Cosmetic, and deliberately NOT part of the fingerprint, so
+  # a status label or a diagram group can change without invalidating running
+  # instances. `signoffs` carries none because it is a pool, not a state.
+  places:
+    - name: draft
+      metadata: {status: Draft, editable: true}
+    - name: legal
+      metadata: {status: In review, diagram_group: Review}
+    - name: finance
+      metadata: {status: In review, diagram_group: Review}
+    - name: signoffs
+    - name: approved
+      metadata: {status: Approved}
+    - name: rejected
+      metadata: {status: Rejected, editable: true}
+    - name: escalated
+      metadata: {status: Escalated}
+    - name: archived
+      metadata: {status: Archived}
+
+  transitions:
+    # [AND-split] One transition, two outputs: legal AND finance review at once.
+    # [tx_guard] Evaluated INSIDE the firing transaction, so it queries the
+    #   host's own table rather than reading a boolean the host pre-computed.
+    # [effects] Run in the state-save transaction, in declared order.
+    # [after_commit] Runs only once that transaction has committed (at-least-once).
+    - name: submit
+      from: [draft]
+      to: [legal, finance]
+      tx_guard: "everyLineCosted()"
+      effects:
+        - name: audit
+          params: {action: "doc.submit"}
+      after_commit:
+        - name: notify
+          params: {to: "reviewers", template: "submitted"}
+
+    # [guard] The ordinary kind: an expression over instance context, evaluated
+    #   everywhere including Can/EnabledTransitions.
+    # [reset arcs] Rejecting one branch cancels the sibling branch and discards
+    #   the signoffs collected so far — atomically, in the same firing.
+    - name: reject
+      from: [legal]
+      to: [rejected]
+      guard: "hasRole('legal')"
+      resets: [finance, signoffs]
+      effects:
+        - name: audit
+          params: {action: "doc.reject"}
+
+    # [timers] Host-driven: the library records when tokens entered a place and
+    #   answers "what is due at time T?". It never fires this on its own.
+    - name: escalate
+      from: [finance]
+      to: [escalated]
+      after: 72h
+      effects:
+        - name: audit
+          params: {action: "doc.escalate"}
+
+    # [AND-join] Enabled only when legal, finance AND signoffs are all marked.
+    # [dynamic-cardinality join] ...and the pool holds one signoff per required
+    #   role, where HOW MANY is len(required_roles) — a runtime value. Firing
+    #   consumes exactly those tokens and leaves any others behind; the reset arc
+    #   then discards the remainder.
+    # [tx_guard] Separation of duties, read live: the author cannot approve.
+    - name: approve
+      from: [legal, finance, signoffs]
+      to: [approved]
+      tx_guard: "actor != authorOf()"
+      resets: [signoffs]
+      require:
+        - place: signoffs
+          where: "token.role in required_roles"
+          distinct: role
+          count: "len(required_roles)"
+      effects:
+        - name: audit
+          params: {action: "doc.approve"}
+        - name: outbox
+          params: {event: "doc.approved"}
+      after_commit:
+        - name: notify
+          params: {to: "author", template: "approved"}
+
+    # [OR-input / from_any] One transition serving two stages: archive whichever
+    #   of approved/escalated is marked, consuming only that one.
+    - name: archive
+      from: [approved, escalated]
+      to: [archived]
+      from_any: true
+      effects:
+        - name: audit
+          params: {action: "doc.archive"}

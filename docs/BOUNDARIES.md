@@ -72,6 +72,20 @@ out is still everything about *who those participants are* — the chain itself
 is a value you resolve and hand in, and the roles a token carries mean nothing
 to the engine beyond being data it can count and de-duplicate.
 
+## 5a. A transaction-scoped guard holds a transaction open across your code
+
+`tx_guard:` exists because a decision made before a transaction opens can be
+stale by the time it commits (see `NewTxExpressionConstraint`). Paying for that
+means `Manager.Execute` runs the whole load → fire → save cycle inside one
+database transaction — and *your* code runs inside it too: the `fn` you passed,
+the guards, and every event listener they trigger.
+
+The library will not hide that. A listener that makes an HTTP call, or an `fn`
+that waits on something, holds a row lock for as long as it takes; on SQLite it
+holds the writer. Keep the cycle short and local, or use an ordinary guard and
+accept the pre-read. There is no timeout knob, because the right bound is the
+one your database already enforces.
+
 ## 6. Cross-instance atomicity is a seam, not a feature
 
 Saves are atomic per instance. A step spanning two instances is two

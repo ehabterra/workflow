@@ -10,6 +10,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ehabterra/workflow"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -511,4 +512,66 @@ func TestGuardRejectionIsNotIdentifiable(t *testing.T) {
 	if readyGate(req) {
 		t.Fatal("expected the ready-gate to be the failing rule")
 	}
+}
+
+// TestStaleChainIsRefusedInTheTransaction closes friction 2.
+//
+// `Approve` reads the requisition's amount, derives the approval chain from it,
+// and only then fires. If the amount changes in between — a revision, a
+// correction, a race — the chain it is about to count approvals against is the
+// wrong one. Before #35 there was nowhere to notice: the guard had no
+// transaction and no way to ask.
+//
+// `tx_guard: "... && amountOf() == amount"` asks inside the firing transaction
+// and refuses. The requisition stays Submitted and the approval leaves no trace.
+func TestStaleChainIsRefusedInTheTransaction(t *testing.T) {
+	a, ctx := newApp(t)
+	if err := a.Create(ctx, "st", "REQ-ST", "dana", 1_000, []Line{costed("l1", "CC-100", 1_000)}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := a.Submit(ctx, "st", "dana"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	// At 1,000 the chain is [site_manager], so sam alone would finalise it.
+	// Someone raises the requisition to 20,000 — which needs a second role —
+	// between the read and the fire.
+	if _, err := a.db.ExecContext(ctx, `UPDATE requisitions SET amount = 20000 WHERE id = 'st'`); err != nil {
+		t.Fatalf("revise: %v", err)
+	}
+
+	// The host still holds the chain it derived from the old amount. Firing on
+	// it would approve a 20,000 requisition on one signature.
+	err := a.fire(ctx, "st", map[string]any{
+		"chain":       a.hier.ChainFor(1_000), // stale: [site_manager]
+		"actor":       "sam",
+		"role":        "site_manager",
+		"submitter":   "dana",
+		"amount":      1_000.0, // stale
+		"last_resort": false,
+	}, func(wf *workflow.Workflow) error {
+		if _, err := wf.CreateToken("approvals", workflow.TokenData{"role": "site_manager", "by": "sam"}); err != nil {
+			return err
+		}
+		_, err := wf.ApplyAny(ctx, "approve_last_resort", "approve_final", "approve_partial")
+		return err
+	})
+	if err == nil {
+		t.Fatal("a chain derived from a stale amount must not approve")
+	}
+	mustStatus(t, a, ctx, "st", "Submitted")
+	if n := ledgerSize(t, a, ctx, "st"); n != 0 {
+		t.Errorf("pool = %d tokens, want 0 — the refused cycle left a trace", n)
+	}
+
+	// Re-reading the amount produces the right chain, and the same approval is
+	// then legal — as a partial, because 20,000 needs two roles.
+	if err := a.Approve(ctx, "st", "sam"); err != nil {
+		t.Fatalf("approve on the current amount: %v", err)
+	}
+	mustStatus(t, a, ctx, "st", "Submitted") // one of two roles
+	if err := a.Approve(ctx, "st", "casey"); err != nil {
+		t.Fatalf("second approve: %v", err)
+	}
+	mustStatus(t, a, ctx, "st", "Approved")
 }

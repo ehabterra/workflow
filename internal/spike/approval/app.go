@@ -57,7 +57,7 @@ func New(ctx context.Context, db *sql.DB, hier Hierarchy, dir *Directory) (*App,
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	def, err := wfyaml.NewLoader().LoadDefinition(cfg)
+	def, err := wfyaml.NewLoaderWithTxEnv(txGuardEnv).LoadDefinition(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load definition: %w", err)
 	}
@@ -127,15 +127,18 @@ func (a *App) fire(ctx context.Context, id string, seed map[string]any, apply fu
 	})
 }
 
-// Submit fires the submit transition after evaluating the ready-gate.
+// Submit fires the submit transition.
+//
+// Since #35 the ready-gate is not evaluated here at all: `tx_guard:
+// "readyGate()"` runs it inside the firing transaction. What is left is the
+// error mapping, which still has to recompute the gate because the library
+// reports only THAT a guard rejected (#38).
 func (a *App) Submit(ctx context.Context, id, actor string) error {
 	req, err := loadRequisition(ctx, a.db, id)
 	if err != nil {
 		return err
 	}
-	ready := readyGate(req)
 	err = a.fire(ctx, id, map[string]any{
-		"ready":     ready,
 		"actor":     actor,
 		"submitter": req.Submitter,
 		"amount":    req.Amount,
@@ -143,9 +146,7 @@ func (a *App) Submit(ctx context.Context, id, actor string) error {
 		return wf.ApplyTransitionWithContext(ctx, "submit")
 	})
 	if err != nil {
-		// The library cannot say WHICH guard rejected, so the host recomputes
-		// the gate to produce the right error. See COVERAGE.md, friction 6.
-		if !ready {
+		if !readyGate(req) {
 			return ErrNotReady
 		}
 		return classify(err)
@@ -153,15 +154,15 @@ func (a *App) Submit(ctx context.Context, id, actor string) error {
 	return nil
 }
 
-// Approve is the core of the spike, and since #34 it is mostly the ladder.
+// Approve is the core of the spike, and after #34 and #35 it is mostly the
+// ladder.
 //
 // What it no longer does: read the ledger, work out whether the chain would be
-// satisfied if this approval were recorded, or check that the actor is a
-// required approver. The net answers all three — the approvals are tokens, and
-// the join counts them.
+// satisfied if this approval were recorded, check that the actor is a required
+// approver, or evaluate separation of duties. The net answers all four.
 //
-// What it still does is #35: `sod_ok` is a boolean computed OUTSIDE the
-// transaction, because a guard cannot query the record.
+// What remains is genuinely the host's: the role ladder and the user directory
+// are org data, which is the boundary docs/BOUNDARIES.md draws and keeps.
 func (a *App) Approve(ctx context.Context, id, actor string) error {
 	req, err := loadRequisition(ctx, a.db, id)
 	if err != nil {
@@ -169,17 +170,18 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	}
 	chain := a.hier.ChainFor(req.Amount)
 	lastResort := lastResortAllowed(a.dir, actor, chain)
-	// Separation of duties applies to EVERY approve branch, last-resort included.
-	// This used to read `actor != req.Submitter || lastResort`, exempting the
-	// hatch — which let an admin approve a requisition they had submitted
-	// themselves, since `approve_last_resort` needs no role. The hatch exists for
-	// a chain nobody can satisfy; that is not a reason to let someone sign off on
-	// their own record. TestAdminSubmitterCannotSelfApprove pins it.
-	sodOk := actor != req.Submitter
 	role := a.dir.RoleOf(actor)
 
+	// Separation of duties is no longer computed here. Every approve branch
+	// carries `tx_guard: "actor != submitterOf()"`, which reads the record
+	// inside the firing transaction — so it cannot be defeated by the submitter
+	// changing after this function read the row.
+	//
+	// `amountOf() == amount` is the other half: the chain below is derived from
+	// an amount read OUTSIDE the transaction, and a chain computed from a stale
+	// amount is the wrong chain. The tx guard refuses rather than counting
+	// approvals against it. See COVERAGE.md, friction 2.
 	err = a.fire(ctx, id, map[string]any{
-		"sod_ok":      sodOk,
 		"chain":       chain,
 		"actor":       actor,
 		"role":        role,
@@ -206,7 +208,7 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 		// which rule it was to choose a status code. That is #38 — and it is now
 		// the only reason these values are recomputed here; nothing about the
 		// decision itself depends on them any more.
-		if !sodOk || (!lastResort && !slices.Contains(chain, role)) {
+		if actor == req.Submitter || (!lastResort && !slices.Contains(chain, role)) {
 			return ErrForbidden
 		}
 		return classify(err)

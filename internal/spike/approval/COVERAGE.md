@@ -33,47 +33,36 @@ what guards them, what effects they fire, and what state results. Schema, record
 CRUD, the role ladder config, and the user directory are domain code that would
 exist with or without the library, and are excluded from both sides.
 
-> **Re-measured after #34 (dynamic-cardinality join) landed.** Both columns below
-> come from the same reproducible rule (see *Re-running the measurement*), so the
-> delta is apples-to-apples. The absolute numbers differ slightly from those
-> reported in the #36 PR, which applied the same rule by hand and did not count
-> each function's doc comment; the earlier figures are kept in the footnote.
+> **Re-measured after #35 (transaction-scoped guards) landed** — the last of the
+> three features #46 said would decide whether this library is worth adopting.
+> All columns come from the same reproducible rule (see *Re-running the
+> measurement*), with one bucket renamed; that rename is called out below because
+> it changes what the middle row means.
 
-| | after #36 | after #34 |
-|---|---|---|
-| **Declarative** (`workflow.yaml`) | 85 | **109** |
-| **Go — orchestration** (branching, ledger, satisfaction, binding) | 208 | **157** |
-| **Go — effect implementations** (the SQL itself) | 180 | **164** |
-| **Total Go** | 388 | **321** |
+| | after #36 | after #34 | after #35 |
+|---|---|---|---|
+| **Declarative** (`workflow.yaml`) | 85 | 109 | **111** |
+| **Go — orchestration** (sequencing, branching, satisfaction) | 208 | 157 | **159** |
+| **Go — host implementations** (the SQL itself: effects, and now guard queries) | 180 | 164 | **222** |
+| **Total Go** | 388 | 321 | **381** |
 
-### **Declarative coverage: 25% by line** (was 18%)
+### **Declarative coverage: 23% by line** — *down* from 25%
 
-Counting orchestration only — the sequencing decisions, excluding the SQL that
-would exist under any design — it is **41%**, up from 29%.
+Report the uncomfortable number first. **Total Go went UP by 60 lines**, and it
+is not an accounting trick: the bucket rename moved `txGuardEnv` (58 lines) into
+host implementations, and that function is genuinely new code.
 
-The headline this time is that **Go went down**, by 67 lines. #36 relocated
-decisions from Go into the definition without deleting much; #34 deleted code
-outright. Three functions and an entire effect are simply gone:
+What it replaced was smaller. `readyGate(req)` was a 12-line pure function over
+an already-loaded struct, and `sod_ok` was one expression. What replaced them is
+three SQL queries with their own error handling, registered once at startup. The
+same thing happened at #36 — a registry entry is more verbose than the closure
+it replaces — and it is the honest cost of making something addressable by a
+definition instead of inlined in a call path.
 
-- `chainSatisfied` (26 lines) — the AND-join whose arity was `len(chain)`,
-  including the `pending` parameter that forced the host to *simulate the write
-  it was about to make*
-- `approvedRoles` (17 lines) — the ledger read that fed it
-- `roleInChain` (9 lines) — the authorization check the net could not express
-- the `record_approval` effect and the `approvals` table it wrote (16 lines net)
+The line count is measuring the wrong thing here, which is exactly why this
+document has always carried a second measure.
 
-What replaced them is four lines of YAML:
-
-```yaml
-require:
-  - place: approvals
-    where: "token.role in chain"
-    distinct: role
-    count: "len(chain)"
-```
-
-Line-counting YAML against Go flatters neither side — YAML is denser per line —
-so here is the same question asked by **concern**, which is the fairer measure:
+### **Declarative coverage: 80% by concern** (14 full + 4 half of 20) — was 68%
 
 | # | Workflow concern | Where it lives |
 |---|---|---|
@@ -82,13 +71,13 @@ so here is the same question asked by **concern**, which is the fairer measure:
 | 3 | Initial marking | ✅ declarative |
 | 4 | Terminal detection | ✅ declarative |
 | 5 | Guard expressions | ✅ declarative |
-| 6 | Guard *inputs* (`ready`, `sod_ok`, ~~`chain_satisfied`~~) | ⚠️ half since #34 — one of the three is gone; the rest need #35 |
-| 7 | Ready-gate evaluation | ❌ Go (#35) |
-| 8 | Approval chain resolution | ❌ Go — the ladder is domain policy, but the net now consumes it as a *value* rather than an answer |
-| 9 | Approvals ledger | ✅ **declarative since #34** — the pool of colored tokens IS the ledger |
-| 10 | Chain satisfaction (dynamic AND-join) | ✅ **declarative since #34** |
-| 11 | Separation of duties | ⚠️ half — guard declarative, input Go |
-| 12 | Last-resort override | ⚠️ half since #34 — a declared transition with its own guard and effects; the input is Go |
+| 6 | Guard *inputs* (~~`ready`~~, ~~`sod_ok`~~, ~~`chain_satisfied`~~) | ✅ **declarative since #35** — all three pre-computed booleans are gone |
+| 7 | Ready-gate evaluation | ✅ **declarative since #35** — `tx_guard: "readyGate()"` |
+| 8 | Approval chain resolution | ⚠️ half — the ladder is host policy by design, but since #35 the net verifies its INPUT in the transaction (`amountOf() == amount`) |
+| 9 | Approvals ledger | ✅ declarative since #34 — the pool of colored tokens IS the ledger |
+| 10 | Chain satisfaction (dynamic AND-join) | ✅ declarative since #34 |
+| 11 | Separation of duties | ✅ **declarative since #35** — `tx_guard: "actor != submitterOf()"`, read live |
+| 12 | Last-resort override | ⚠️ half — a declared transition; the eligibility input is org data |
 | 13 | Branch selection (partial vs final) | ✅ declarative since #36 |
 | 14 | Per-transition effect binding | ✅ declarative since #36 |
 | 15 | Effect ordering | ✅ declarative since #36 |
@@ -96,20 +85,19 @@ so here is the same question asked by **concern**, which is the fairer measure:
 | 17 | Status projection | ⚠️ half since #36 — *when* it runs is declared, the place→status map is still host code (#39) |
 | 18 | Multi-instance cascade | ❌ Go — **and incorrect**, see friction 5 |
 | 19 | Guard rejection → error mapping | ❌ Go (#38) |
-| 20 | Actor authorization (is this actor even in the chain?) | ⚠️ half since #34 — `role in chain` is the guard; the directory lookup is Go |
+| 20 | Actor authorization | ⚠️ half — `role in chain` is the guard; the directory lookup is org data |
 
-### **Declarative coverage: 68% by concern** (11 full + 5 half of 20) — was 50%
+**The target is met.** This document set "**above 70%** by concern once #34, #35
+and #36 have all landed" before any of them existed. All three are in, and it is
+**80%**.
 
-The target this document set after #36 was "**above 70%** by concern once #34,
-#35 and #36 have all landed". Two of the three are in and it stands at 68%, so
-the estimate is holding: #35 is what carries concerns 6, 7, 11 and 20, and it is
-the only one of the three still open.
-
-Read the shape rather than the number. What #34 moved is not plumbing — it is
-the part that made this workflow hard. The net now holds the ledger, counts it,
-de-duplicates it by role, and refuses an approver the chain does not require.
-What is left below the line is the *inputs* to guards (#35), the multi-instance
-cascade (#37), and error identity (#38).
+Read what is left, because the shape of the residue is the real result. Of the
+six concerns not fully declarative, **four are deliberately out of scope**: the
+role ladder, the directory, and last-resort eligibility are org modelling, which
+`docs/BOUNDARIES.md` says stays in the host and which this measurement agrees
+should. The two that are genuine gaps are the multi-instance cascade (#37) and
+error identity (#38) — both small, both filed, neither load-bearing for the
+question #46 asked.
 
 ### An unplanned result: the authorization hole closed itself
 
@@ -179,26 +167,63 @@ out-of-chain approval can never count toward the join, and `approve_partial`'s
 `role in chain` guard refuses to record one at all. See *An unplanned result*
 above for why this is now structural rather than a check.
 
-**What it did not solve.** `chain` still arrives from the host via `SetContext`,
-read before the transaction opens — so the *value* the join counts against can
-still be stale. That is #35, and #34 does not touch it.
+**What #34 did not solve, and #35 did.** `chain` still arrives from the host via
+`SetContext`, read before the transaction opens, so the value the join counts
+against could be stale. #35 does not move the ladder into the definition — it is
+org policy and stays out by design — but the approve branches now carry
+`amountOf() == amount`, which verifies inside the transaction that the input the
+chain was derived from has not moved. See friction 2.
 
-### 2 — Guards cannot query ([#35](https://github.com/ehabterra/workflow/issues/35)) · ~37 lines, plus a race — **now the top item**
+**One thing still not expressible.** A `require:` expression is evaluated against
+the workflow context and the place's tokens, NOT against the tx-guard
+environment — so `count:` cannot itself call a query. Here that is covered by the
+guard checking the chain's input instead, but a join whose arity is a pure
+function of host data would still need the host to resolve it. Worth a follow-up
+issue rather than a workaround.
 
-Every guard in `workflow.yaml` still reads a boolean or a value the host
-pre-computed: `ready`, `sod_ok`, `chain`. None can be computed by the guard,
-because `envBuilder` receives an `Event` and an `Event` has no transaction.
+### 2 — Guards cannot query ([#35](https://github.com/ehabterra/workflow/issues/35)) — ✅ **RESOLVED**
 
-#34 changed the *shape* of this problem without solving it. The satisfaction
-test is no longer a pre-computed answer — the net works it out from tokens it
-holds, under the same lock as the firing, so the ledger half of the race is
-closed. What remains is the *inputs*: `chain` is derived from `req.Amount`, read
-outside the transaction. If the requisition's value changes between the read and
-the fire, the join counts against a chain that is no longer the right one.
+*Was: ~37 lines, plus a race with nowhere to close it.*
 
-That is a narrower race than before (it needs the record to change, not merely a
-concurrent approval), but it is the same defect, and there is still nowhere to
-put an in-transaction re-check.
+Every guard used to read a boolean the host had pre-computed — `ready`,
+`sod_ok` — because `envBuilder` receives an `Event` and an `Event` has no
+transaction. Worse than the volume was the timing: `Approve` did its whole
+phase-1 computation OUTSIDE the transaction and then fired, so a value that
+changed in between was silently stale. Optimistic concurrency catches a
+concurrent *save*; it does not catch a stale *decision input*.
+
+`tx_guard:` closes it. The expression is evaluated inside the firing
+transaction, against an environment the host builds FROM that transaction:
+
+```yaml
+- name: submit
+  tx_guard: "readyGate()"                                   # queries the lines
+
+- name: approve_final
+  tx_guard: "actor != submitterOf() && amountOf() == amount" # reads the record
+```
+
+`readyGate` and `sod_ok` are gone from Go entirely. The `amountOf() == amount`
+half is the interesting one: the approval chain is derived from the
+requisition's value, which is host policy and stays in Go — but the guard now
+verifies, inside the transaction, that the value the chain was derived from has
+not moved. `TestStaleChainIsRefusedInTheTransaction` raises a requisition from
+1,000 to 20,000 between the read and the fire; the firing that would have
+approved a 20,000 requisition on one signature is refused, and leaves no trace.
+
+**What it cost.** A transaction is now held open across the caller's `fn`, its
+guards, and every listener they trigger — documented as a boundary rather than
+hidden. And the query environment is more code than the booleans it replaced
+(see the headline figures); this is the second time a feature has traded volume
+for addressability, and it is worth saying plainly both times.
+
+**A design defect it surfaced.** The first implementation had the builder
+*replace* the guard environment. Every real tx guard turned out to compare
+something read live against something the host passed in (`actor !=
+submitterOf()`), so replacing meant `actor` silently evaluated to nil and the
+guard quietly answered wrong. The builder's entries are merged into the standard
+environment instead. Found by converting this spike, not by review — which is
+the argument for keeping the spike compiling against every feature.
 
 ### 3 — Effects are opaque closures ([#36](https://github.com/ehabterra/workflow/issues/36)) — ✅ **RESOLVED**
 
@@ -254,7 +279,20 @@ That test should be **inverted into a correctness test** once atomic multi-insta
 transitions land. Any real adopter hits this the moment they have revisions, and
 the workaround silently creates state the engine does not know about.
 
-### 6 — Guard rejections are not identifiable ([#38](https://github.com/ehabterra/workflow/issues/38)) · ~20 lines
+### 6 — `require:` cannot use the transaction environment ([#34](https://github.com/ehabterra/workflow/issues/34) + [#35](https://github.com/ehabterra/workflow/issues/35)) · new
+
+The two features that pair everywhere else do not compose here. A requirement's
+`count:` / `where:` expressions see the workflow context and the place's tokens;
+they do not see the `tx_guard` environment, so a join whose arity is a function
+of host data still needs the host to resolve that data and inject it.
+
+The spike works around it honestly — the guard verifies the chain's input in the
+transaction (friction 2) — and the workaround is sound, because the chain itself
+is org policy that belongs in the host anyway. But a net whose join size is a
+pure database fact would have no such excuse. Filed as a follow-up rather than
+papered over.
+
+### 7 — Guard rejections are not identifiable ([#38](https://github.com/ehabterra/workflow/issues/38)) · ~20 lines
 
 `Submit` needs 422 for a failed ready-gate and `Approve` needs 403 for separation
 of duties, but the library reports only that *a* guard rejected. The host recomputes
@@ -262,7 +300,7 @@ the failing condition to decide which error to return — `if !ready { return
 ErrNotReady }` — duplicating the guard outside the net purely to produce the right
 status code.
 
-### 7 — Status projection is manual ([#39](https://github.com/ehabterra/workflow/issues/39)) · ~16 lines
+### 8 — Status projection is manual ([#39](https://github.com/ehabterra/workflow/issues/39)) · ~16 lines
 
 Place metadata carries a `status` label, `statusOf` derives it, and `project`
 writes it in the transaction — repeated for every action. Forget it on one
@@ -356,8 +394,12 @@ function's doc comment**, from `func` line to the closing brace at column 0:
 
 - **orchestration** — `fire`, `Submit`, `Approve`, `Reject`, `Resubmit`,
   `Revoke`, `classify` in `app.go`, plus `readyGate` in `domain.go`
-- **effect implementations** — `registerEffects`, `resolveTarget`, `statusFor`,
-  `asTx`, `str` in `effects.go`
+- **host implementations** — `registerEffects`, `resolveTarget`, `statusFor`,
+  `asTx`, `str` in `effects.go`, plus `txGuardEnv` in `domain.go`. Renamed from
+  "effect implementations" at #35: `txGuardEnv` is the SQL behind the guards,
+  the exact counterpart of the SQL behind the effects, and putting it in
+  orchestration would have called a query a sequencing decision. The rename is
+  why the middle row moves at #35 — apply it to both revisions when comparing.
 - **excluded** — `App`/`New`/`Create`/`Status`/`Marking`/`Ledger` in `app.go`, and
   the role/directory/record/schema block in `domain.go`
 
@@ -367,9 +409,19 @@ landed (declarative 85, orchestration 167, effects 142) came from the same rule
 applied by hand without counting doc comments; re-measured mechanically the same
 tree gives 85 / 208 / 180.
 
-**Target after [#34](https://github.com/ehabterra/workflow/issues/34),
-[#35](https://github.com/ehabterra/workflow/issues/35), and
-[#36](https://github.com/ehabterra/workflow/issues/36):** the same workflow above
-**70%** by concern. Two of the three have landed and it stands at **68%**, so the
-target is intact and #35 decides it. If it does not get there, that is the signal
-to stop investing and keep the library scoped to nets that are genuinely parallel.
+**The target set before any of them existed:** the same workflow above **70%** by
+concern once [#34](https://github.com/ehabterra/workflow/issues/34),
+[#35](https://github.com/ehabterra/workflow/issues/35) and
+[#36](https://github.com/ehabterra/workflow/issues/36) had all landed — with the
+explicit clause that failing it was the signal to stop investing and keep the
+library scoped to nets that are genuinely parallel.
+
+All three have landed. It is **80%**, so the investment is answered: build the
+adoption floor (#40, #41) and the authoring track (#42 → #43, #44), and invert
+`TestSupersedeCascade_DivergesMarking` when #37 lands.
+
+Keep re-running this. The value of the spike is not the number it produced once
+— it is that it compiles against every feature and re-measures, and it has now
+caught a design defect (#35's environment) and two correctness holes (the #34
+authorization gap, the last-resort SoD bypass) that neither the test suite nor
+review found first.

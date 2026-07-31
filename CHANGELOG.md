@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Transaction-scoped guards** (issue #35) — a guard can now read host state
+  **inside the firing transaction**, instead of a value the host resolved before
+  the transaction existed and hoped was still true. `tx_guard:` (Go:
+  `NewTxExpressionConstraint`) compiles an expression against an environment a
+  **`TxEnvBuilder`** assembles from the transaction itself; what the builder
+  returns is *added* to the standard guard environment, so an expression can
+  compare something read live against something the host passed in
+  (`actor != submitterOf()`). YAML definitions get one via
+  `yaml.NewLoaderWithTxEnv`; a `tx_guard:` without a builder fails at load.
+  **This inverts the write path when a definition uses it.** Ordinarily a fire
+  happens in memory and a transaction opens only at the save; with a tx-scoped
+  guard `Manager.Execute` runs the WHOLE load → fire → save cycle inside one
+  transaction, so the guard reads the same snapshot the version check will be
+  made against — and `ApplyAny` can route on it, not merely veto a branch already
+  chosen. The trade is explicit: a database transaction is held open across the
+  caller's `fn`, its guards, and every listener they trigger. Keep that code
+  short and free of network calls (documented in `docs/BOUNDARIES.md`).
+  This needs a backend that can lend out its transaction: the new optional
+  **`TxScopedStorage`** / **`TxScopedDueStorage`** interfaces (`BeginScope`,
+  `LoadStateScoped`, `SaveStateScoped`, `SaveStateScopedWithDue`), implemented by
+  both SQL backends and covered by the `storagetest` conformance kit. A
+  definition with tx-scoped guards on a backend without it is a loud
+  `errors.ErrUnsupported`, never a silent evaluation against stale data; so is
+  evaluating one outside a firing transaction, which returns the new
+  **`ErrNoTransaction`**. Retries re-decide: each `ErrConflict` attempt opens a
+  new transaction and re-evaluates. The definition-migration handler is consulted
+  *before* the scope opens, since it is host code that may write to storage.
+  `tx_guard` is part of `Definition.Fingerprint()` and is rendered on the diagram
+  (marked ⛁, because *when* it is evaluated is what differs).
+  Re-measured on `internal/spike/approval`: declarative coverage **68% → 80% by
+  concern**, which clears the ≥70% bar `COVERAGE.md` set for #34+#35+#36 before
+  any of them existed. By line it went **25% → 23%**: three pre-computed booleans
+  left Go and were replaced by more verbose SQL, which is recorded rather than
+  massaged.
+- **`examples/feature_tour/` — the example that must stay current.** One runnable
+  workflow exercising every shipped feature, with one test per feature and a
+  README table mapping feature → where → test. It lives in the root module (no
+  `go.mod` of its own) so `go test -p 1 ./...` always compiles it against the
+  working tree: an example pinned to a published version cannot demonstrate an
+  unreleased feature, and one that never runs cannot fail. Features that
+  genuinely cannot be shown there get a row in its "not demonstrated, and why"
+  table. `CONTRIBUTING.md` and `CLAUDE.md` now require updating it with every
+  user-visible feature. It earned its keep immediately: converting it surfaced
+  the tx-environment design defect noted above.
 - **Dynamic-cardinality joins** (issue #34) — a transition can now be enabled by
   a token **count resolved at fire time**, not fixed by the arc structure. The
   classic AND-join asks only "is this place marked?", so the number of things a

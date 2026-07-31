@@ -315,6 +315,17 @@ func (t *Transition) Metadata(key string) (any, bool) {
 	return value, ok
 }
 
+// needsTx reports whether any of this transition's constraints must be
+// evaluated inside the firing transaction (see TxScopedConstraint).
+func (t *Transition) needsTx() bool {
+	for _, c := range t.constraints {
+		if tc, ok := c.(TxScopedConstraint); ok && tc.NeedsTx() {
+			return true
+		}
+	}
+	return false
+}
+
 // validate validates the transition against all constraints (internal method)
 func (t *Transition) validate(event Event) error {
 	for _, constraint := range t.constraints {

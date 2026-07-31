@@ -38,6 +38,13 @@ type Workflow struct {
 	// persisted, and ignored by non-versioned backends.
 	version int64
 
+	// activeTx is the transaction the current firing cycle runs inside, bound by
+	// Manager.Execute for the duration of the caller's fn when the definition
+	// has transaction-scoped guards (see TxScopedStorage). It is nil at every
+	// other moment, and a tx-scoped guard evaluated while it is nil fails with
+	// ErrNoTransaction rather than silently reading outside the transaction.
+	activeTx any
+
 	// fired logs the transitions applied to this instance, in order, with the
 	// marking either side of each. Manager.Execute drains it after the caller's
 	// function returns to resolve the effects those transitions declare.
@@ -79,6 +86,23 @@ func (w *Workflow) setVersion(v int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.version = v
+}
+
+// bindTx binds (or, with nil, releases) the transaction the current firing
+// cycle runs inside. Manager.Execute owns the lifetime: it binds before calling
+// the caller's fn and releases before the scope closes, so a workflow value that
+// outlives the cycle can never hand a committed transaction to a guard.
+func (w *Workflow) bindTx(tx any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.activeTx = tx
+}
+
+// tx returns the transaction bound to the current firing cycle, or nil.
+func (w *Workflow) tx() any {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.activeTx
 }
 
 // setClock pins the token-stamping clock (used by Manager.FireDue so tokens
@@ -200,6 +224,49 @@ type TransactionalStorage interface {
 	// Effects run in order after the state write; each receives the
 	// backend-specific transaction handle.
 	SaveStateInTx(ctx context.Context, id string, marking Marking, context map[string]any, expectedVersion int64, effects ...TxSideEffect) (newVersion int64, err error)
+}
+
+// TxScopedStorage is an optional interface a Storage backend may implement to
+// run a WHOLE load → fire → save cycle inside one transaction that the caller
+// drives. It is what lets a guard read host state as of the firing transaction
+// (see NewTxExpressionConstraint): ordinarily a fire happens entirely in memory
+// and the transaction only opens at the save, so there is nowhere for a guard to
+// look.
+//
+// The trade is real and deliberate: on this path a database transaction stays
+// open across the caller's fn, its guards, and every event listener they
+// trigger. Keep that code short and free of network calls — see
+// docs/BOUNDARIES.md.
+type TxScopedStorage interface {
+	TransactionalStorage
+
+	// BeginScope opens a transaction, invokes fn with the backend-specific
+	// handle (the SQL backends pass a *sql.Tx), and commits only if fn returns
+	// nil — rolling back on error or panic. Nesting is not supported.
+	BeginScope(ctx context.Context, fn func(ctx context.Context, tx any) error) error
+
+	// LoadStateScoped is LoadState within the caller's transaction, so the
+	// marking and version a firing decides on come from the same snapshot the
+	// guards read.
+	LoadStateScoped(ctx context.Context, tx any, id string) (marking Marking, context map[string]any, version int64, err error)
+
+	// SaveStateScoped is SaveState within the caller's transaction. Version
+	// checking is unchanged: a stale writer still gets ErrConflict.
+	SaveStateScoped(ctx context.Context, tx any, id string, marking Marking, context map[string]any, expectedVersion int64) (newVersion int64, err error)
+}
+
+// TxScopedDueStorage composes a tx-scoped save with the next-due index — the
+// scoped counterpart of DueStorage.SaveStateWithDue. A backend that is both a
+// TxScopedStorage and a DueStorage MUST implement it, for the same reason
+// TransactionalDueStorage exists: committing state without updating the due
+// column in the same transaction silently corrupts the index.
+type TxScopedDueStorage interface {
+	TxScopedStorage
+	DueStorage
+
+	// SaveStateScopedWithDue behaves like SaveStateScoped but also records the
+	// instance's next-due time (nil clears it).
+	SaveStateScopedWithDue(ctx context.Context, tx any, id string, marking Marking, context map[string]any, expectedVersion int64, due *time.Time) (newVersion int64, err error)
 }
 
 // DueStorage is an optional interface a Storage backend may implement to
