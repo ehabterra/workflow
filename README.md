@@ -224,6 +224,36 @@ audit records are exactly-once). The crash windows that remain — and the
 reconciler pattern that closes them — are documented honestly in
 [docs/guides/PRODUCTION_RECIPES.md](docs/guides/PRODUCTION_RECIPES.md).
 
+**Declared effects.** A transition can say what *happens* when it fires, not
+just that it may. `effects:` names ordered effects that run **inside the
+state-save transaction**; `after_commit:` is the phase for work that must not
+be transactional (mail, third-party calls):
+
+```yaml
+- name: approve
+  from: [review]
+  to: [approved]
+  effects:
+    - name: audit
+      params: {action: "article.approve"}
+    - name: outbox
+      params: {event: "article.approved"}
+  after_commit:
+    - name: email
+      params: {to: "submitter", template: "approved"}
+```
+
+Implementations are registered once at startup against an `EffectRegistry`
+(`Validate(def)` catches a name nothing implements *then*, rather than the first
+time a rare branch fires) and wired in with `workflow.WithEffectRegistry`. Each
+receives an `EffectEvent` — instance id, transition, the marking either side of
+the firing, its declared params, and a copy of the instance context. Because
+effects bind to the *transition*, two guarded alternatives out of one place fire
+**different** effect sets, so an `ApplyAny` branch needs no host-side switch. A
+definition that declares effects without a registry is a loud error, never a
+silent skip — and after-commit effects are **at-least-once**: the library
+provides the phase, not the guarantee.
+
 **Definition evolution.** Every save stamps a structural fingerprint and a
 compact shape. When a deployed definition changes, your
 `WithDefinitionMigration` hook receives a **structural diff** — places and
