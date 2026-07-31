@@ -64,16 +64,18 @@ workflow:
     # it such a requisition is unapprovable. It is tried FIRST because it is the
     # narrowest condition.
     #
-    # It carries the separation-of-duties tx_guard like every other approve
-    # branch. An earlier version did not, and the host exempted last-resort from
-    # SoD on top of that, so an admin could approve their own requisition. Being
-    # able to break a deadlocked chain is not a licence to sign off on your own
-    # record — and with the rule on all three branches, the definition says so.
+    # It carries the SAME tx_guard as every other approve branch, and that is
+    # the point. Two earlier versions got this wrong: one omitted `sod_ok`, so an
+    # admin could approve their own requisition; the next omitted the amount
+    # check, so an admin could approve on a chain derived from a value that had
+    # since moved — `last_resort` is itself derived from that chain. A branch
+    # that exists to break a deadlock is not a branch that gets to skip the
+    # rules, and identical text on all three is how you can see that at a glance.
     - name: approve_last_resort
       from: [submitted, approvals]
       to: [approved]
       guard: "last_resort"
-      tx_guard: "actor != submitterOf()"
+      tx_guard: "sodOk() && amountOf() == amount"
       resets: [approvals]
       effects:
         - name: project_status
@@ -105,7 +107,7 @@ workflow:
     - name: approve_final
       from: [submitted, approvals]
       to: [approved]
-      tx_guard: "actor != submitterOf() && amountOf() == amount"
+      tx_guard: "sodOk() && amountOf() == amount"
       resets: [approvals]
       require:
         - place: approvals
@@ -137,7 +139,7 @@ workflow:
       from: [submitted]
       to: [submitted]
       guard: "role in chain"
-      tx_guard: "actor != submitterOf() && amountOf() == amount"
+      tx_guard: "sodOk() && amountOf() == amount"
       effects:
         - name: project_status
         - name: audit

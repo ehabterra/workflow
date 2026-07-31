@@ -124,9 +124,11 @@ func NewExpressionConstraintWithEnv(exprStr string, envBuilder func(Event) map[s
 // transaction instead of a value read before it opened.
 //
 // A definition containing one requires Manager.Execute against a
-// TxScopedStorage backend. Evaluating it outside a firing transaction — a bare
-// Workflow.ApplyTransition, a CanTransition probe, a non-transactional backend —
-// fails with ErrNoTransaction rather than quietly answering from stale state.
+// TxScopedStorage backend; Execute rejects a backend that is not one with
+// errors.ErrUnsupported, before anything fires. Evaluating the guard itself with
+// no firing transaction — a bare Workflow.ApplyTransition, or a CanTransition
+// probe outside Execute — fails with ErrNoTransaction rather than quietly
+// answering from stale state.
 // Keep ordinary preconditions in a plain guard, which works everywhere; reach
 // for this one only where staleness is a correctness problem.
 func NewTxExpressionConstraint(exprStr string, builder TxEnvBuilder) (*ExpressionConstraint, error) {

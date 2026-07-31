@@ -204,10 +204,7 @@ func transitionRecord(t *Transition) string {
 	effects := t.Effects()
 	afterCommit := t.AfterCommit()
 	requires := t.Requirements()
-	txGuard := ""
-	if g, ok := t.Metadata(txGuardMeta); ok {
-		txGuard, _ = g.(string)
-	}
+	txGuard := t.txGuardRecord()
 	if len(effects) > 0 || len(afterCommit) > 0 || len(requires) > 0 || txGuard != "" {
 		writeLenPrefixedList(&rec, effectRecords(effects))
 		writeLenPrefixedList(&rec, effectRecords(afterCommit))
@@ -222,10 +219,40 @@ func transitionRecord(t *Transition) string {
 }
 
 // txGuardMeta is the transition-metadata key holding the transaction-scoped
-// guard's expression string, mirroring how the plain "guard" string is stored
-// for the fingerprint and for diagrams. The compiled constraint is the thing
-// that actually runs; this is its structural record.
+// guard's expression string. The YAML loader sets it so diagrams can render the
+// expression; the fingerprint does not depend on it (see txGuardRecord).
 const txGuardMeta = "tx_guard"
+
+// txGuardRecord returns the structural record of a transition's
+// transaction-scoped guards: the expression of every tx-scoped
+// ExpressionConstraint installed on it, sorted and joined.
+//
+// It reads the CONSTRAINTS, not the metadata, because the constraints are what
+// decide when the net may fire — and what put the whole cycle inside a
+// transaction. A transition built in Go with NewTxExpressionConstraint but
+// without the matching SetMetadata would otherwise run tx-scoped while
+// fingerprinting as though it had no guard at all, so two definitions differing
+// only in their tx guard would share a fingerprint. Metadata is still folded in,
+// so a hand-set label cannot silently drop out of the hash either.
+func (t *Transition) txGuardRecord() string {
+	var parts []string
+	for _, c := range t.constraints {
+		ec, ok := c.(*ExpressionConstraint)
+		if ok && ec.NeedsTx() {
+			parts = append(parts, ec.expression)
+		}
+	}
+	if meta, ok := t.Metadata(txGuardMeta); ok {
+		if s, _ := meta.(string); s != "" && !slices.Contains(parts, s) {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, "\x00")
+}
 
 // definitionHasTxGuards reports whether any transition carries a constraint that
 // must be evaluated inside the firing transaction. Manager.Execute needs the

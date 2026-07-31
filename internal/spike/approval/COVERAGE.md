@@ -354,6 +354,35 @@ small enough to read in one sitting, which argues for
 about it does. Orchestration went 151 → 157 lines, because the fix is worth
 explaining in place.
 
+### Round three, on #35: two fail-open guards
+
+Review found both, and both are the same class of mistake — a check whose
+*failure direction* had never been chosen.
+
+**A separation-of-duties check that failed open.** The environment exposed
+`submitterOf()` and the guard read `actor != submitterOf()`. On any query error —
+including a missing row — it returned `""`, and no actor equals `""`, so the
+check PASSED. An unreadable requisition was approvable.
+
+The proposed fix was a sentinel value nothing could equal. That does not work,
+for exactly the reason the bug exists: `actor != sentinel` is *also* true. The
+comparison had to move inside the function. `sodOk()` owns the whole question and
+returns false on any read failure, which is the only shape that lets a failure
+fall the safe way. `TestSodOkFailsClosed` pins all three directions.
+
+**The last-resort branch skipped the amount check.** The other two approve
+branches carry `amountOf() == amount`; this one had only the SoD half. But
+`last_resort` is itself derived from the chain, which is derived from the amount
+— so the branch most in need of the check was the one without it, and the file's
+own header comment claimed otherwise. All three now carry identical text, which
+is the point: a rule you can only verify by reading three different expressions
+is a rule that will drift again.
+
+That is the third consecutive round in which review found a correctness hole in
+this net, and the second in which the hole was in the escape hatch. The pattern
+is worth naming: `approve_last_resort` exists to bypass a rule, and every time it
+has been written it has quietly bypassed a rule nobody meant it to.
+
 ## What worked well
 
 Worth recording, because the spike is not an argument that the library is bad:

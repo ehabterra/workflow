@@ -272,15 +272,25 @@ func txGuardEnv(ctx context.Context, tx any, ev workflow.Event) map[string]any {
 			return bad == 0
 		},
 
-		// submitterOf: separation of duties, read live. Was the `sod_ok` boolean,
+		// sodOk: separation of duties, read live. Was the `sod_ok` boolean,
 		// computed from a row the host had read before the transaction opened.
-		"submitterOf": func() string {
+		//
+		// The COMPARISON is inside the function on purpose. An earlier version
+		// exposed `submitterOf()` and let the guard write
+		// `actor != submitterOf()` — which failed OPEN: a query error returned
+		// "", no actor equals "", so the check passed and an unreadable
+		// requisition could be approved. Returning a sentinel instead does not
+		// help, for exactly the same reason. Only a function that owns the whole
+		// question can decide which way a failure falls.
+		"sodOk": func() bool {
 			var submitter string
 			if err := sqlTx.QueryRowContext(ctx,
 				`SELECT submitter FROM requisitions WHERE id = ?`, id).Scan(&submitter); err != nil {
-				return ""
+				return false // unreadable record: refuse, do not approve
 			}
-			return submitter
+			actor, _ := ev.Workflow().Context("actor")
+			name, _ := actor.(string)
+			return name != "" && name != submitter
 		},
 
 		// amountOf: the value the approval chain was derived from. The chain

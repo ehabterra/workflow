@@ -146,7 +146,12 @@ func (a *App) Submit(ctx context.Context, id, actor string) error {
 		return wf.ApplyTransitionWithContext(ctx, "submit")
 	})
 	if err != nil {
-		if !readyGate(req) {
+		// Map against the CURRENT record, not the one read before the fire: the
+		// guard decided inside the transaction, and a gate that failed after
+		// this function's read would otherwise be reported as a 409 instead of
+		// a 422. Re-reading is the host paying twice for what #38 would give it
+		// once — the library knows which guard rejected and will not say.
+		if current, lerr := loadRequisition(ctx, a.db, id); lerr == nil && !readyGate(current) {
 			return ErrNotReady
 		}
 		return classify(err)
@@ -173,9 +178,9 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	role := a.dir.RoleOf(actor)
 
 	// Separation of duties is no longer computed here. Every approve branch
-	// carries `tx_guard: "actor != submitterOf()"`, which reads the record
-	// inside the firing transaction — so it cannot be defeated by the submitter
-	// changing after this function read the row.
+	// carries `tx_guard: "sodOk() && ..."`, which reads the record inside the
+	// firing transaction — so it cannot be defeated by the submitter changing
+	// after this function read the row.
 	//
 	// `amountOf() == amount` is the other half: the chain below is derived from
 	// an amount read OUTSIDE the transaction, and a chain computed from a stale
@@ -206,9 +211,16 @@ func (a *App) Approve(ctx context.Context, id, actor string) error {
 	if err != nil {
 		// The library reports only THAT the net refused, so the host re-derives
 		// which rule it was to choose a status code. That is #38 — and it is now
-		// the only reason these values are recomputed here; nothing about the
-		// decision itself depends on them any more.
-		if actor == req.Submitter || (!lastResort && !slices.Contains(chain, role)) {
+		// the only reason any of this is recomputed; nothing about the decision
+		// itself depends on it any more.
+		//
+		// Re-read for the same reason as Submit: the guard judged the current
+		// row, so mapping against the pre-fire snapshot can name the wrong rule.
+		submitter, live := req.Submitter, chain
+		if current, lerr := loadRequisition(ctx, a.db, id); lerr == nil {
+			submitter, live = current.Submitter, a.hier.ChainFor(current.Amount)
+		}
+		if actor == submitter || (!lastResort && !slices.Contains(live, role)) {
 			return ErrForbidden
 		}
 		return classify(err)

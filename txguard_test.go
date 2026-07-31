@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ehabterra/workflow"
 	"github.com/ehabterra/workflow/storage"
@@ -45,8 +46,11 @@ func txGuardNet(t *testing.T, expr string, builder workflow.TxEnvBuilder) *workf
 	return def
 }
 
-// txGuardFixture wires a real SQLite backend plus a host table the guard reads.
-func txGuardFixture(t *testing.T, expr string) (*workflow.Manager, *workflow.Definition, *sql.DB) {
+// txGuardBackend wires a real SQLite backend plus the host table the guard
+// reads, and the environment that reads it. The environment queries through the
+// transaction it is handed — not through the *sql.DB — which is the whole point:
+// it sees the state this cycle will commit against.
+func txGuardBackend(t *testing.T) (*storage.SQLiteStorage, *sql.DB, workflow.TxEnvBuilder) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -68,9 +72,7 @@ func txGuardFixture(t *testing.T, expr string) (*workflow.Manager, *workflow.Def
 		t.Fatal(err)
 	}
 
-	// The env reads through the transaction it is handed — not through the *sql.DB
-	// — which is the whole point: it sees the state this cycle will commit against.
-	def := txGuardNet(t, expr, func(ctx context.Context, tx any, ev workflow.Event) map[string]any {
+	env := func(ctx context.Context, tx any, ev workflow.Event) map[string]any {
 		sqlTx := tx.(*sql.Tx)
 		return map[string]any{
 			"approvedCount": func() int {
@@ -82,9 +84,16 @@ func txGuardFixture(t *testing.T, expr string) (*workflow.Manager, *workflow.Def
 				return n
 			},
 		}
-	})
+	}
+	return store, db, env
+}
 
-	return workflow.NewManager(workflow.NewRegistry(), store), def, db
+// txGuardFixture is txGuardBackend plus the single-transition net most of these
+// tests use.
+func txGuardFixture(t *testing.T, expr string) (*workflow.Manager, *workflow.Definition, *sql.DB) {
+	t.Helper()
+	store, db, env := txGuardBackend(t)
+	return workflow.NewManager(workflow.NewRegistry(), store), txGuardNet(t, expr, env), db
 }
 
 func approveDoc(t *testing.T, db *sql.DB, doc string) {
@@ -225,33 +234,7 @@ func TestTxGuardDecidesBeforeEffectsRun(t *testing.T) {
 // a firing that was already chosen.
 func TestTxGuardRoutesApplyAny(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("sqlite3", "file:"+t.Name()+"?mode=memory&cache=shared")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	db.SetMaxOpenConns(1)
-
-	store, err := storage.NewSQLiteStorage(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnsureSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `CREATE TABLE approvals (doc TEXT NOT NULL)`); err != nil {
-		t.Fatal(err)
-	}
-
-	env := func(ctx context.Context, tx any, ev workflow.Event) map[string]any {
-		sqlTx := tx.(*sql.Tx)
-		return map[string]any{"approvedCount": func() int {
-			var n int
-			_ = sqlTx.QueryRowContext(ctx, `SELECT COUNT(*) FROM approvals WHERE doc = ?`,
-				ev.Workflow().Name()).Scan(&n)
-			return n
-		}}
-	}
+	store, db, env := txGuardBackend(t)
 	mustTx := func(e string) *workflow.ExpressionConstraint {
 		c, err := workflow.NewTxExpressionConstraint(e, env)
 		if err != nil {
@@ -293,13 +276,57 @@ func TestTxGuardRoutesApplyAny(t *testing.T) {
 	}
 }
 
+// conflictOnce wraps a TxScopedStorage and fails the FIRST scoped save with
+// ErrConflict, so Execute's retry path can be exercised deterministically. A
+// real contending writer cannot be used here: the scope holds SQLite's single
+// writer for the whole cycle, so a second writer would block rather than race.
+type conflictOnce struct {
+	workflow.TxScopedDueStorage
+	scopes int
+	failed bool
+}
+
+func (c *conflictOnce) BeginScope(ctx context.Context, fn func(context.Context, any) error) error {
+	c.scopes++
+	return c.TxScopedDueStorage.BeginScope(ctx, fn)
+}
+
+func (c *conflictOnce) SaveStateScoped(ctx context.Context, tx any, id string, m workflow.Marking, ctxData map[string]any, expected int64) (int64, error) {
+	if c.conflict() {
+		return 0, workflow.ErrConflict
+	}
+	return c.TxScopedDueStorage.SaveStateScoped(ctx, tx, id, m, ctxData, expected)
+}
+
+// SaveStateScopedWithDue must be wrapped too: the Manager prefers it over
+// SaveStateScoped for any backend that maintains a due index, so overriding only
+// the plain one would silently never be called.
+func (c *conflictOnce) SaveStateScopedWithDue(ctx context.Context, tx any, id string, m workflow.Marking, ctxData map[string]any, expected int64, due *time.Time) (int64, error) {
+	if c.conflict() {
+		return 0, workflow.ErrConflict
+	}
+	return c.TxScopedDueStorage.SaveStateScopedWithDue(ctx, tx, id, m, ctxData, expected, due)
+}
+
+func (c *conflictOnce) conflict() bool {
+	if c.failed {
+		return false
+	}
+	c.failed = true
+	return true
+}
+
 // TestTxGuardRetriesReDecideOnEachAttempt: Execute retries the whole cycle on
-// ErrConflict and each attempt opens a NEW transaction, so the guard is
-// re-evaluated rather than reusing an answer from the losing attempt.
+// ErrConflict, and each attempt opens a NEW transaction — so the guard is
+// evaluated again rather than reusing an answer from the losing attempt, which
+// was computed against state that did not commit.
 func TestTxGuardRetriesReDecideOnEachAttempt(t *testing.T) {
 	ctx := context.Background()
-	mgr, def, db := txGuardFixture(t, "approvedCount() >= 2")
+	store, db, env := txGuardBackend(t)
+	def := txGuardNet(t, "approvedCount() >= 2", env)
 
+	wrapped := &conflictOnce{TxScopedDueStorage: store}
+	mgr := workflow.NewManager(workflow.NewRegistry(), wrapped)
 	if _, err := mgr.CreateWorkflow(ctx, "doc-5", def, "draft"); err != nil {
 		t.Fatal(err)
 	}
@@ -318,12 +345,25 @@ func TestTxGuardRetriesReDecideOnEachAttempt(t *testing.T) {
 	if err := mgr.Execute(ctx, "doc-5", def, func(wf *workflow.Workflow) error {
 		return wf.ApplyTransitionWithContext(ctx, "publish")
 	}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("execute should succeed on the retry: %v", err)
 	}
+
 	mu.Lock()
 	defer mu.Unlock()
-	if evaluations != 1 {
-		t.Fatalf("uncontended cycle should evaluate the guard once, got %d", evaluations)
+	if evaluations != 2 {
+		t.Fatalf("guard evaluations = %d, want 2 (one per attempt)", evaluations)
+	}
+	if wrapped.scopes != 2 {
+		t.Fatalf("scopes opened = %d, want 2 — each attempt must get its own transaction", wrapped.scopes)
+	}
+
+	// The winning attempt committed.
+	wf, err := mgr.LoadWorkflow(ctx, "doc-5", def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if places := wf.CurrentPlaces(); len(places) != 1 || places[0] != "published" {
+		t.Fatalf("want [published], got %v", places)
 	}
 }
 

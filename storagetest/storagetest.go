@@ -398,6 +398,20 @@ func runScoped(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("Scoped/LoadMissingReturnsNotFound", func(t *testing.T) {
+		// Manager.loadForCycle relies on the same not-found contract inside a
+		// scope as outside one; a backend that leaked a driver-specific error
+		// here would surface from Execute as something no caller can match.
+		s := scoped(t)
+		err := s.BeginScope(ctx, func(ctx context.Context, tx any) error {
+			_, _, _, err := s.LoadStateScoped(ctx, tx, "nope")
+			return err
+		})
+		if !errors.Is(err, workflow.ErrWorkflowNotFound) {
+			t.Fatalf("LoadStateScoped(missing) = %v, want ErrWorkflowNotFound", err)
+		}
+	})
+
 	t.Run("Scoped/RollsBackOnError", func(t *testing.T) {
 		s := scoped(t)
 		if _, err := s.SaveState(ctx, "wf", mk("draft"), nil, 0); err != nil {
